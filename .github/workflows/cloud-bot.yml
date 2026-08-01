@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      telegram_test:
+        description: "Telegram bağlantı test mesajı gönder"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: btc-eth-cloud-bot
@@ -53,6 +58,10 @@ jobs:
 
       - name: Install bot
         run: python -m pip install -e .
+
+      - name: Send Telegram connection test
+        if: ${{ inputs.telegram_test == true }}
+        run: python run.py telegram-test
 
       - name: Refresh, forecast and notify
         shell: bash

@@ -152,7 +152,9 @@ GitHub deposunda şu Actions secrets tanımlanmalıdır:
 - özel Sites yayını kullanılıyorsa `OAI_SITES_BYPASS_TOKEN`
 
 Bulut çalışması elle de başlatılabilir; `force_research` seçeneği bütün modelleri
-yeniden araştırır. Token değerlerini repoya veya workflow dosyasına yazmayın.
+yeniden araştırır. Üçüncü Telegram kanalı bağlandıktan sonra `telegram_test` seçeneği
+kanala tek bir bağlantı test mesajı yollar. Token değerlerini repoya veya workflow
+dosyasına yazmayın.
 
 ## Sınırlar
 
