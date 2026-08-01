@@ -1,14 +1,27 @@
 from __future__ import annotations
 
-import io
+from email.message import Message
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
-from crypto_forecaster.telegram import TelegramNotifier
+from crypto_forecaster.telegram import TelegramError, TelegramNotifier, digest_signal_id
+
+
+CREDENTIALS = {
+    "CRYPTO_TELEGRAM_BOT_TOKEN": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
+    "CRYPTO_TELEGRAM_CHAT_ID": "-100123",
+}
+
+
+def rate_limit_error(retry_after: str = "0") -> HTTPError:
+    headers = Message()
+    headers["Retry-After"] = retry_after
+    return HTTPError("https://api.telegram.org", 429, "Too Many Requests", headers, None)
 
 
 class FakeResponse:
@@ -31,14 +44,64 @@ class FakeResponse:
 
 
 class TelegramTests(unittest.TestCase):
-    @patch.dict(
-        os.environ,
-        {
-            "CRYPTO_TELEGRAM_BOT_TOKEN": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
-            "CRYPTO_TELEGRAM_CHAT_ID": "-100123",
-        },
-        clear=False,
-    )
+    @patch.dict(os.environ, CREDENTIALS, clear=False)
+    def test_rate_limited_send_is_retried(self) -> None:
+        attempts = 0
+
+        def opener(_request, timeout):  # type: ignore[no-untyped-def]
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise rate_limit_error()
+            return FakeResponse()
+
+        self.assertEqual(TelegramNotifier(opener=opener).send_message("test"), 99)
+        self.assertEqual(attempts, 3)
+
+    @patch.dict(os.environ, CREDENTIALS, clear=False)
+    def test_persistent_rate_limit_gives_up_with_a_reason(self) -> None:
+        def opener(_request, timeout):  # type: ignore[no-untyped-def]
+            raise rate_limit_error()
+
+        with self.assertRaises(TelegramError) as caught:
+            TelegramNotifier(opener=opener).send_message("test")
+        self.assertIn("429", str(caught.exception))
+
+    @patch.dict(os.environ, CREDENTIALS, clear=False)
+    def test_timeout_is_never_retried(self) -> None:
+        attempts = 0
+
+        def opener(_request, timeout):  # type: ignore[no-untyped-def]
+            nonlocal attempts
+            attempts += 1
+            raise URLError("timed out")
+
+        # The message may already have been delivered, so a second attempt
+        # risks a duplicate alert.  At-most-once wins over at-least-once.
+        with self.assertRaises(TelegramError):
+            TelegramNotifier(opener=opener).send_message("test")
+        self.assertEqual(attempts, 1)
+
+    @patch.dict(os.environ, CREDENTIALS, clear=False)
+    def test_failed_delivery_records_the_reason(self) -> None:
+        def opener(_request, timeout):  # type: ignore[no-untyped-def]
+            raise URLError("timed out")
+
+        notifier = TelegramNotifier(opener=opener)
+        with tempfile.TemporaryDirectory() as directory:
+            delivery = notifier.deliver_once(
+                signal_id="b" * 64, text="test", state_dir=Path(directory)
+            )
+        self.assertEqual(delivery.status, "UNCERTAIN")
+        self.assertTrue(delivery.detail)
+
+    def test_digest_identifier_is_stable_per_bucket(self) -> None:
+        first = digest_signal_id("observation-digest", 42)
+        self.assertEqual(first, digest_signal_id("observation-digest", 42))
+        self.assertNotEqual(first, digest_signal_id("observation-digest", 43))
+        self.assertEqual(len(first), 64)
+
+    @patch.dict(os.environ, CREDENTIALS, clear=False)
     def test_delivery_is_deduplicated(self) -> None:
         calls = 0
 

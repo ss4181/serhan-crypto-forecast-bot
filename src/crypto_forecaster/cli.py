@@ -4,17 +4,27 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import sys
 from typing import Sequence
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .config import INTERVALS, SYMBOLS, Settings, model_path
+from .config import INTERVALS, SYMBOLS, Settings
 from .data import BinanceMarketDataClient, MarketDataError, update_cache
+from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .research import research_all
-from .service import dashboard_snapshot, deliver_eligible, evaluate_all, format_prediction, serve_forever
-from .telegram import CHAT_ID_ENV, TOKEN_ENV, TelegramError, TelegramNotifier
+from .service import (
+    dashboard_snapshot,
+    deliver_eligible,
+    deliver_observation_digest,
+    deliver_scorecard,
+    evaluate_all,
+    format_prediction,
+    make_prediction,
+    models_need_research,
+    serve_forever,
+)
+from .telegram import CHAT_ID_ENV, TOKEN_ENV, TelegramError, TelegramNotifier, digest_signal_id
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -57,6 +67,20 @@ def build_parser() -> argparse.ArgumentParser:
     cloud.add_argument("--force-research", action="store_true")
 
     subparsers.add_parser("telegram-test", help="Ucuncu Telegram kanalina sabit test mesaji gonder")
+
+    verify = subparsers.add_parser(
+        "verify-models",
+        help="Alti modelin de Telegram mesaji uretebildigini dogrula",
+    )
+    verify.add_argument("--refresh", action="store_true", help="Once veri onbellegini guncelle")
+    verify.add_argument("--days", type=_positive_days, default=365)
+    verify.add_argument(
+        "--send", action="store_true", help="Her model icin kanala bir dogrulama mesaji gonder"
+    )
+
+    card = subparsers.add_parser("scorecard", help="Gonderilen sinyallerin gercek sonucunu ozetle")
+    card.add_argument("--days", type=int, default=30)
+    card.add_argument("--send", action="store_true", help="Karneyi Telegram'a gonder")
     return parser
 
 
@@ -100,6 +124,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "cloud-run":
             _refresh(settings, days=args.days, symbols=SYMBOLS, intervals=INTERVALS)
+            settled = settle_pending(
+                settings.outcome_state_dir,
+                settings.data_dir,
+                round_trip_cost_bps=settings.round_trip_cost_bps,
+            )
+            if settled:
+                hits = sum(1 for row in settled if row["correct"])
+                print(f"{len(settled)} sinyal sonuclandi ({hits} yon dogru).")
             if args.force_research or _research_is_due(settings):
                 print("Gunluk walk-forward arastirma yenileniyor...")
                 research_all(settings, progress=print)
@@ -107,6 +139,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             deliveries = _deliver_cloud_eligible(settings, predictions)
             for prediction, delivery in deliveries:
                 print(f"{prediction.symbol} {prediction.interval}: {delivery.status}")
+            _deliver_cloud_digest(settings, predictions)
+            _deliver_cloud_scorecard(settings)
             snapshot = dashboard_snapshot(predictions)
             _write_cloud_snapshot(settings, snapshot)
             posted = _post_cloud_snapshot(snapshot)
@@ -118,6 +152,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Yalnizca arastirma altyapisidir; yatirim tavsiyesi veya emir degildir."
             )
             print(f"Telegram test mesaji gonderildi (message_id={message_id}).")
+            return 0
+        if args.command == "verify-models":
+            if args.refresh:
+                _refresh(settings, days=args.days, symbols=SYMBOLS, intervals=INTERVALS)
+            return _verify_models(settings, send=args.send)
+        if args.command == "scorecard":
+            card = scorecard(load_ledger(settings.outcome_state_dir), days=args.days)
+            print(format_scorecard(card))
+            if args.send:
+                if not _telegram_configured():
+                    print("Telegram kanali tanimli degil; karne gonderilmedi.")
+                    return 0
+                delivery = deliver_scorecard(settings, days=args.days)
+                print(f"Telegram karnesi: {delivery.status if delivery else 'GONDERILMEDI'}")
             return 0
         raise RuntimeError("Bilinmeyen komut")
     except KeyboardInterrupt:
@@ -145,8 +193,77 @@ def _refresh(
                 interval,
                 days=days,
                 client=client,
+                warn=print,
             )
             print(f"{symbol} {interval}: {len(frame)} mum hazir")
+
+
+def _verify_models(settings: Settings, *, send: bool) -> int:
+    """Prove every symbol/interval can build — and optionally deliver — a message.
+
+    Delivery is gated on the research result, so a silent channel is ambiguous:
+    it can mean "no model qualified" or "the pipeline is broken".  This checks
+    the pipeline for all six models independently of the research gate.
+    """
+    notifier = TelegramNotifier() if send else None
+    bucket = int(datetime.now(timezone.utc).timestamp() * 1000) // 60_000
+    failures = 0
+    print(f"{'Model':<16}{'Mesaj':>8}{'Tier':>9}{'Net bps':>10}  Durum")
+    for symbol in SYMBOLS:
+        for interval in INTERVALS:
+            key = f"{symbol}_{interval}"
+            try:
+                prediction = make_prediction(settings, symbol, interval)
+                text = format_prediction(prediction)
+            except (MarketDataError, OSError, RuntimeError, TypeError, ValueError) as error:
+                failures += 1
+                print(f"{key:<16}{'HATA':>8}{'-':>9}{'-':>10}  {error}")
+                continue
+            status = "hazir"
+            if notifier is not None:
+                delivery = notifier.deliver_once(
+                    signal_id=digest_signal_id(f"verify|{key}", bucket),
+                    text=text,
+                    state_dir=settings.telegram_state_dir,
+                )
+                status = delivery.status + (f" ({delivery.detail})" if delivery.detail else "")
+                if delivery.status == "UNCERTAIN":
+                    failures += 1
+            print(
+                f"{key:<16}{len(text):>8}{prediction.tier:>9}"
+                f"{prediction.backtest.net_edge_bps:>10.2f}  {status}"
+            )
+    if failures:
+        print(f"\n{failures} model icin dogrulama basarisiz.", file=sys.stderr)
+        return 2
+    print("\nAlti modelin de Telegram mesaji uretildi.")
+    if not send:
+        print("Kanala gondermek icin: python run.py verify-models --refresh --send")
+    return 0
+
+
+def _deliver_cloud_digest(settings: Settings, predictions) -> None:  # type: ignore[no-untyped-def]
+    if not _telegram_configured():
+        return
+    delivery = deliver_observation_digest(settings, predictions)
+    if delivery is not None and delivery.status != "DEDUPLICATED":
+        detail = f" ({delivery.detail})" if delivery.detail else ""
+        print(f"Gozlem raporu: {delivery.status}{detail}")
+
+
+def _deliver_cloud_scorecard(settings: Settings) -> None:
+    """Once a UTC day, publish what actually happened to the sent signals."""
+    if not _telegram_configured():
+        return
+    delivery = deliver_scorecard(settings)
+    if delivery is not None and delivery.status != "DEDUPLICATED":
+        print(f"Canli karne: {delivery.status}")
+
+
+def _telegram_configured() -> bool:
+    return bool(os.environ.get(TOKEN_ENV, "").strip()) and bool(
+        os.environ.get(CHAT_ID_ENV, "").strip()
+    )
 
 
 def _print_metrics(results):  # type: ignore[no-untyped-def]
@@ -169,11 +286,7 @@ def _positive_days(value: str) -> int:
 
 
 def _research_is_due(settings: Settings) -> bool:
-    if any(
-        not model_path(settings.model_dir, symbol, interval).exists()
-        for symbol in SYMBOLS
-        for interval in INTERVALS
-    ):
+    if models_need_research(settings):
         return True
     report = settings.report_dir / "latest_backtest.json"
     if not report.exists():

@@ -27,6 +27,8 @@ def research_one(
         minimum_signal_count=settings.minimum_signal_count,
         minimum_signal_accuracy=settings.minimum_signal_accuracy,
         maximum_ece=settings.maximum_ece,
+        round_trip_cost_bps=settings.round_trip_cost_bps,
+        minimum_net_edge_bps=settings.minimum_net_edge_bps,
     )
     bundle = fit_final_bundle(
         dataset,
@@ -69,6 +71,10 @@ def write_research_report(
             "split": "expanding chronological train; later calibration; one-label embargo; later test",
             "target": "next closed candle close direction",
             "signal_threshold": next(iter(results.values())).signal_threshold if results else None,
+            "gate": "net edge after round-trip cost must beat zero, day-block bootstrapped",
+            "round_trip_cost_bps": (
+                next(iter(results.values())).round_trip_cost_bps if results else None
+            ),
             "warning": "Historical out-of-sample performance is not a guarantee of future performance.",
         },
         "results": {key: value.to_dict() for key, value in results.items()},
@@ -85,26 +91,39 @@ def write_research_report(
         "Tum sonuclar kronolojik, modelden sonra gelen kalibrasyon ve test dilimlerinden uretilmistir. "
         "Train/kalibrasyon ve kalibrasyon/test arasinda bir hedef mumu embargo vardir.",
         "",
-        "| Model | OOS mum | Tum yon | Taban | Yuksek guven | %95 GA | Aile-duz. %95 GA | Kapsama | Brier / taban | ECE | Kapi |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
+        "| Model | OOS mum | Tum yon | Taban | Yuksek guven | Aile-duz. %95 GA | Kapsama | "
+        "Ort. kazanc/kayip | Brut bps | Net bps | Net %95 GA (gun blok) | ECE | Kapi |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
     ]
     for key, metric in results.items():
         lines.append(
             f"| {key} | {metric.sample_count} | %{metric.accuracy * 100:.2f} | "
             f"%{metric.baseline_accuracy * 100:.2f} | %{metric.signal_accuracy * 100:.2f} "
-            f"(n={metric.signal_count}) | %{metric.signal_ci95_low * 100:.2f}–%{metric.signal_ci95_high * 100:.2f} | "
+            f"(n={metric.signal_count}, {metric.signal_days} gun) | "
             f"%{metric.signal_familywise_ci95_low * 100:.2f}–%{metric.signal_familywise_ci95_high * 100:.2f} | "
-            f"%{metric.signal_coverage * 100:.2f} | {metric.brier_score:.4f} / "
-            f"{metric.baseline_brier_score:.4f} | %{metric.expected_calibration_error * 100:.2f} | "
+            f"%{metric.signal_coverage * 100:.2f} | "
+            f"{metric.average_win_bps:+.1f} / {metric.average_loss_bps:+.1f} | "
+            f"{metric.gross_edge_bps:+.2f} | {metric.net_edge_bps:+.2f} | "
+            f"{metric.net_edge_ci95_low:+.2f} – {metric.net_edge_ci95_high:+.2f} | "
+            f"%{metric.expected_calibration_error * 100:.2f} | "
             f"{'GECTI' if metric.passed_research_gate else 'KALDI'} |"
         )
+    cost = next(iter(results.values())).round_trip_cost_bps if results else 0.0
     lines.extend(
         [
             "",
+            "## Kapi",
+            "",
+            f"Bir modelin bildirim gonderebilmesi icin yon isabeti degil, {cost:.1f} baz puan "
+            "gidis-donus maliyeti dusuldukten sonraki **beklentisi** pozitif olmalidir; ayrica bu "
+            "beklentinin gun bloklu bootstrap ile hesaplanan %95 alt siniri sifirin ustunde olmalidir. "
+            "Yon isabetinin %50 uzerinde olmasi tek basina bir sey ifade etmez: kazanan ve kaybeden "
+            "islemlerin buyuklugu farklidir.",
+            "",
             "## Uyari",
             "",
-            "Bu oranlar yalniz incelenen Binance Spot verisi ve donemi icindir. Komisyon, kayma veya "
-            "emir icra sonucu olcmez; bot emir vermez. Gecmis basari gelecek basariyi garanti etmez.",
+            "Bu oranlar yalniz incelenen Binance Spot verisi ve donemi icindir. Kayma ve emir icra "
+            "sonucu olculmez; bot emir vermez. Gecmis basari gelecek basariyi garanti etmez.",
             "",
         ]
     )

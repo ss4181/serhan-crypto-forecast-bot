@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      verify_models:
+        description: "Altı modelin de kanala mesaj ürettiğini doğrula"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: btc-eth-cloud-bot
@@ -41,20 +46,33 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - name: Select hourly state cache
-        id: state-key
+      - name: Select hourly candle cache
+        id: candle-key
         shell: bash
-        run: echo "value=crypto-state-${RUNNER_OS}-$(date -u +%Y%m%d%H)" >> "$GITHUB_OUTPUT"
+        run: echo "value=crypto-candles-${RUNNER_OS}-$(date -u +%Y%m%d%H)" >> "$GITHUB_OUTPUT"
 
+      # Candles are large but self-healing: update_cache re-fetches from the last
+      # cached bar, so losing an hour costs a handful of requests.
+      - uses: actions/cache@v4
+        with:
+          path: data
+          key: ${{ steps.candle-key.outputs.value }}
+          restore-keys: |
+            crypto-candles-${{ runner.os }}-
+
+      # Delivery receipts and model bundles must survive *every* run.  On an exact
+      # key hit actions/cache skips the save, so a shared hourly key silently threw
+      # away the receipts written by all but the first run of each hour and the
+      # same alert went out again.  A per-run key is always a miss, always saves,
+      # and these paths are only tens of kilobytes.
       - uses: actions/cache@v4
         with:
           path: |
-            data
             artifacts
             state
-          key: ${{ steps.state-key.outputs.value }}
+          key: crypto-signals-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            crypto-state-${{ runner.os }}-
+            crypto-signals-${{ runner.os }}-
 
       - name: Install bot
         run: python -m pip install -e .
@@ -62,6 +80,10 @@ jobs:
       - name: Send Telegram connection test
         if: ${{ inputs.telegram_test == true }}
         run: python run.py telegram-test
+
+      - name: Verify every model reaches Telegram
+        if: ${{ inputs.verify_models == true }}
+        run: python run.py verify-models --refresh --days 365 --send
 
       - name: Refresh, forecast and notify
         shell: bash

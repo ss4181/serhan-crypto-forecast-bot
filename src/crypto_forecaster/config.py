@@ -20,12 +20,22 @@ class Settings:
     model_dir: Path = Path("artifacts/models")
     report_dir: Path = Path("artifacts/reports")
     telegram_state_dir: Path = Path("state/telegram")
+    outcome_state_dir: Path = Path("state/outcomes")
     signal_threshold: float = 0.60
     minimum_signal_count: int = 100
     minimum_signal_accuracy: float = 0.53
     maximum_ece: float = 0.10
     scenario_minimum_count: int = 40
     maximum_model_age_days: int = 8
+    # Binance Spot taker fee is 0.10% per side, so a round trip costs 20 bps.
+    # Set to 10.0 to price USD-M futures taker instead (0.05% per side).
+    round_trip_cost_bps: float = 20.0
+    # A model may notify only when the lower bound of its net edge clears this.
+    minimum_net_edge_bps: float = 0.0
+    # A signal is actionable only while this much of the target candle is left.
+    minimum_remaining_fraction: float = 0.60
+    # Every model reports to Telegram this often even when it cannot trade.
+    observation_digest_hours: int = 6
 
 
 def validate_symbol(symbol: str) -> str:

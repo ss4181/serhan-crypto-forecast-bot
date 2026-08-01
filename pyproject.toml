@@ -9,6 +9,9 @@ dependencies = [
   "pandas>=2.2,<4",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
 [project.scripts]
 crypto-forecast = "crypto_forecaster.cli:main"
 
@@ -21,3 +24,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

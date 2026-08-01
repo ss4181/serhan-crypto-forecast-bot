@@ -150,6 +150,7 @@ def update_cache(
     days: int,
     client: BinanceMarketDataClient | None = None,
     now: datetime | None = None,
+    warn: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     symbol = validate_symbol(symbol)
     interval = validate_interval(interval)
@@ -176,10 +177,19 @@ def update_cache(
         raise MarketDataError(f"{symbol} {interval} icin kapali mum bulunamadi")
     combined = _validate_frame(combined)
     combined = combined[combined["open_time_ms"] >= requested_start].reset_index(drop=True)
-    if len(combined) > 1:
-        gaps = combined["open_time_ms"].diff().iloc[1:]
-        if (gaps != INTERVAL_MILLISECONDS[interval]).any():
-            raise MarketDataError(f"{symbol} {interval} verisinde eksik mum araligi var")
+    # An exchange halt leaves a hole in the series.  Rejecting the whole cache
+    # would wedge the bot until someone deletes the file by hand, so keep the
+    # newest contiguous run instead and say how much was dropped.
+    before = len(combined)
+    combined = _trim_to_contiguous_tail(combined, INTERVAL_MILLISECONDS[interval])
+    dropped = before - len(combined)
+    if dropped and warn is not None:
+        warn(
+            f"{symbol} {interval}: mum araliginda kopukluk bulundu; en eski {dropped} mum "
+            "atildi ve son kesintisiz dizi tutuldu"
+        )
+    if combined.empty:
+        raise MarketDataError(f"{symbol} {interval} icin kesintisiz mum dizisi yok")
     path.parent.mkdir(parents=True, exist_ok=True)
     combined.to_csv(path, index=False, encoding="utf-8", lineterminator="\n")
     return combined
@@ -237,6 +247,17 @@ def _validate_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if (result["close_time_ms"] <= result["open_time_ms"]).any():
         raise MarketDataError("Kline zaman sirasi tutarsiz")
     return result.reset_index(drop=True)
+
+
+def _trim_to_contiguous_tail(frame: pd.DataFrame, step_ms: int) -> pd.DataFrame:
+    if len(frame) < 2:
+        return frame
+    differences = frame["open_time_ms"].diff()
+    broken = differences.ne(step_ms) & differences.notna()
+    positions = broken.to_numpy().nonzero()[0]
+    if positions.size == 0:
+        return frame
+    return frame.iloc[int(positions[-1]) :].reset_index(drop=True)
 
 
 def _empty_frame() -> pd.DataFrame:

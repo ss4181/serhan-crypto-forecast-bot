@@ -12,7 +12,9 @@ artifacts/models/*.json
 artifacts/reports/*.json
 artifacts/reports/*.md
 state/telegram/*
+state/outcomes/*
 !data/.gitkeep
 !artifacts/models/.gitkeep
 !artifacts/reports/.gitkeep
 !state/telegram/.gitkeep
+!state/outcomes/.gitkeep

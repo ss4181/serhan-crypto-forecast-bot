@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import math
-from pathlib import Path
 import time
 from typing import Callable
 
@@ -22,8 +21,15 @@ from .config import (
 from .data import BinanceMarketDataClient, load_cache, update_cache
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
+from .outcomes import (
+    format_scorecard,
+    load_ledger,
+    record_delivery,
+    scorecard,
+    settle_pending,
+)
 from .research import research_all
-from .telegram import TelegramDelivery, TelegramNotifier
+from .telegram import TelegramDelivery, TelegramNotifier, digest_signal_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +46,8 @@ class Prediction:
     interval: str
     source_open_time_ms: int
     source_close_time_ms: int
+    target_close_time_ms: int
+    evaluated_at_ms: int
     source_price: float
     atr: float
     probability_up: float
@@ -50,6 +58,8 @@ class Prediction:
     target_down_price: float
     target_up_touch_probability: float
     target_down_touch_probability: float
+    touch_both_probability: float
+    touch_neither_probability: float
     close_range_low: float
     close_range_median: float
     close_range_high: float
@@ -65,6 +75,11 @@ class Prediction:
             f"{self.symbol}|{self.interval}|{self.source_close_time_ms}|{self.direction}"
         ).encode("ascii")
         return sha256(payload).hexdigest()
+
+    @property
+    def tier(self) -> str:
+        """ISLEM only when the model's measured edge survives trading costs."""
+        return "ISLEM" if self.eligible else "GOZLEM"
 
 
 def make_prediction(
@@ -98,6 +113,9 @@ def make_prediction(
     indicators = _indicator_contributions(bundle, vector, direction)
     current_ms = int((now or datetime.now(timezone.utc)).timestamp() * 1000)
     latest_close_ms = int(row["close_time_ms"])
+    interval_ms = INTERVAL_MILLISECONDS[interval]
+    target_close_ms = latest_close_ms + interval_ms
+    remaining_ms = target_close_ms - current_ms
     reasons: list[str] = []
     if not bundle.backtest.passed_research_gate:
         reasons.append("model walk-forward arastirma kapisini gecemedi")
@@ -105,8 +123,16 @@ def make_prediction(
         reasons.append(
             f"yon olasiligi %{bundle.backtest.signal_threshold * 100:.0f} esiginin altinda"
         )
-    if current_ms - latest_close_ms > 3 * INTERVAL_MILLISECONDS[interval]:
-        reasons.append("son kapali mum bayat")
+    # A forecast about a candle that is nearly over cannot be acted on, and one
+    # about a candle that already closed is not a forecast at all.
+    if remaining_ms < settings.minimum_remaining_fraction * interval_ms:
+        if remaining_ms <= 0:
+            reasons.append("hedef mum zaten kapandi")
+        else:
+            reasons.append(
+                f"hedef mumun yalnizca {remaining_ms / 60000:.1f} dakikasi kaldi; "
+                f"en az %{settings.minimum_remaining_fraction * 100:.0f} kalmali"
+            )
     maximum_model_age_ms = settings.maximum_model_age_days * 24 * 60 * 60 * 1000
     if latest_close_ms - bundle.training_last_close_ms > maximum_model_age_ms:
         reasons.append("model yeniden arastirilacak kadar eski")
@@ -115,6 +141,8 @@ def make_prediction(
         interval=interval,
         source_open_time_ms=int(row["open_time_ms"]),
         source_close_time_ms=latest_close_ms,
+        target_close_time_ms=target_close_ms,
+        evaluated_at_ms=current_ms,
         source_price=price,
         atr=atr,
         probability_up=probability_up,
@@ -125,6 +153,8 @@ def make_prediction(
         target_down_price=max(0.0, price - target_multiple * atr),
         target_up_touch_probability=float(scenario["touch_up_half_atr_probability"]),
         target_down_touch_probability=float(scenario["touch_down_half_atr_probability"]),
+        touch_both_probability=float(scenario.get("touch_both_probability", 0.0)),
+        touch_neither_probability=float(scenario.get("touch_neither_probability", 0.0)),
         close_range_low=close_low,
         close_range_median=close_median,
         close_range_high=close_high,
@@ -139,37 +169,49 @@ def make_prediction(
 def format_prediction(prediction: Prediction) -> str:
     icon = "🟢" if prediction.direction == "YUKARI" else "🔴"
     source_close = _utc_text(prediction.source_close_time_ms)
-    target_close_ms = prediction.source_close_time_ms + INTERVAL_MILLISECONDS[prediction.interval]
-    target_close = _utc_text(target_close_ms)
+    target_close = _utc_text(prediction.target_close_time_ms)
+    remaining_minutes = max(
+        0.0, (prediction.target_close_time_ms - prediction.evaluated_at_ms) / 60000
+    )
     metrics = prediction.backtest
     indicator_lines = [
         f"• {item.name}: {item.display_value} — {item.direction_effect}"
         for item in prediction.indicators
     ]
-    status = (
-        "BILDIRIM UYGUN"
-        if prediction.eligible
-        else "BILDIRIM YOK: " + "; ".join(prediction.ineligible_reasons)
-    )
+    if prediction.eligible:
+        header = f"{icon} ISLEM ADAYI"
+        status = "Maliyet sonrasi olculmus pozitif beklentisi olan tek tier."
+    else:
+        header = "🔎 GOZLEM"
+        status = "ISLEM ADAYI DEGIL: " + "; ".join(prediction.ineligible_reasons)
     message = "\n".join(
         [
-            f"{icon} {prediction.symbol} | {INTERVAL_LABELS[prediction.interval]} | {prediction.direction}",
+            f"{header} | {prediction.symbol} | {INTERVAL_LABELS[prediction.interval]} | {prediction.direction}",
             "",
             f"Sinyal zamani: {source_close}",
-            f"Tahmin edilen kapanis: {target_close}",
+            f"Tahmin edilen kapanis: {target_close} ({remaining_minutes:.1f} dk kaldi)",
             f"Referans fiyat (son kapali mum): ${prediction.source_price:,.2f}",
             f"Yon olasiligi: YUKARI %{prediction.probability_up * 100:.1f} | ASAGI %{prediction.probability_down * 100:.1f}",
             f"Durum: {status}",
             "",
+            "MALIYET SONRASI BEKLENTI (bu tahminin tek gecerli olcusu)",
+            f"• Olculen net beklenti: {metrics.net_edge_bps:+.2f} bps/sinyal "
+            f"({metrics.round_trip_cost_bps:.1f} bps gidis-donus maliyeti dusulmus)",
+            f"• Gun bloklu %95 aralik: {metrics.net_edge_ci95_low:+.2f} – {metrics.net_edge_ci95_high:+.2f} bps",
+            f"• Ortalama kazanc {metrics.average_win_bps:+.1f} bps / ortalama kayip "
+            f"{metrics.average_loss_bps:+.1f} bps",
+            "",
             "FIYAT SENARYOLARI (benzer kalibre edilmis gecmis durumlar)",
             f"• ${prediction.target_up_price:,.2f} (+0.5 ATR) gorulme: %{prediction.target_up_touch_probability * 100:.1f}",
             f"• ${prediction.target_down_price:,.2f} (-0.5 ATR) gorulme: %{prediction.target_down_touch_probability * 100:.1f}",
+            f"• Ikisi de ayni mumda gorulur: %{prediction.touch_both_probability * 100:.1f} — "
+            "hangisinin once geldigi mum verisinden bilinemez, bu bir hedef/stop cifti degildir",
             f"• Kapanis icin %80 aralik: ${prediction.close_range_low:,.2f} – ${prediction.close_range_high:,.2f}",
             f"• Senaryo medyan kapanisi: ${prediction.close_range_median:,.2f} (benzer n={prediction.scenario_count})",
             "",
             "WALK-FORWARD BACKTEST (tamamen OOS)",
-            f"• Yuksek guven sinyali: %{metrics.signal_accuracy * 100:.1f} dogru "
-            f"(%95 GA %{metrics.signal_ci95_low * 100:.1f}–%{metrics.signal_ci95_high * 100:.1f}, n={metrics.signal_count})",
+            f"• Yuksek guven yon isabeti: %{metrics.signal_accuracy * 100:.1f} "
+            f"(n={metrics.signal_count}, {metrics.signal_days} ayri gun)",
             f"• 6 model icin aile-duzeltilmis %95 GA: %{metrics.signal_familywise_ci95_low * 100:.1f}–%{metrics.signal_familywise_ci95_high * 100:.1f}",
             f"• Tum mum yon dogrulugu: %{metrics.accuracy * 100:.1f} | taban: %{metrics.baseline_accuracy * 100:.1f}",
             f"• Sinyal kapsami: %{metrics.signal_coverage * 100:.1f} | Brier: {metrics.brier_score:.4f} | ECE: %{metrics.expected_calibration_error * 100:.1f}",
@@ -183,6 +225,60 @@ def format_prediction(prediction: Prediction) -> str:
     if len(message) > 4096:
         raise ValueError("Telegram mesaji 4096 karakteri asti")
     return message
+
+
+def format_observation_digest(
+    predictions: list[Prediction], *, now: datetime | None = None
+) -> str:
+    """One message covering every model, including the ones that cannot trade.
+
+    Keeps all six models visible in Telegram without dressing a
+    negative-expectancy forecast up as something actionable.
+    """
+    if not predictions:
+        raise ValueError("Gozlem raporu icin tahmin yok")
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
+    tradeable = [item for item in predictions if item.eligible]
+    lines = [
+        f"🔎 GOZLEM RAPORU | {len(predictions)} model | {stamp}",
+        "",
+        "Her modelin o anki durumu. ISLEM ADAYI olmayanlar da burada gorunur ki",
+        "hicbir modelin sessiz kalmadigi dogrulanabilsin.",
+        "",
+        f"Islem adayi: {len(tradeable)} / {len(predictions)}",
+        "",
+    ]
+    for item in predictions:
+        metrics = item.backtest
+        mark = "🟢" if item.eligible else "▫️"
+        lines.append(
+            f"{mark} {item.symbol} {INTERVAL_LABELS[item.interval]} — {item.direction} "
+            f"%{item.confidence * 100:.1f} | ${item.source_price:,.2f}"
+        )
+        lines.append(
+            f"    net beklenti {metrics.net_edge_bps:+.2f} bps "
+            f"({metrics.net_edge_ci95_low:+.1f} / {metrics.net_edge_ci95_high:+.1f}), "
+            f"isabet %{metrics.signal_accuracy * 100:.1f} (n={metrics.signal_count})"
+        )
+        if not item.eligible:
+            lines.append(f"    engel: {_first_reason(item.ineligible_reasons)}")
+    lines.extend(
+        [
+            "",
+            "Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir.",
+        ]
+    )
+    message = "\n".join(lines)
+    if len(message) > 4096:
+        raise ValueError("Telegram mesaji 4096 karakteri asti")
+    return message
+
+
+def _first_reason(reasons: tuple[str, ...]) -> str:
+    if not reasons:
+        return "-"
+    reason = reasons[0]
+    return reason if len(reason) <= 150 else reason[:147] + "..."
 
 
 def evaluate_all(settings: Settings) -> list[Prediction]:
@@ -209,6 +305,7 @@ def dashboard_snapshot(predictions: list[Prediction]) -> dict[str, object]:
             "interval": item.interval,
             "intervalLabel": INTERVAL_LABELS[item.interval],
             "direction": "YUKARI" if item.direction == "YUKARI" else "AŞAĞI",
+            "tier": item.tier,
             "confidence": item.confidence,
             "probabilityUp": item.probability_up,
             "probabilityDown": item.probability_down,
@@ -221,6 +318,8 @@ def dashboard_snapshot(predictions: list[Prediction]) -> dict[str, object]:
             "targetDownPrice": item.target_down_price,
             "targetUpTouchProbability": item.target_up_touch_probability,
             "targetDownTouchProbability": item.target_down_touch_probability,
+            "touchBothProbability": item.touch_both_probability,
+            "touchNeitherProbability": item.touch_neither_probability,
             "closeRangeLow": item.close_range_low,
             "closeRangeMedian": item.close_range_median,
             "closeRangeHigh": item.close_range_high,
@@ -253,6 +352,14 @@ def dashboard_snapshot(predictions: list[Prediction]) -> dict[str, object]:
                 "signalCiHigh": metrics.signal_ci95_high,
                 "familyCiLow": metrics.signal_familywise_ci95_low,
                 "familyCiHigh": metrics.signal_familywise_ci95_high,
+                "roundTripCostBps": metrics.round_trip_cost_bps,
+                "grossEdgeBps": metrics.gross_edge_bps,
+                "netEdgeBps": metrics.net_edge_bps,
+                "netEdgeCiLow": metrics.net_edge_ci95_low,
+                "netEdgeCiHigh": metrics.net_edge_ci95_high,
+                "averageWinBps": metrics.average_win_bps,
+                "averageLossBps": metrics.average_loss_bps,
+                "signalDays": metrics.signal_days,
             },
         }
         if item.eligible:
@@ -296,8 +403,73 @@ def deliver_eligible(
             text=format_prediction(prediction),
             state_dir=settings.telegram_state_dir,
         )
+        if delivery.status == "SENT":
+            _record(settings, prediction)
         deliveries.append((prediction, delivery))
     return deliveries
+
+
+def deliver_observation_digest(
+    settings: Settings,
+    predictions: list[Prediction],
+    *,
+    notifier: TelegramNotifier | None = None,
+    now: datetime | None = None,
+) -> TelegramDelivery | None:
+    """Publish every model on a fixed cadence, deduplicated per time bucket."""
+    if not predictions or settings.observation_digest_hours <= 0:
+        return None
+    current = now or datetime.now(timezone.utc)
+    bucket_ms = settings.observation_digest_hours * 60 * 60 * 1000
+    signal_id = digest_signal_id(
+        "observation-digest", int(current.timestamp() * 1000) // bucket_ms
+    )
+    client = notifier or TelegramNotifier()
+    delivery = client.deliver_once(
+        signal_id=signal_id,
+        text=format_observation_digest(predictions, now=current),
+        state_dir=settings.telegram_state_dir,
+    )
+    if delivery.status == "SENT":
+        for prediction in predictions:
+            _record(settings, prediction)
+    return delivery
+
+
+def deliver_scorecard(
+    settings: Settings,
+    *,
+    days: int = 30,
+    notifier: TelegramNotifier | None = None,
+    now: datetime | None = None,
+) -> TelegramDelivery | None:
+    current = now or datetime.now(timezone.utc)
+    card = scorecard(load_ledger(settings.outcome_state_dir), days=days, now=current)
+    signal_id = digest_signal_id(
+        "scorecard", int(current.timestamp() * 1000) // (24 * 60 * 60 * 1000)
+    )
+    client = notifier or TelegramNotifier()
+    return client.deliver_once(
+        signal_id=signal_id,
+        text=format_scorecard(card),
+        state_dir=settings.telegram_state_dir,
+    )
+
+
+def _record(settings: Settings, prediction: Prediction) -> None:
+    record_delivery(
+        settings.outcome_state_dir,
+        signal_id=prediction.signal_id,
+        symbol=prediction.symbol,
+        interval=prediction.interval,
+        tier=prediction.tier,
+        direction=prediction.direction,
+        probability=prediction.confidence,
+        source_price=prediction.source_price,
+        source_close_time_ms=prediction.source_close_time_ms,
+        target_close_time_ms=prediction.target_close_time_ms,
+        delivered_at_ms=prediction.evaluated_at_ms,
+    )
 
 
 def serve_forever(
@@ -311,35 +483,69 @@ def serve_forever(
         raise ValueError("Tarama araligi en az 20 saniye olmali")
     client = BinanceMarketDataClient()
     last_research_day: str | None = None
+    consecutive_failures = 0
     while True:
-        now = datetime.now(timezone.utc)
-        for symbol in SYMBOLS:
-            for interval in INTERVALS:
-                update_cache(
-                    settings.data_dir,
-                    symbol,
-                    interval,
-                    days=days,
-                    client=client,
-                    now=now,
-                )
-        today = now.date().isoformat()
-        models_missing = any(
-            not model_path(settings.model_dir, symbol, interval).exists()
-            for symbol in SYMBOLS
-            for interval in INTERVALS
-        )
-        if models_missing or last_research_day != today:
-            progress("Gunluk walk-forward arastirma ve model yenileme basladi")
-            research_all(settings, progress=progress)
-            last_research_day = today
-        predictions = evaluate_all(settings)
-        deliveries = deliver_eligible(settings, predictions)
-        for prediction, delivery in deliveries:
-            progress(
-                f"{prediction.symbol} {prediction.interval} {prediction.direction}: {delivery.status}"
+        try:
+            now = datetime.now(timezone.utc)
+            for symbol in SYMBOLS:
+                for interval in INTERVALS:
+                    update_cache(
+                        settings.data_dir,
+                        symbol,
+                        interval,
+                        days=days,
+                        client=client,
+                        now=now,
+                    )
+            settle_pending(
+                settings.outcome_state_dir,
+                settings.data_dir,
+                round_trip_cost_bps=settings.round_trip_cost_bps,
+                now=now,
             )
+            today = now.date().isoformat()
+            if models_need_research(settings) or last_research_day != today:
+                progress("Gunluk walk-forward arastirma ve model yenileme basladi")
+                research_all(settings, progress=progress)
+                last_research_day = today
+            predictions = evaluate_all(settings)
+            deliveries = deliver_eligible(settings, predictions)
+            for prediction, delivery in deliveries:
+                progress(
+                    f"{prediction.symbol} {prediction.interval} {prediction.direction}: "
+                    f"{delivery.status}{_detail_suffix(delivery)}"
+                )
+            digest = deliver_observation_digest(settings, predictions, now=now)
+            if digest is not None and digest.status != "DEDUPLICATED":
+                progress(f"Gozlem raporu: {digest.status}{_detail_suffix(digest)}")
+            consecutive_failures = 0
+        except KeyboardInterrupt:
+            raise
+        except Exception as error:  # a 24/7 loop must outlive a bad response
+            consecutive_failures += 1
+            backoff = min(poll_seconds * 2**consecutive_failures, 900)
+            progress(f"Dongu hatasi ({consecutive_failures}): {error}; {backoff} sn bekleniyor")
+            time.sleep(backoff)
+            continue
         time.sleep(poll_seconds)
+
+
+def models_need_research(settings: Settings) -> bool:
+    """True when any of the six bundles is missing or no longer loadable."""
+    for symbol in SYMBOLS:
+        for interval in INTERVALS:
+            path = model_path(settings.model_dir, symbol, interval)
+            if not path.exists():
+                return True
+            try:
+                load_bundle(path)
+            except ValueError:
+                return True
+    return False
+
+
+def _detail_suffix(delivery: TelegramDelivery) -> str:
+    return f" ({delivery.detail})" if delivery.detail else ""
 
 
 def _indicator_contributions(
@@ -399,10 +605,14 @@ def _iso_utc(milliseconds: int) -> str:
 
 __all__ = [
     "Prediction",
-    "deliver_eligible",
     "dashboard_snapshot",
+    "deliver_eligible",
+    "deliver_observation_digest",
+    "deliver_scorecard",
     "evaluate_all",
+    "format_observation_digest",
     "format_prediction",
     "make_prediction",
+    "models_need_research",
     "serve_forever",
 ]
