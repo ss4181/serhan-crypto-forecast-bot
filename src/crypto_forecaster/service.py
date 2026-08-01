@@ -203,33 +203,76 @@ def dashboard_snapshot(predictions: list[Prediction]) -> dict[str, object]:
     prediction_rows: list[dict[str, object]] = []
     verified_rows: list[dict[str, object]] = []
     for item in predictions:
+        metrics = item.backtest
         row: dict[str, object] = {
             "symbol": item.symbol,
             "interval": item.interval,
             "intervalLabel": INTERVAL_LABELS[item.interval],
             "direction": "YUKARI" if item.direction == "YUKARI" else "AŞAĞI",
             "confidence": item.confidence,
+            "probabilityUp": item.probability_up,
+            "probabilityDown": item.probability_down,
             "sourcePrice": item.source_price,
+            "sourceCloseAtUtc": _iso_utc(item.source_close_time_ms),
+            "targetCloseAtUtc": _iso_utc(
+                item.source_close_time_ms + INTERVAL_MILLISECONDS[item.interval]
+            ),
+            "targetUpPrice": item.target_up_price,
+            "targetDownPrice": item.target_down_price,
+            "targetUpTouchProbability": item.target_up_touch_probability,
+            "targetDownTouchProbability": item.target_down_touch_probability,
+            "closeRangeLow": item.close_range_low,
+            "closeRangeMedian": item.close_range_median,
+            "closeRangeHigh": item.close_range_high,
+            "scenarioCount": item.scenario_count,
             "eligible": item.eligible,
+            "ineligibleReasons": list(item.ineligible_reasons),
+            "indicators": [
+                {
+                    "name": indicator.name,
+                    "displayValue": indicator.display_value,
+                    "directionEffect": indicator.direction_effect,
+                    "strength": indicator.strength,
+                }
+                for indicator in item.indicators
+            ],
+            "backtest": {
+                "passedGate": metrics.passed_research_gate,
+                "gateReasons": list(metrics.gate_reasons),
+                "folds": metrics.folds,
+                "sampleCount": metrics.sample_count,
+                "accuracy": metrics.accuracy,
+                "baselineAccuracy": metrics.baseline_accuracy,
+                "brierScore": metrics.brier_score,
+                "expectedCalibrationError": metrics.expected_calibration_error,
+                "signalThreshold": metrics.signal_threshold,
+                "signalCount": metrics.signal_count,
+                "signalCoverage": metrics.signal_coverage,
+                "signalAccuracy": metrics.signal_accuracy,
+                "signalCiLow": metrics.signal_ci95_low,
+                "signalCiHigh": metrics.signal_ci95_high,
+                "familyCiLow": metrics.signal_familywise_ci95_low,
+                "familyCiHigh": metrics.signal_familywise_ci95_high,
+            },
         }
         if item.eligible:
             row["signalId"] = item.signal_id
         prediction_rows.append(row)
-        if item.backtest.passed_research_gate:
+        if metrics.passed_research_gate:
             verified_rows.append(
                 {
                     "symbol": item.symbol,
                     "interval": item.interval,
                     "intervalLabel": INTERVAL_LABELS[item.interval],
-                    "signalAccuracy": item.backtest.signal_accuracy,
-                    "signalCount": item.backtest.signal_count,
-                    "familyCiLow": item.backtest.signal_familywise_ci95_low,
-                    "familyCiHigh": item.backtest.signal_familywise_ci95_high,
-                    "coverage": item.backtest.signal_coverage,
+                    "signalAccuracy": metrics.signal_accuracy,
+                    "signalCount": metrics.signal_count,
+                    "familyCiLow": metrics.signal_familywise_ci95_low,
+                    "familyCiHigh": metrics.signal_familywise_ci95_high,
+                    "coverage": metrics.signal_coverage,
                 }
             )
     return {
-        "schema": "serhan-lab-snapshot-v1",
+        "schema": "serhan-lab-snapshot-v2",
         "observedAtUtc": observed_at,
         "predictions": prediction_rows,
         "verifiedModels": verified_rows,
@@ -346,6 +389,12 @@ def _utc_text(milliseconds: int) -> str:
     return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S UTC"
     )
+
+
+def _iso_utc(milliseconds: int) -> str:
+    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc).isoformat(
+        timespec="seconds"
+    ).replace("+00:00", "Z")
 
 
 __all__ = [
