@@ -14,7 +14,7 @@ from .config import INTERVALS, SYMBOLS, Settings, model_path
 from .data import BinanceMarketDataClient, MarketDataError, update_cache
 from .research import research_all
 from .service import dashboard_snapshot, deliver_eligible, evaluate_all, format_prediction, serve_forever
-from .telegram import TelegramError, TelegramNotifier
+from .telegram import CHAT_ID_ENV, TOKEN_ENV, TelegramError, TelegramNotifier
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -104,7 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("Gunluk walk-forward arastirma yenileniyor...")
                 research_all(settings, progress=print)
             predictions = evaluate_all(settings)
-            deliveries = deliver_eligible(settings, predictions)
+            deliveries = _deliver_cloud_eligible(settings, predictions)
             for prediction, delivery in deliveries:
                 print(f"{prediction.symbol} {prediction.interval}: {delivery.status}")
             snapshot = dashboard_snapshot(predictions)
@@ -189,6 +189,18 @@ def _write_cloud_snapshot(settings: Settings, snapshot: dict[str, object]) -> No
         json.dumps(snapshot, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def _deliver_cloud_eligible(settings: Settings, predictions):  # type: ignore[no-untyped-def]
+    token_configured = bool(os.environ.get(TOKEN_ENV, "").strip())
+    chat_configured = bool(os.environ.get(CHAT_ID_ENV, "").strip())
+    if token_configured != chat_configured:
+        raise TelegramError("Telegram bulut ayarlari eksik; bot token ve kanal kimligi birlikte tanimlanmali")
+    if not token_configured:
+        if any(prediction.eligible for prediction in predictions):
+            print("Telegram kanali henuz bagli degil; uygun sinyal panele yazildi ancak mesaj gonderilmedi.")
+        return []
+    return deliver_eligible(settings, predictions)
 
 
 def _post_cloud_snapshot(snapshot: dict[str, object]) -> bool:
