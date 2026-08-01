@@ -31,6 +31,12 @@ FEATURE_LABELS_TR = {
 }
 
 
+UPPER_FIRST = 1
+LOWER_FIRST = -1
+NO_TOUCH = 0
+BOTH_IN_ONE_CANDLE = 2
+
+
 @dataclass(frozen=True, slots=True)
 class SupervisedDataset:
     x: np.ndarray
@@ -43,9 +49,54 @@ class SupervisedDataset:
     future_return_atr: np.ndarray
     future_up_atr: np.ndarray
     future_down_atr: np.ndarray
+    barrier_bps: np.ndarray
+    first_touch: np.ndarray
+    timeout_return_bps: np.ndarray
+    exit_offset: np.ndarray
 
     def __len__(self) -> int:
         return int(self.y.size)
+
+    @property
+    def label_horizon(self) -> int:
+        """How many candles ahead a label can look.
+
+        Splits must be separated by at least this much: a barrier label reads
+        the next `horizon` candles, so a one-candle embargo would let the
+        training set see the same price action its neighbour is scored on.
+        """
+        return int(np.max(self.exit_offset)) if self.exit_offset.size else 1
+
+    def outcome_bps(
+        self, side: np.ndarray, cost_bps: float, *, indices: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Basis points a trade on `side` earns after fees.
+
+        The ambiguous case — one candle that reaches both barriers — is charged
+        as a loss to whichever side is being scored, because the candle does not
+        say which level came first and a trader cannot assume the good one.
+        """
+        side = np.asarray(side, dtype=np.float64).reshape(-1)
+        if indices is None:
+            touch, barrier, timeout = self.first_touch, self.barrier_bps, self.timeout_return_bps
+        else:
+            selection = np.asarray(indices, dtype=np.int64).reshape(-1)
+            touch = self.first_touch[selection]
+            barrier = self.barrier_bps[selection]
+            timeout = self.timeout_return_bps[selection]
+        if side.size != touch.size:
+            raise ValueError("Yon dizisi ile ornek sayisi uyusmuyor")
+        favourable = np.where(side >= 0, UPPER_FIRST, LOWER_FIRST)
+        gross = np.where(
+            touch == favourable,
+            barrier,
+            np.where(
+                touch == -favourable,
+                -barrier,
+                np.where(touch == BOTH_IN_ONE_CANDLE, -barrier, side * timeout),
+            ),
+        )
+        return gross - cost_bps
 
 
 def compute_feature_frame(bars: pd.DataFrame) -> pd.DataFrame:
@@ -101,11 +152,48 @@ def compute_feature_frame(bars: pd.DataFrame) -> pd.DataFrame:
     return frame.replace([np.inf, -np.inf], np.nan)
 
 
-def build_supervised_dataset(bars: pd.DataFrame) -> SupervisedDataset:
+def build_supervised_dataset(
+    bars: pd.DataFrame,
+    *,
+    barrier_atr_multiple: float = 1.0,
+    barrier_horizon_candles: int = 12,
+    minimum_barrier_bps: float = 0.0,
+) -> SupervisedDataset:
+    """Label each candle by which barrier a trade opened there would hit first.
+
+    The old label — "is the next close higher than this one" — treats a one
+    basis point drift and a full swing as the same event, so a model could look
+    accurate while losing money on fees.  Here the answer is worth a known
+    amount before it is counted.
+    """
+    if barrier_horizon_candles < 1:
+        raise ValueError("Bariyer ufku en az 1 mum olmali")
+    if barrier_atr_multiple <= 0 or minimum_barrier_bps < 0:
+        raise ValueError("Gecersiz bariyer olcusu")
     featured = compute_feature_frame(bars)
     current_close = featured["close"].astype(float)
     atr = featured["atr"].astype(float)
-    featured["target"] = (current_close.shift(-1) > current_close).astype(float)
+    atr_pct = featured["atr_pct"].astype(float)
+    # Never place the target closer than the trade costs to reach and leave.
+    barrier_bps = np.maximum(
+        barrier_atr_multiple * atr_pct.to_numpy() * 10_000.0, minimum_barrier_bps
+    )
+    featured["barrier_bps"] = barrier_bps
+    touch, timeout_bps, exit_offset = _first_barrier_touch(
+        high=featured["high"].astype(float).to_numpy(),
+        low=featured["low"].astype(float).to_numpy(),
+        close=current_close.to_numpy(),
+        barrier_bps=barrier_bps,
+        horizon=barrier_horizon_candles,
+    )
+    featured["first_touch"] = touch
+    featured["timeout_return_bps"] = timeout_bps
+    featured["exit_offset"] = exit_offset
+    resolved_up = touch == UPPER_FIRST
+    resolved_down = touch == LOWER_FIRST
+    featured["target"] = np.where(
+        resolved_up, 1.0, np.where(resolved_down, 0.0, (timeout_bps > 0).astype(float))
+    )
     featured["future_return_atr"] = np.log(current_close.shift(-1) / current_close) / (
         atr / current_close
     ).clip(lower=1e-9)
@@ -119,7 +207,8 @@ def build_supervised_dataset(bars: pd.DataFrame) -> SupervisedDataset:
         "atr",
         "atr_pct",
     ]
-    valid = featured.iloc[:-1].dropna(subset=required).copy()
+    # Drop the tail whose barriers cannot be resolved yet, not just one candle.
+    valid = featured.iloc[:-barrier_horizon_candles].dropna(subset=required).copy()
     if len(valid) < 200:
         raise ValueError("Model icin en az 200 kullanilabilir mum gerekli")
     return SupervisedDataset(
@@ -133,7 +222,55 @@ def build_supervised_dataset(bars: pd.DataFrame) -> SupervisedDataset:
         future_return_atr=valid["future_return_atr"].to_numpy(dtype=np.float64),
         future_up_atr=valid["future_up_atr"].to_numpy(dtype=np.float64),
         future_down_atr=valid["future_down_atr"].to_numpy(dtype=np.float64),
+        barrier_bps=valid["barrier_bps"].to_numpy(dtype=np.float64),
+        first_touch=valid["first_touch"].to_numpy(dtype=np.int64),
+        timeout_return_bps=valid["timeout_return_bps"].to_numpy(dtype=np.float64),
+        exit_offset=valid["exit_offset"].to_numpy(dtype=np.int64),
     )
+
+
+def _first_barrier_touch(
+    *,
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    barrier_bps: np.ndarray,
+    horizon: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    count = close.size
+    upper = close * np.exp(barrier_bps / 10_000.0)
+    lower = close * np.exp(-barrier_bps / 10_000.0)
+    beyond = horizon + 1
+    first_up = np.full(count, beyond, dtype=np.int64)
+    first_down = np.full(count, beyond, dtype=np.int64)
+    for offset in range(1, horizon + 1):
+        future_high = _shift_back(high, offset)
+        future_low = _shift_back(low, offset)
+        reached_up = (first_up == beyond) & (future_high >= upper)
+        reached_down = (first_down == beyond) & (future_low <= lower)
+        first_up = np.where(reached_up, offset, first_up)
+        first_down = np.where(reached_down, offset, first_down)
+    touch = np.where(
+        first_up < first_down,
+        UPPER_FIRST,
+        np.where(
+            first_down < first_up,
+            LOWER_FIRST,
+            np.where(first_up <= horizon, BOTH_IN_ONE_CANDLE, NO_TOUCH),
+        ),
+    ).astype(np.int64)
+    timeout_close = _shift_back(close, horizon)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        timeout_bps = np.log(timeout_close / close) * 10_000.0
+    exit_offset = np.minimum(np.minimum(first_up, first_down), horizon).astype(np.int64)
+    return touch, timeout_bps, exit_offset
+
+
+def _shift_back(values: np.ndarray, offset: int) -> np.ndarray:
+    shifted = np.full(values.shape, np.nan, dtype=np.float64)
+    if offset < values.size:
+        shifted[: values.size - offset] = values[offset:]
+    return shifted
 
 
 def latest_feature_vector(bars: pd.DataFrame) -> tuple[pd.Series, np.ndarray]:

@@ -18,6 +18,7 @@ from .config import (
     cache_path,
     model_path,
 )
+from .commands import CommandOutcome, poll_and_answer
 from .data import BinanceMarketDataClient, load_cache, update_cache
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
@@ -193,6 +194,14 @@ def format_prediction(prediction: Prediction) -> str:
             f"Referans fiyat (son kapali mum): ${prediction.source_price:,.2f}",
             f"Yon olasiligi: YUKARI %{prediction.probability_up * 100:.1f} | ASAGI %{prediction.probability_down * 100:.1f}",
             f"Durum: {status}",
+            "",
+            "HEDEF TANIMI (uclu bariyer)",
+            f"• Yon = fiyatin once hangi tarafa ±{metrics.barrier_bps_median:.0f} bps "
+            f"hareket ettigi; en fazla {metrics.barrier_horizon_candles} mum beklenir",
+            f"• Bu hedef {metrics.round_trip_cost_bps:.1f} bps gidis-donus maliyetinin "
+            "en az iki kati secilir, yani kazanan islem masrafini fazlasiyla karsilar",
+            f"• Gecmiste sinyallerin %{metrics.resolved_fraction * 100:.0f}'i bariyere ulasti; "
+            f"kalani sure dolunca piyasadan kapandi",
             "",
             "MALIYET SONRASI BEKLENTI (bu tahminin tek gecerli olcusu)",
             f"• Olculen net beklenti: {metrics.net_edge_bps:+.2f} bps/sinyal "
@@ -456,6 +465,26 @@ def deliver_scorecard(
     )
 
 
+def answer_commands(
+    settings: Settings,
+    predictions: list[Prediction],
+    *,
+    notifier: TelegramNotifier | None = None,
+    now: datetime | None = None,
+) -> CommandOutcome:
+    """Reply to whoever asked the bot a question since the last run."""
+    current = now or datetime.now(timezone.utc)
+    return poll_and_answer(
+        settings,
+        status_text=lambda: format_observation_digest(predictions, now=current),
+        performance_text=lambda days: format_scorecard(
+            scorecard(load_ledger(settings.outcome_state_dir), days=days, now=current)
+        ),
+        notifier=notifier,
+        now=current,
+    )
+
+
 def _record(settings: Settings, prediction: Prediction) -> None:
     record_delivery(
         settings.outcome_state_dir,
@@ -518,6 +547,12 @@ def serve_forever(
             digest = deliver_observation_digest(settings, predictions, now=now)
             if digest is not None and digest.status != "DEDUPLICATED":
                 progress(f"Gozlem raporu: {digest.status}{_detail_suffix(digest)}")
+            answers = answer_commands(settings, predictions, now=now)
+            if answers.received:
+                progress(
+                    f"Komut: {answers.received} guncelleme, {answers.answered} yanit, "
+                    f"{answers.refused} yetkisiz"
+                )
             consecutive_failures = 0
         except KeyboardInterrupt:
             raise
@@ -605,6 +640,7 @@ def _iso_utc(milliseconds: int) -> str:
 
 __all__ = [
     "Prediction",
+    "answer_commands",
     "dashboard_snapshot",
     "deliver_eligible",
     "deliver_observation_digest",

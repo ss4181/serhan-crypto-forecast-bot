@@ -35,7 +35,14 @@ class Settings:
     # A signal is actionable only while this much of the target candle is left.
     minimum_remaining_fraction: float = 0.60
     # Every model reports to Telegram this often even when it cannot trade.
-    observation_digest_hours: int = 6
+    observation_digest_hours: int = 24
+    # Triple barrier: how far the take-profit and stop sit from entry, and how
+    # long the trade may stay open before it is closed at market.
+    barrier_atr_multiple: float = 1.0
+    barrier_horizon_candles: int = 12
+    # The barrier never sits closer than this multiple of the round trip, so a
+    # winning trade always clears its own costs by a margin.
+    barrier_cost_multiple: float = 2.0
 
 
 def validate_symbol(symbol: str) -> str:

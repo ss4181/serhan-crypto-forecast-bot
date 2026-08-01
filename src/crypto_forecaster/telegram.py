@@ -13,6 +13,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 TOKEN_ENV = "CRYPTO_TELEGRAM_BOT_TOKEN"
 CHAT_ID_ENV = "CRYPTO_TELEGRAM_CHAT_ID"
+OWNER_ID_ENV = "CRYPTO_TELEGRAM_OWNER_ID"
 API_ORIGIN = "https://api.telegram.org"
 SEND_ATTEMPTS = 3
 MAXIMUM_RETRY_SECONDS = 30.0
@@ -53,21 +54,10 @@ class TelegramNotifier:
     def __repr__(self) -> str:
         return f"{type(self).__name__}(credentials=<redacted>)"
 
-    def send_message(self, text: str) -> int:
-        if not isinstance(text, str) or not 1 <= len(text) <= 4096 or "\x00" in text:
-            raise ValueError("Gecersiz Telegram mesaji")
-        payload = json.dumps(
-            {
-                "chat_id": self._chat_id,
-                "text": text,
-                "link_preview_options": {"is_disabled": True},
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
+    def _api(self, method: str, payload: dict[str, object]) -> object:
         request = Request(
-            f"{API_ORIGIN}/bot{self._token}/sendMessage",
-            data=payload,
+            f"{API_ORIGIN}/bot{self._token}/{method}",
+            data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json; charset=utf-8",
@@ -80,13 +70,57 @@ class TelegramNotifier:
             raise TelegramError("Telegram yaniti gecersiz")
         try:
             decoded = json.loads(raw.decode("utf-8"))
-            result = decoded["result"]
-            message_id = result["message_id"]
-            response_chat = result["chat"]
-            response_chat_id = response_chat["id"]
-        except (UnicodeError, json.JSONDecodeError, KeyError, TypeError):
+        except (UnicodeError, json.JSONDecodeError):
             raise TelegramError("Telegram yaniti dogrulanamadi") from None
-        if decoded.get("ok") is not True or not isinstance(message_id, int) or message_id <= 0:
+        if not isinstance(decoded, dict) or decoded.get("ok") is not True:
+            raise TelegramError("Telegram istegi kabul etmedi")
+        return decoded.get("result")
+
+    def get_updates(self, *, offset: int, limit: int = 20) -> list[dict[str, object]]:
+        """Read pending commands.  Nothing here is ever treated as an instruction."""
+        result = self._api(
+            "getUpdates",
+            {
+                "offset": int(offset),
+                "limit": max(1, min(int(limit), 100)),
+                "timeout": 0,
+                "allowed_updates": ["message"],
+            },
+        )
+        if not isinstance(result, list):
+            raise TelegramError("Telegram guncelleme listesi gecersiz")
+        return [item for item in result if isinstance(item, dict)]
+
+    def send_reply(self, chat_id: int, text: str) -> int:
+        """Answer one authorised person in their own chat, not in the channel."""
+        if isinstance(chat_id, bool) or not isinstance(chat_id, int):
+            raise ValueError("Gecersiz sohbet kimligi")
+        _validate_text(text)
+        result = self._api(
+            "sendMessage",
+            {"chat_id": chat_id, "text": text, "link_preview_options": {"is_disabled": True}},
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
+            raise TelegramError("Telegram yaniti dogrulanamadi")
+        return int(result["message_id"])
+
+    def send_message(self, text: str) -> int:
+        _validate_text(text)
+        result = self._api(
+            "sendMessage",
+            {
+                "chat_id": self._chat_id,
+                "text": text,
+                "link_preview_options": {"is_disabled": True},
+            },
+        )
+        try:
+            message_id = result["message_id"]  # type: ignore[index]
+            response_chat = result["chat"]  # type: ignore[index]
+            response_chat_id = response_chat["id"]
+        except (KeyError, TypeError):
+            raise TelegramError("Telegram yaniti dogrulanamadi") from None
+        if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
             raise TelegramError("Telegram mesaji kabul etmedi")
         if self._chat_id.lstrip("-").isdigit():
             if isinstance(response_chat_id, bool) or str(response_chat_id) != self._chat_id:
@@ -179,6 +213,11 @@ def digest_signal_id(label: str, bucket: int) -> str:
     return sha256(f"{label}|{int(bucket)}".encode("ascii")).hexdigest()
 
 
+def _validate_text(text: str) -> None:
+    if not isinstance(text, str) or not 1 <= len(text) <= 4096 or "\x00" in text:
+        raise ValueError("Gecersiz Telegram mesaji")
+
+
 def _retry_after_seconds(error: HTTPError) -> float:
     header = error.headers.get("Retry-After") if error.headers else None
     for candidate in (header, _body_retry_after(error)):
@@ -213,6 +252,7 @@ def _read_state(path: Path) -> dict[str, object]:
 
 __all__ = [
     "CHAT_ID_ENV",
+    "OWNER_ID_ENV",
     "TOKEN_ENV",
     "TelegramDelivery",
     "TelegramError",

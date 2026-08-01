@@ -20,7 +20,12 @@ def research_one(
     interval: str,
 ) -> BacktestMetrics:
     bars = load_cache(cache_path(settings.data_dir, symbol, interval))
-    dataset = build_supervised_dataset(bars)
+    dataset = build_supervised_dataset(
+        bars,
+        barrier_atr_multiple=settings.barrier_atr_multiple,
+        barrier_horizon_candles=settings.barrier_horizon_candles,
+        minimum_barrier_bps=settings.barrier_cost_multiple * settings.round_trip_cost_bps,
+    )
     metrics = walk_forward_backtest(
         dataset,
         signal_threshold=settings.signal_threshold,
@@ -68,8 +73,8 @@ def write_research_report(
         "schema": "btc-eth-walk-forward-report-v1",
         "generated_at_utc": generated_at,
         "method": {
-            "split": "expanding chronological train; later calibration; one-label embargo; later test",
-            "target": "next closed candle close direction",
+            "split": "expanding chronological train; later calibration; later test, each separated by a full label-horizon embargo",
+            "target": "triple barrier: which side is touched first within the horizon",
             "signal_threshold": next(iter(results.values())).signal_threshold if results else None,
             "gate": "net edge after round-trip cost must beat zero, day-block bootstrapped",
             "round_trip_cost_bps": (
@@ -91,21 +96,19 @@ def write_research_report(
         "Tum sonuclar kronolojik, modelden sonra gelen kalibrasyon ve test dilimlerinden uretilmistir. "
         "Train/kalibrasyon ve kalibrasyon/test arasinda bir hedef mumu embargo vardir.",
         "",
-        "| Model | OOS mum | Tum yon | Taban | Yuksek guven | Aile-duz. %95 GA | Kapsama | "
-        "Ort. kazanc/kayip | Brut bps | Net bps | Net %95 GA (gun blok) | ECE | Kapi |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
+        "| Model | OOS mum | Bariyer | Cozulen | Isabet | Kapsama | Ort. kazanc/kayip | "
+        "Brut bps | Net bps | Net %95 GA (gun blok) | Kapi |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
     ]
     for key, metric in results.items():
         lines.append(
-            f"| {key} | {metric.sample_count} | %{metric.accuracy * 100:.2f} | "
-            f"%{metric.baseline_accuracy * 100:.2f} | %{metric.signal_accuracy * 100:.2f} "
-            f"(n={metric.signal_count}, {metric.signal_days} gun) | "
-            f"%{metric.signal_familywise_ci95_low * 100:.2f}–%{metric.signal_familywise_ci95_high * 100:.2f} | "
-            f"%{metric.signal_coverage * 100:.2f} | "
+            f"| {key} | {metric.sample_count} | ±{metric.barrier_bps_median:.0f} bps / "
+            f"{metric.barrier_horizon_candles} mum | %{metric.resolved_fraction * 100:.0f} | "
+            f"%{metric.signal_accuracy * 100:.2f} (n={metric.signal_count}, "
+            f"{metric.signal_days} gun) | %{metric.signal_coverage * 100:.2f} | "
             f"{metric.average_win_bps:+.1f} / {metric.average_loss_bps:+.1f} | "
             f"{metric.gross_edge_bps:+.2f} | {metric.net_edge_bps:+.2f} | "
             f"{metric.net_edge_ci95_low:+.2f} – {metric.net_edge_ci95_high:+.2f} | "
-            f"%{metric.expected_calibration_error * 100:.2f} | "
             f"{'GECTI' if metric.passed_research_gate else 'KALDI'} |"
         )
     cost = next(iter(results.values())).round_trip_cost_bps if results else 0.0

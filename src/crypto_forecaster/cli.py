@@ -9,11 +9,13 @@ from typing import Sequence
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .commands import load_members, owner_id, safe_name, save_members
 from .config import INTERVALS, SYMBOLS, Settings
 from .data import BinanceMarketDataClient, MarketDataError, update_cache
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .research import research_all
 from .service import (
+    answer_commands,
     dashboard_snapshot,
     deliver_eligible,
     deliver_observation_digest,
@@ -24,7 +26,14 @@ from .service import (
     models_need_research,
     serve_forever,
 )
-from .telegram import CHAT_ID_ENV, TOKEN_ENV, TelegramError, TelegramNotifier, digest_signal_id
+from .telegram import (
+    CHAT_ID_ENV,
+    OWNER_ID_ENV,
+    TOKEN_ENV,
+    TelegramError,
+    TelegramNotifier,
+    digest_signal_id,
+)
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -81,6 +90,15 @@ def build_parser() -> argparse.ArgumentParser:
     card = subparsers.add_parser("scorecard", help="Gonderilen sinyallerin gercek sonucunu ozetle")
     card.add_argument("--days", type=int, default=30)
     card.add_argument("--send", action="store_true", help="Karneyi Telegram'a gonder")
+
+    subparsers.add_parser(
+        "commands", help="Telegram'dan gelen /durum, /performans gibi sorulari yanitla"
+    )
+
+    members = subparsers.add_parser("members", help="Sorgulama yetkisi olan kisileri listele")
+    members.add_argument("--add", metavar="KIMLIK", type=int)
+    members.add_argument("--name", default="")
+    members.add_argument("--remove", metavar="KIMLIK", type=int)
     return parser
 
 
@@ -141,6 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"{prediction.symbol} {prediction.interval}: {delivery.status}")
             _deliver_cloud_digest(settings, predictions)
             _deliver_cloud_scorecard(settings)
+            _answer_cloud_commands(settings, predictions)
             snapshot = dashboard_snapshot(predictions)
             _write_cloud_snapshot(settings, snapshot)
             posted = _post_cloud_snapshot(snapshot)
@@ -167,6 +186,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 delivery = deliver_scorecard(settings, days=args.days)
                 print(f"Telegram karnesi: {delivery.status if delivery else 'GONDERILMEDI'}")
             return 0
+        if args.command == "commands":
+            if owner_id() is None:
+                print(f"{OWNER_ID_ENV} tanimli degil; komut yanitlama kapali.", file=sys.stderr)
+                return 2
+            outcome = answer_commands(settings, evaluate_all(settings))
+            print(
+                f"{outcome.received} guncelleme okundu, {outcome.answered} yanit gonderildi, "
+                f"{outcome.refused} yetkisiz istek yok sayildi."
+            )
+            return 0
+        if args.command == "members":
+            return _manage_members(settings, add=args.add, name=args.name, remove=args.remove)
         raise RuntimeError("Bilinmeyen komut")
     except KeyboardInterrupt:
         print("Kullanici tarafindan durduruldu.", file=sys.stderr)
@@ -249,6 +280,45 @@ def _deliver_cloud_digest(settings: Settings, predictions) -> None:  # type: ign
     if delivery is not None and delivery.status != "DEDUPLICATED":
         detail = f" ({delivery.detail})" if delivery.detail else ""
         print(f"Gozlem raporu: {delivery.status}{detail}")
+
+
+def _manage_members(settings: Settings, *, add: int | None, name: str, remove: int | None) -> int:
+    state_dir = settings.telegram_state_dir
+    members = load_members(state_dir)
+    if add is not None and remove is not None:
+        print("Ayni anda hem ekleme hem silme yapilamaz.", file=sys.stderr)
+        return 2
+    if add is not None:
+        if add <= 0:
+            print("Gecersiz Telegram kimligi.", file=sys.stderr)
+            return 2
+        members[add] = safe_name(name)
+        save_members(state_dir, members)
+        print(f"{members[add]} ({add}) eklendi.")
+    if remove is not None:
+        if members.pop(remove, None) is None:
+            print(f"{remove} listede yok.", file=sys.stderr)
+            return 2
+        save_members(state_dir, members)
+        print(f"{remove} listeden cikarildi.")
+    owner = owner_id()
+    print(f"\nSahip: {owner if owner is not None else f'{OWNER_ID_ENV} tanimli degil'}")
+    if not members:
+        print("Baska yetkili kisi yok.")
+    for identifier in sorted(members):
+        print(f"• {members[identifier]} — {identifier}")
+    return 0
+
+
+def _answer_cloud_commands(settings: Settings, predictions) -> None:  # type: ignore[no-untyped-def]
+    if not _telegram_configured() or owner_id() is None:
+        return
+    outcome = answer_commands(settings, predictions)
+    if outcome.received:
+        print(
+            f"Komut: {outcome.received} guncelleme, {outcome.answered} yanit, "
+            f"{outcome.refused} yetkisiz"
+        )
 
 
 def _deliver_cloud_scorecard(settings: Settings) -> None:

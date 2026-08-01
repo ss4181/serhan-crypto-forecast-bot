@@ -28,6 +28,9 @@ GATE = {
 }
 
 
+HORIZON = 12
+
+
 def predictive_dataset(count: int = 4000) -> SupervisedDataset:
     rng = np.random.default_rng(42)
     x = rng.normal(size=(count, len(FEATURE_NAMES)))
@@ -36,6 +39,15 @@ def predictive_dataset(count: int = 4000) -> SupervisedDataset:
     y = (rng.random(count) < probabilities).astype(float)
     returns = (2 * y - 1) * rng.uniform(0.1, 1.2, count) + rng.normal(0, 0.2, count)
     open_ms = 1_700_000_000_000 + np.arange(count) * 300_000
+    # Most rows resolve at a barrier; some time out and a few reach both levels
+    # inside one candle, which the scoring must charge as a loss either way.
+    draw = rng.random(count)
+    first_touch = np.where(y > 0.5, 1, -1).astype(np.int64)
+    first_touch = np.where(draw < 0.15, 0, first_touch)
+    first_touch = np.where(draw > 0.97, 2, first_touch)
+    exit_offset = rng.integers(1, HORIZON + 1, count).astype(np.int64)
+    exit_offset[first_touch == 0] = HORIZON
+    exit_offset[0] = HORIZON
     return SupervisedDataset(
         x=x,
         y=y,
@@ -47,6 +59,10 @@ def predictive_dataset(count: int = 4000) -> SupervisedDataset:
         future_return_atr=returns,
         future_up_atr=np.maximum(returns, 0) + rng.uniform(0, 0.6, count),
         future_down_atr=np.maximum(-returns, 0) + rng.uniform(0, 0.6, count),
+        barrier_bps=np.full(count, 60.0),
+        first_touch=first_touch,
+        timeout_return_bps=(2 * y - 1) * rng.uniform(0, 25, count),
+        exit_offset=exit_offset,
     )
 
 

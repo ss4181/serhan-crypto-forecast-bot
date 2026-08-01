@@ -14,17 +14,41 @@ bildirimler iki seviyeye ayrılmıştır.
 | Seviye | Ne demek | Ne zaman gelir |
 |---|---|---|
 | **İŞLEM ADAYI** | Modelin maliyet sonrası ölçülen beklentisi pozitif ve bu beklentinin gün bloklu `%95` alt sınırı sıfırın üstünde | Yalnız araştırma kapısını geçen modellerden, hedef mumun en az `%60`'ı önündeyken |
-| **GÖZLEM** | Model bir tahmin üretti ama işlem beklentisi kanıtlanmadı | Altı modelin tamamı için, varsayılan olarak `6` saatte bir tek özet mesaj |
+| **GÖZLEM** | Model bir tahmin üretti ama işlem beklentisi kanıtlanmadı | Altı modelin tamamı için **günde bir** tek özet mesaj |
 
 GÖZLEM seviyesi sayesinde **hiçbir model sessiz kalmaz**: kanalda altı modelin de
-durumu düzenli olarak görünür, ama beklentisi negatif bir tahmin işlem sinyali
-gibi sunulmaz.
+durumu günlük olarak görünür, ama beklentisi negatif bir tahmin işlem sinyali
+gibi sunulmaz. Aradaki zamanda gereksiz mesaj gelmez; merak ettiğinizde
+`/durum` yazarak anlık cevabı alırsınız.
 
-**Bugünkü durum:** altı modelin hiçbiri işlem kapısını geçmiyor. En iyi model
-(`BTCUSDT 15m`, `%63.4` yön isabeti) bile `20` baz puan gidiş-dönüş maliyeti
-düşüldükten sonra sinyal başına `-14.7` bps üretiyor ve bunun `%95` aralığı
-tamamen sıfırın altında. Kanal bu nedenle şu an yalnız GÖZLEM raporu yayınlar;
-doğru davranış budur.
+**Bugünkü durum:** üçlü bariyer hedefi ve sızıntısız embargo ile altı modelin
+hiçbiri işlem kapısını geçmiyor. Anlamlı örneğe sahip tek model `BTCUSDT 1h`
+(216 sinyal, 51 ayrı gün): yön isabeti `%45.4` ve maliyet sonrası beklentisi
+sinyal başına `-24.7` bps, `%95` aralığı tamamen negatif. Kanal bu nedenle şu an
+yalnız GÖZLEM raporu yayınlar; doğru davranış budur.
+
+## Hedef: üçlü bariyer
+
+Eski hedef "bir sonraki mumun kapanışı daha yüksek mi" idi. Bu hedef bir baz
+puanlık sürüklenme ile gerçek bir hareketi aynı olay sayar, bu yüzden bir model
+komisyonlara para kaptırırken isabetli görünebilir.
+
+Yeni hedef, o mumda açılan bir işlemin **önce hangi bariyere** değdiğidir:
+
+- **Kâr al / zarar kes**: girişten `±X` baz puan uzaklıkta simetrik iki seviye.
+- **Süre bariyeri**: en fazla `barrier_horizon_candles` mum (varsayılan `12`);
+  o zamana kadar bir tarafa değilmezse işlem piyasadan kapanır.
+- **`X` asla maliyetin altına inmez**: `barrier_cost_multiple` (varsayılan `2`)
+  ile gidiş-dönüş maliyetinin en az iki katı olarak taban alınır. Yani kazanan
+  bir işlem her zaman kendi masrafını fazlasıyla karşılar.
+- **Aynı mumda iki seviye birden görülürse** hangisinin önce geldiği mum
+  verisinden bilinemez; bu durum **her iki yön için de zarar** sayılır. Bir
+  tacir kanıtlayamadığı iyi sonucu varsayamaz.
+
+Bariyer etiketi birden fazla mum ileriye baktığı için train/kalibrasyon/test
+dilimleri arasındaki embargo **tam bir etiket ufku** kadardır. Tek mumluk
+embargo, eğitim setinin komşusunun puanlandığı fiyat hareketini görmesine izin
+verirdi.
 
 ## Tahminin içeriği
 
@@ -32,6 +56,8 @@ Her bildirim şunları gösterir:
 
 - seviye (İŞLEM ADAYI / GÖZLEM), sinyal ve hedef mum zamanı (UTC), hedef mumda
   kalan süre, son kapanmış mum fiyatı;
+- hedef tanımı: bariyer uzaklığı, süre sınırı ve geçmişte sinyallerin yüzde
+  kaçının bariyere ulaştığı;
 - yukarı/aşağı kalibre olasılığı;
 - **maliyet sonrası beklenti**: sinyal başına net baz puan, gün bloklu `%95`
   aralığı, ortalama kazanç ve ortalama kayıp;
@@ -62,7 +88,7 @@ kullanılmaz. Her sembol/zaman dilimi ayrı düzenlileştirilmiş lojistik model
 
 Veri rastgele karıştırılmaz. Her fold şu sıradadır:
 
-`geçmiş train → 1 hedef mum embargo → daha yeni kalibrasyon → 1 hedef mum embargo → daha yeni test`
+`geçmiş train → etiket ufku kadar embargo → daha yeni kalibrasyon → etiket ufku kadar embargo → daha yeni test`
 
 Model train bölümünde öğrenir; Platt olasılık kalibrasyonu daha sonraki kalibrasyon
 bölümünde yapılır; raporlanan bütün sonuçlar ikisinden de sonraki test bölümündendir.
@@ -174,6 +200,52 @@ python run.py verify-models --refresh --send
 Bulutta aynı doğrulama, workflow'u elle çalıştırırken `verify_models` seçeneğiyle
 yapılır.
 
+### Bota soru sorma
+
+Bot yalnız mesaj göndermez; kendisine sorulduğunda cevap verir. Bunun için
+sahibin sayısal Telegram kimliği gerekir (`@userinfobot` gibi bir bota yazarak
+öğrenebilirsiniz):
+
+```powershell
+[Environment]::SetEnvironmentVariable("CRYPTO_TELEGRAM_OWNER_ID", "123456789", "User")
+```
+
+Sonra bota **özel mesaj** olarak:
+
+| Komut | Ne yapar |
+|---|---|
+| `/durum` | Altı modelin o anki durumu — beklemeden anlık cevap |
+| `/performans [gün]` | Gönderilen sinyallerin gerçek sonucu (varsayılan 30 gün) |
+| `/kisiler` | Yetkili kişiler |
+| `/yardim` | Komut listesi |
+| `/ekle <kimlik> <ad>` | **Yalnız sahip** — birine sorgulama yetkisi verir |
+| `/sil <kimlik>` | **Yalnız sahip** — yetkiyi kaldırır |
+
+Yetki kuralları:
+
+- `CRYPTO_TELEGRAM_OWNER_ID` tanımlı değilse komut yanıtlama tamamen kapalıdır.
+- Listede olmayan birinin komutu **sessizce yok sayılır**. Cevap verilseydi
+  herkes botu istediği anda mesaj üretmeye zorlayabilirdi.
+- Eklenen kişi yalnızca **sorgulama** yetkisi alır. Hiçbir komut emir veremez,
+  pozisyon açamaz veya para hareketi başlatamaz; botun böyle bir yüzeyi yoktur.
+- Gelen mesaj metni sabit bir komut tablosuyla eşleştirilir; hiçbir zaman
+  talimat olarak yorumlanmaz. Kişi adları da yazdırılmadan önce temizlenir.
+
+Kişileri komut satırından da yönetebilirsiniz:
+
+```powershell
+python run.py members --add 123456789 --name "Ayse Yilmaz"
+python run.py members --remove 123456789
+python run.py members
+```
+
+Bulut çalışması her turda bekleyen komutları okuyup yanıtlar. Yerelde tek sefer
+denemek için:
+
+```powershell
+python run.py commands
+```
+
 ### Canlı karne
 
 Gönderilen her sinyal, hedef mumu kapandığında gerçek sonucuyla eşleştirilip
@@ -219,6 +291,7 @@ GitHub deposunda şu Actions secrets tanımlanmalıdır:
 
 - `CRYPTO_TELEGRAM_BOT_TOKEN`
 - `CRYPTO_TELEGRAM_CHAT_ID`
+- `CRYPTO_TELEGRAM_OWNER_ID` — komutlara cevap verilmesi için gerekir
 - `PROJECT_HUB_INGEST_URL` — panelin **`/api/ingest`** yolu olmalıdır;
   `/api/project-ingest` farklı bir şemayı doğrular ve gönderimi `400` ile reddeder
 - `PROJECT_HUB_INGEST_TOKEN`
@@ -233,9 +306,12 @@ dosyasına yazmayın.
 
 - Veri kaynağı tek borsadır (Binance Spot); başka borsadaki fiyat/likidite farklı olabilir.
 - Backtest komisyonu hesaba katar ama kaymayı ve emir gerçekleşmesini ölçmez.
-- GitHub'ın `*/5` cron'u yoğunlukta gecikir. Tazelik kapısı bu yüzden hedef mumda
-  kalan süreye bakar; geciken bir koşu `5m` sinyalini göndermek yerine düşürür.
-  Kısa vadeli modellerin bulutta seyrek tetiklenmesi beklenen davranıştır.
+- **GitHub `*/5` cron'unu fiilen uygulamıyor.** Ölçülen: bu depoda üç saatte
+  beklenen ~35 koşu yerine 2 zamanlanmış koşu çalıştı, yani gerçek tempo saatte
+  bir. Tazelik kapısı hedef mumda kalan süreye baktığı için geciken bir koşu
+  `5m`/`15m` sinyalini göndermek yerine düşürür. Bulutta pratikte yalnız `1h`
+  modelinin tetiklenme penceresi (24 dakika) bu tempoya uyar. Dakika hassasiyeti
+  gerekiyorsa `serve` komutunu sürekli açık bir makinede çalıştırın.
 - Çok sayıda model/parametre denemesi yapılmaz; yine de altı model birlikte incelendiği
   için tek bir iyi sonuca aşırı anlam yüklenmemelidir.
 - `%50` yakınındaki kısa vadeli piyasa yönü normaldir. Araştırma kapısını hiçbir model

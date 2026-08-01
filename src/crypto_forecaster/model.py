@@ -12,7 +12,7 @@ import numpy as np
 from .features import FEATURE_NAMES, SupervisedDataset
 
 
-SCHEMA_VERSION = "btc-eth-probability-model-v2"
+SCHEMA_VERSION = "btc-eth-probability-model-v3"
 PROBABILITY_EDGES = (0.0, 0.35, 0.45, 0.55, 0.65, 1.0000001)
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 20260801
@@ -83,6 +83,10 @@ class BacktestMetrics:
     average_win_bps: float
     average_loss_bps: float
     signal_days: int
+    barrier_bps_median: float
+    barrier_horizon_candles: int
+    resolved_fraction: float
+    ambiguous_fraction: float
     passed_research_gate: bool
     gate_reasons: tuple[str, ...]
 
@@ -117,6 +121,10 @@ class BacktestMetrics:
             average_win_bps=float(payload["average_win_bps"]),
             average_loss_bps=float(payload["average_loss_bps"]),
             signal_days=int(payload["signal_days"]),
+            barrier_bps_median=float(payload["barrier_bps_median"]),
+            barrier_horizon_candles=int(payload["barrier_horizon_candles"]),
+            resolved_fraction=float(payload["resolved_fraction"]),
+            ambiguous_fraction=float(payload["ambiguous_fraction"]),
             passed_research_gate=bool(payload["passed_research_gate"]),
             gate_reasons=tuple(str(item) for item in payload["gate_reasons"]),
         )
@@ -275,21 +283,20 @@ def walk_forward_backtest(
         raise ValueError("Walk-forward backtest icin en az 800 ornek gerekli")
     if round_trip_cost_bps < 0:
         raise ValueError("Gidis-donus maliyeti negatif olamaz")
+    embargo = max(1, dataset.label_horizon)
     train_end = max(500, int(n * 0.50))
     calibration_size = max(120, int(n * 0.10))
     test_size = max(120, int(n * 0.10))
     probabilities_parts: list[np.ndarray] = []
     labels_parts: list[np.ndarray] = []
     baseline_probabilities_parts: list[np.ndarray] = []
-    return_parts: list[np.ndarray] = []
+    index_parts: list[np.ndarray] = []
     close_time_parts: list[np.ndarray] = []
-    # Log return of the predicted candle in basis points, known only after the fact.
-    realized_bps = dataset.future_return_atr * dataset.atr_pct * 10_000.0
     fold_count = 0
     while True:
-        calibration_start = train_end + 1  # one-label embargo
+        calibration_start = train_end + embargo
         calibration_end = calibration_start + calibration_size
-        test_start = calibration_end + 1  # one-label embargo
+        test_start = calibration_end + embargo
         if test_start >= n:
             break
         test_end = min(test_start + test_size, n)
@@ -307,7 +314,7 @@ def walk_forward_backtest(
         test_logits = model.logits(scaler.transform(dataset.x[test_start:test_end]))
         probabilities_parts.append(calibrator.predict(test_logits))
         labels_parts.append(dataset.y[test_start:test_end])
-        return_parts.append(realized_bps[test_start:test_end])
+        index_parts.append(np.arange(test_start, test_end, dtype=np.int64))
         close_time_parts.append(dataset.close_time_ms[test_start:test_end])
         train_rate = float(np.mean(dataset.y[:train_end]))
         baseline_probabilities_parts.append(
@@ -320,7 +327,7 @@ def walk_forward_backtest(
     probabilities = np.concatenate(probabilities_parts)
     labels = np.concatenate(labels_parts)
     baseline_probabilities = np.concatenate(baseline_probabilities_parts)
-    realized = np.concatenate(return_parts)
+    sample_indices = np.concatenate(index_parts)
     close_times = np.concatenate(close_time_parts)
     predictions = (probabilities >= 0.5).astype(np.float64)
     baseline_predictions = (baseline_probabilities >= 0.5).astype(np.float64)
@@ -343,10 +350,13 @@ def walk_forward_backtest(
             successes, signal_count, z=2.638257273476751
         )
         # Direction accuracy above 50% is not an edge: wins and losses have
-        # different sizes and every round trip pays a fee.  Score the money.
+        # different sizes and every round trip pays a fee.  Score the money the
+        # barrier trade would actually have made.
         side = np.where(probabilities[signal_mask] >= 0.5, 1.0, -1.0)
-        gross = side * realized[signal_mask]
-        net = gross - round_trip_cost_bps
+        net = dataset.outcome_bps(
+            side, round_trip_cost_bps, indices=sample_indices[signal_mask]
+        )
+        gross = net + round_trip_cost_bps
         wins = gross[gross > 0]
         losses = gross[gross <= 0]
         gross_edge = float(np.mean(gross))
@@ -356,6 +366,12 @@ def walk_forward_backtest(
         average_win = float(np.mean(wins)) if wins.size else 0.0
         average_loss = float(np.mean(losses)) if losses.size else 0.0
         signal_days = int(np.unique(signal_days_index).size)
+        signal_touch = dataset.first_touch[sample_indices[signal_mask]]
+        barrier_median = float(np.median(dataset.barrier_bps[sample_indices[signal_mask]]))
+        resolved_fraction = float(
+            np.mean((signal_touch == 1) | (signal_touch == -1) | (signal_touch == 2))
+        )
+        ambiguous_fraction = float(np.mean(signal_touch == 2))
     else:
         signal_accuracy = 0.0
         ci_low, ci_high = 0.0, 1.0
@@ -364,6 +380,8 @@ def walk_forward_backtest(
         net_low, net_high = 0.0, 0.0
         average_win = average_loss = 0.0
         signal_days = 0
+        barrier_median = float(np.median(dataset.barrier_bps))
+        resolved_fraction = ambiguous_fraction = 0.0
     reasons: list[str] = []
     if signal_count < minimum_signal_count:
         reasons.append(f"yuksek guven ornegi {minimum_signal_count} altinda")
@@ -409,6 +427,10 @@ def walk_forward_backtest(
         average_win_bps=average_win,
         average_loss_bps=average_loss,
         signal_days=signal_days,
+        barrier_bps_median=barrier_median,
+        barrier_horizon_candles=int(np.max(dataset.exit_offset)) if len(dataset) else 0,
+        resolved_fraction=resolved_fraction,
+        ambiguous_fraction=ambiguous_fraction,
         passed_research_gate=not reasons,
         gate_reasons=tuple(reasons),
     )
@@ -458,7 +480,7 @@ def fit_final_bundle(
     # tail short: a 20% tail on a year of data left the live model two and a
     # half months behind the market.
     train_end = int(n * 0.90)
-    calibration_start = train_end + 1
+    calibration_start = train_end + max(1, dataset.label_horizon)
     if n - calibration_start < 100:
         raise ValueError("Nihai kalibrasyon icin yetersiz veri")
     scaler = Standardizer.fit(dataset.x[:train_end])

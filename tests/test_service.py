@@ -40,6 +40,8 @@ def metrics(**overrides) -> BacktestMetrics:  # type: ignore[no-untyped-def]
         round_trip_cost_bps=20.0, gross_edge_bps=26.0, net_edge_bps=6.0,
         net_edge_ci95_low=1.5, net_edge_ci95_high=10.5,
         average_win_bps=30.0, average_loss_bps=-24.0, signal_days=60,
+        barrier_bps_median=40.0, barrier_horizon_candles=12,
+        resolved_fraction=.82, ambiguous_fraction=.03,
         passed_research_gate=True, gate_reasons=(),
     )
     base.update(overrides)
@@ -96,7 +98,12 @@ def build_fixture(directory: Path, *, passed_gate: bool = True) -> tuple[Setting
     bars = synthetic_bars()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     bars.to_csv(cache_path(settings.data_dir, "BTCUSDT", "5m"), index=False)
-    dataset = build_supervised_dataset(bars)
+    dataset = build_supervised_dataset(
+        bars,
+        barrier_atr_multiple=settings.barrier_atr_multiple,
+        barrier_horizon_candles=settings.barrier_horizon_candles,
+        minimum_barrier_bps=settings.barrier_cost_multiple * settings.round_trip_cost_bps,
+    )
     backtest = walk_forward_backtest(
         dataset,
         signal_threshold=settings.signal_threshold,
