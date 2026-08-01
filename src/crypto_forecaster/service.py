@@ -21,6 +21,7 @@ from .config import (
 from .commands import CommandOutcome, poll_and_answer
 from .data import BinanceMarketDataClient, load_cache, update_cache
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
+from .hub import hub_configured, post_snapshot, write_snapshot
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
 from .outcomes import (
     format_scorecard,
@@ -30,7 +31,7 @@ from .outcomes import (
     settle_pending,
 )
 from .research import research_all
-from .telegram import TelegramDelivery, TelegramNotifier, digest_signal_id
+from .telegram import TelegramDelivery, TelegramNotifier, digest_signal_id, is_primary
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,21 +539,26 @@ def serve_forever(
                 research_all(settings, progress=progress)
                 last_research_day = today
             predictions = evaluate_all(settings)
-            deliveries = deliver_eligible(settings, predictions)
-            for prediction, delivery in deliveries:
-                progress(
-                    f"{prediction.symbol} {prediction.interval} {prediction.direction}: "
-                    f"{delivery.status}{_detail_suffix(delivery)}"
-                )
-            digest = deliver_observation_digest(settings, predictions, now=now)
-            if digest is not None and digest.status != "DEDUPLICATED":
-                progress(f"Gozlem raporu: {digest.status}{_detail_suffix(digest)}")
-            answers = answer_commands(settings, predictions, now=now)
-            if answers.received:
-                progress(
-                    f"Komut: {answers.received} guncelleme, {answers.answered} yanit, "
-                    f"{answers.refused} yetkisiz"
-                )
+            if is_primary():
+                deliveries = deliver_eligible(settings, predictions)
+                for prediction, delivery in deliveries:
+                    progress(
+                        f"{prediction.symbol} {prediction.interval} {prediction.direction}: "
+                        f"{delivery.status}{_detail_suffix(delivery)}"
+                    )
+                digest = deliver_observation_digest(settings, predictions, now=now)
+                if digest is not None and digest.status != "DEDUPLICATED":
+                    progress(f"Gozlem raporu: {digest.status}{_detail_suffix(digest)}")
+                answers = answer_commands(settings, predictions, now=now)
+                if answers.received:
+                    progress(
+                        f"Komut: {answers.received} guncelleme, {answers.answered} yanit, "
+                        f"{answers.refused} yetkisiz"
+                    )
+            snapshot = dashboard_snapshot(predictions)
+            write_snapshot(settings.report_dir, snapshot)
+            if hub_configured():
+                post_snapshot(snapshot)
             consecutive_failures = 0
         except KeyboardInterrupt:
             raise

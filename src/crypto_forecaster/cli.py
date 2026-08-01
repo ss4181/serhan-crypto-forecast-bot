@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import json
 import os
 import sys
 from typing import Sequence
-from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler
 
 from .commands import load_members, owner_id, safe_name, save_members
 from .config import INTERVALS, SYMBOLS, Settings
 from .data import BinanceMarketDataClient, MarketDataError, update_cache
+from .hub import post_snapshot, write_snapshot
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .research import research_all
 from .service import (
@@ -33,6 +32,7 @@ from .telegram import (
     TelegramError,
     TelegramNotifier,
     digest_signal_id,
+    is_primary,
 )
 
 
@@ -161,8 +161,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _deliver_cloud_scorecard(settings)
             _answer_cloud_commands(settings, predictions)
             snapshot = dashboard_snapshot(predictions)
-            _write_cloud_snapshot(settings, snapshot)
-            posted = _post_cloud_snapshot(snapshot)
+            write_snapshot(settings.report_dir, snapshot)
+            posted = post_snapshot(snapshot)
             print("Panel guncellendi." if posted else "Panel baglantisi tanimli degil; yerel ozet yazildi.")
             return 0
         if args.command == "telegram-test":
@@ -331,8 +331,10 @@ def _deliver_cloud_scorecard(settings: Settings) -> None:
 
 
 def _telegram_configured() -> bool:
-    return bool(os.environ.get(TOKEN_ENV, "").strip()) and bool(
-        os.environ.get(CHAT_ID_ENV, "").strip()
+    return (
+        is_primary()
+        and bool(os.environ.get(TOKEN_ENV, "").strip())
+        and bool(os.environ.get(CHAT_ID_ENV, "").strip())
     )
 
 
@@ -365,14 +367,6 @@ def _research_is_due(settings: Settings) -> bool:
     return age_seconds >= 20 * 60 * 60
 
 
-def _write_cloud_snapshot(settings: Settings, snapshot: dict[str, object]) -> None:
-    settings.report_dir.mkdir(parents=True, exist_ok=True)
-    path = settings.report_dir / "cloud_snapshot.json"
-    path.write_text(
-        json.dumps(snapshot, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-
 
 def _deliver_cloud_eligible(settings: Settings, predictions):  # type: ignore[no-untyped-def]
     token_configured = bool(os.environ.get(TOKEN_ENV, "").strip())
@@ -383,43 +377,11 @@ def _deliver_cloud_eligible(settings: Settings, predictions):  # type: ignore[no
         if any(prediction.eligible for prediction in predictions):
             print("Telegram kanali henuz bagli degil; uygun sinyal panele yazildi ancak mesaj gonderilmedi.")
         return []
+    if not is_primary():
+        print("Bu kosu yedek (standby) rolde; arastirma ve panel guncellendi, mesaj gonderilmedi.")
+        return []
     return deliver_eligible(settings, predictions)
 
-
-def _post_cloud_snapshot(snapshot: dict[str, object]) -> bool:
-    endpoint = os.environ.get("PROJECT_HUB_INGEST_URL", "").strip()
-    token = os.environ.get("PROJECT_HUB_INGEST_TOKEN", "").strip()
-    if not endpoint and not token:
-        return False
-    parsed = urlparse(endpoint)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
-        raise ValueError("PROJECT_HUB_INGEST_URL gecerli bir HTTPS adresi degil")
-    if len(token) < 32:
-        raise ValueError("PROJECT_HUB_INGEST_TOKEN tanimli veya yeterince guclu degil")
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json; charset=utf-8",
-        "User-Agent": "btc-eth-probability-bot/0.1",
-    }
-    bypass = os.environ.get("OAI_SITES_BYPASS_TOKEN", "").strip()
-    if bypass:
-        headers["OAI-Sites-Authorization"] = f"Bearer {bypass}"
-    request = Request(
-        endpoint,
-        data=json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    try:
-        with build_opener(_NoRedirect()).open(request, timeout=20.0) as response:
-            status = response.getcode()
-            response.read(64 * 1024)
-    except Exception:
-        raise RuntimeError("Proje paneli guncellenemedi") from None
-    if status != 202:
-        raise RuntimeError("Proje paneli guncellemeyi kabul etmedi")
-    return True
 
 
 def _configure_console_encoding() -> None:

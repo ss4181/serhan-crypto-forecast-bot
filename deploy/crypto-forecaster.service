@@ -1,0 +1,57 @@
+[Unit]
+Description=BTC/ETH olasilik arastirma botu (serve)
+Documentation=https://github.com/ss4181/serhan-crypto-forecast-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+Group=botuser
+WorkingDirectory=/opt/crypto-forecaster
+
+# Real values live here, never in the repo.  Created by install.sh with 0600.
+EnvironmentFile=/etc/crypto-forecaster.env
+
+# Poll every 60 s: the tightest notification window is the first 40 % of a 5 m
+# candle (120 s), so a one minute cycle always lands inside it.
+ExecStart=/opt/crypto-forecaster/.venv/bin/python -u run.py serve --days 365 --poll-seconds 60
+
+Restart=always
+RestartSec=15
+# Do not give up after repeated crashes; a broken exchange API must not stop
+# the bot permanently.
+StartLimitIntervalSec=0
+
+# The loop already retries with backoff, so a hang is the real failure mode.
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+# Hardening: the bot only needs its own directory and outbound HTTPS.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/opt/crypto-forecaster/data /opt/crypto-forecaster/artifacts /opt/crypto-forecaster/state
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=crypto-forecaster
+
+[Install]
+WantedBy=multi-user.target

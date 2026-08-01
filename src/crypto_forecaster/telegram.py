@@ -14,6 +14,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 TOKEN_ENV = "CRYPTO_TELEGRAM_BOT_TOKEN"
 CHAT_ID_ENV = "CRYPTO_TELEGRAM_CHAT_ID"
 OWNER_ID_ENV = "CRYPTO_TELEGRAM_OWNER_ID"
+ROLE_ENV = "CRYPTO_BOT_ROLE"
 API_ORIGIN = "https://api.telegram.org"
 SEND_ATTEMPTS = 3
 MAXIMUM_RETRY_SECONDS = 30.0
@@ -213,6 +214,17 @@ def digest_signal_id(label: str, bucket: int) -> str:
     return sha256(f"{label}|{int(bucket)}".encode("ascii")).hexdigest()
 
 
+def is_primary() -> bool:
+    """Only one instance may talk to Telegram.
+
+    Two senders would double-post every alert, because each keeps its own
+    delivery receipts, and Telegram refuses concurrent getUpdates callers with
+    a 409 so commands would be lost as well.  The always-on host is primary;
+    the GitHub Actions job runs as standby and stays quiet.
+    """
+    return os.environ.get(ROLE_ENV, "primary").strip().lower() != "standby"
+
+
 def _validate_text(text: str) -> None:
     if not isinstance(text, str) or not 1 <= len(text) <= 4096 or "\x00" in text:
         raise ValueError("Gecersiz Telegram mesaji")
@@ -253,7 +265,9 @@ def _read_state(path: Path) -> dict[str, object]:
 __all__ = [
     "CHAT_ID_ENV",
     "OWNER_ID_ENV",
+    "ROLE_ENV",
     "TOKEN_ENV",
+    "is_primary",
     "TelegramDelivery",
     "TelegramError",
     "TelegramNotifier",

@@ -2,7 +2,10 @@ name: BTC ETH Cloud Bot
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # GitHub drops most of a */5 schedule and bills private-repo minutes by the
+    # minute, so this job is a standby that keeps research and the panel warm.
+    # Minute-accurate alerting is the always-on host's job (see deploy/).
+    - cron: "23 */3 * * *"
   workflow_dispatch:
     inputs:
       force_research:
@@ -36,6 +39,11 @@ jobs:
       CRYPTO_TELEGRAM_BOT_TOKEN: ${{ secrets.CRYPTO_TELEGRAM_BOT_TOKEN }}
       CRYPTO_TELEGRAM_CHAT_ID: ${{ secrets.CRYPTO_TELEGRAM_CHAT_ID }}
       CRYPTO_TELEGRAM_OWNER_ID: ${{ secrets.CRYPTO_TELEGRAM_OWNER_ID }}
+      # The always-on host is the only sender.  Leaving this job on "primary"
+      # while the VM runs would double every alert and make both sides fight
+      # over getUpdates.  Set the repository variable to "primary" only if the
+      # VM is gone and you want Actions to take over.
+      CRYPTO_BOT_ROLE: ${{ vars.CRYPTO_BOT_ROLE || 'standby' }}
       PROJECT_HUB_INGEST_URL: ${{ secrets.PROJECT_HUB_INGEST_URL }}
       PROJECT_HUB_INGEST_TOKEN: ${{ secrets.PROJECT_HUB_INGEST_TOKEN }}
       OAI_SITES_BYPASS_TOKEN: ${{ secrets.OAI_SITES_BYPASS_TOKEN }}

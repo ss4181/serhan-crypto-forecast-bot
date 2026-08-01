@@ -273,10 +273,102 @@ python run.py serve --days 365 --poll-seconds 60
 
 `serve` ağ hatasında ölmez; artan bekleme ile yeniden dener.
 
-## Tamamen bulutta çalışma
+## Dakika hassasiyeti: sürekli açık sunucu
 
-`.github/workflows/cloud-bot.yml` botu GitHub Actions üzerinde beş dakikada bir
-çalıştırır. Walk-forward araştırma yaklaşık günde bir yenilenir.
+GitHub Actions dakika hassasiyeti için uygun değildir. İki ayrı duvar var:
+
+- **Zamanlama**: GitHub `*/5` cron'unun çoğunu düşürür. Bu depoda ölçüldü — üç
+  saatte beklenen ~35 koşu yerine 2 zamanlanmış koşu çalıştı, fiili tempo saatte
+  bir.
+- **Kota**: depo private olduğu için aylık 2.000 Actions dakikası var ve her iş
+  bir sonraki tam dakikaya yuvarlanarak faturalanır. Dakikada bir koşu ayda
+  ~43.000 dakika eder. Ayrıca 7/24 döngü, Actions'ı genel amaçlı barındırma
+  olarak kullanmayı yasaklayan kullanım şartlarına aykırıdır.
+
+Bu yüzden dakika hassasiyeti sürekli açık bir makinede `serve` ile sağlanır.
+`serve` artık `cloud-run` ile aynı işleri yapar: veri yenileme, sonuç
+sonuçlandırma, günlük araştırma, bildirim, gözlem raporu, komut yanıtlama ve
+panel güncelleme.
+
+### Rol: tek gönderici
+
+`CRYPTO_BOT_ROLE` iki değer alır:
+
+| Rol | Ne yapar |
+|---|---|
+| `primary` (varsayılan) | Telegram'a mesaj gönderir ve komutları yanıtlar |
+| `standby` | Yalnız araştırma yapar ve paneli günceller; **hiç mesaj göndermez** |
+
+Aynı anda iki `primary` kopya çalışırsa her uyarı iki kez gider (teslimat
+makbuzları ayrı diskte tutulur) ve Telegram eş zamanlı `getUpdates` çağrılarını
+`409` ile reddettiği için komutlar kaybolur. Bu yüzden sunucu `primary`,
+GitHub Actions kopyası `standby` olmalıdır — workflow varsayılan olarak
+`standby` gelir.
+
+### Oracle Cloud Always Free kurulumu
+
+Always Free ARM makine (4 çekirdek / 24 GB) kalıcı olarak ücretsizdir ve bu iş
+yükü için fazlasıyla yeterlidir.
+
+1. Oracle Cloud hesabı açın, **Always Free** etiketli bir **Ampere (ARM)**
+   compute instance oluşturun, imaj olarak **Ubuntu 22.04/24.04** seçin ve SSH
+   anahtarınızı ekleyin. Gelen bağlantıya ihtiyaç yok; bot yalnızca dışa doğru
+   HTTPS konuşur, ek port açmayın.
+2. Makineye bağlanıp depoyu çekin. Depo private olduğu için sunucuda bir SSH
+   anahtarı üretip GitHub'da **Deploy key** (salt okunur) olarak ekleyin:
+
+   ```bash
+   ssh-keygen -t ed25519 -C "oracle-bot" -f ~/.ssh/id_ed25519 -N ""
+   cat ~/.ssh/id_ed25519.pub   # GitHub > Settings > Deploy keys > Add
+   git clone git@github.com:ss4181/serhan-crypto-forecast-bot.git
+   ```
+
+3. Kurulum:
+
+   ```bash
+   cd serhan-crypto-forecast-bot
+   sudo bash deploy/install.sh
+   ```
+
+4. Gizli değerleri girin ve servisi başlatın:
+
+   ```bash
+   sudo nano /etc/crypto-forecaster.env
+   sudo systemctl restart crypto-forecaster
+   sudo journalctl -u crypto-forecaster -f
+   ```
+
+   İlk tur bir yıllık veriyi indirip altı modeli araştırır (5–10 dakika).
+
+5. GitHub tarafında `CRYPTO_BOT_ROLE` repository variable'ını **tanımlamayın**;
+   workflow zaten `standby` varsayar. Sunucu devre dışı kalırsa bu değişkeni
+   `primary` yaparak Actions'ı geçici gönderici hâline getirebilirsiniz.
+
+Servis `Restart=always` ile çalışır, systemd sertleştirmesi altındadır
+(salt okunur kök dosya sistemi, capability yok, yalnızca kendi veri dizinlerine
+yazar) ve gizli değerler yalnızca `0600` izinli `/etc/crypto-forecaster.env`
+dosyasında durur.
+
+Kod güncellemesi:
+
+```bash
+cd ~/serhan-crypto-forecast-bot && git pull
+sudo bash deploy/update.sh
+```
+
+`update.sh` önce testleri çalıştırır; testler geçmezse güncellemeyi durdurur.
+
+Konteyner tercih ederseniz kökteki `Dockerfile` aynı işi yapar; `data`,
+`artifacts` ve `state` dizinlerini kalıcı volume olarak bağlayın — `state`
+kaybolursa gönderilmiş bir uyarı ikinci kez gidebilir.
+
+## Yedek olarak bulutta çalışma
+
+`.github/workflows/cloud-bot.yml` üç saatte bir çalışır ve **varsayılan olarak
+`standby`** rolündedir: araştırmayı ve paneli güncel tutar, mesaj göndermez.
+Sürekli açık sunucu yoksa `CRYPTO_BOT_ROLE` repository variable'ını `primary`
+yaparak bu iş akışını tek gönderici hâline getirebilirsiniz — o zaman tempo
+saatlik olur ve yalnız `1h` modelinin bildirim penceresi tutar.
 
 Durum iki ayrı Actions cache'inde tutulur:
 
@@ -306,12 +398,10 @@ dosyasına yazmayın.
 
 - Veri kaynağı tek borsadır (Binance Spot); başka borsadaki fiyat/likidite farklı olabilir.
 - Backtest komisyonu hesaba katar ama kaymayı ve emir gerçekleşmesini ölçmez.
-- **GitHub `*/5` cron'unu fiilen uygulamıyor.** Ölçülen: bu depoda üç saatte
-  beklenen ~35 koşu yerine 2 zamanlanmış koşu çalıştı, yani gerçek tempo saatte
-  bir. Tazelik kapısı hedef mumda kalan süreye baktığı için geciken bir koşu
-  `5m`/`15m` sinyalini göndermek yerine düşürür. Bulutta pratikte yalnız `1h`
-  modelinin tetiklenme penceresi (24 dakika) bu tempoya uyar. Dakika hassasiyeti
-  gerekiyorsa `serve` komutunu sürekli açık bir makinede çalıştırın.
+- Tazelik kapısı hedef mumda kalan süreye bakar; geciken bir koşu `5m` sinyalini
+  göndermek yerine düşürür. `5m` için pencere 2 dakika, `15m` için 6, `1h` için
+  24 dakikadır. Sürekli açık sunucuda 60 saniyelik tarama hepsinin içine düşer;
+  yalnız GitHub Actions ile çalışırken yalnız `1h` penceresi tutar.
 - Çok sayıda model/parametre denemesi yapılmaz; yine de altı model birlikte incelendiği
   için tek bir iyi sonuca aşırı anlam yüklenmemelidir.
 - `%50` yakınındaki kısa vadeli piyasa yönü normaldir. Araştırma kapısını hiçbir model
