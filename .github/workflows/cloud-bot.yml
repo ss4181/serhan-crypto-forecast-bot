@@ -1,0 +1,62 @@
+name: BTC ETH Cloud Bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_research:
+        description: "365 günlük walk-forward araştırmayı zorla"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: btc-eth-cloud-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CRYPTO_TELEGRAM_BOT_TOKEN: ${{ secrets.CRYPTO_TELEGRAM_BOT_TOKEN }}
+      CRYPTO_TELEGRAM_CHAT_ID: ${{ secrets.CRYPTO_TELEGRAM_CHAT_ID }}
+      PROJECT_HUB_INGEST_URL: ${{ secrets.PROJECT_HUB_INGEST_URL }}
+      PROJECT_HUB_INGEST_TOKEN: ${{ secrets.PROJECT_HUB_INGEST_TOKEN }}
+      OAI_SITES_BYPASS_TOKEN: ${{ secrets.OAI_SITES_BYPASS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Select hourly state cache
+        id: state-key
+        shell: bash
+        run: echo "value=crypto-state-${RUNNER_OS}-$(date -u +%Y%m%d%H)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            data
+            artifacts
+            state
+          key: ${{ steps.state-key.outputs.value }}
+          restore-keys: |
+            crypto-state-${{ runner.os }}-
+
+      - name: Install bot
+        run: python -m pip install -e .
+
+      - name: Refresh, forecast and notify
+        shell: bash
+        run: |
+          extra=""
+          if [[ "${{ inputs.force_research }}" == "true" ]]; then extra="--force-research"; fi
+          python run.py cloud-run --days 365 $extra
