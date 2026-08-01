@@ -1,0 +1,9 @@
+# The deployment files run on Linux.  A CRLF shebang makes bash fail with a
+# confusing "bad interpreter" error, so pin these to LF regardless of the
+# checkout platform.
+*.sh text eol=lf
+*.service text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.py text eol=lf
