@@ -101,8 +101,8 @@ def build_fixture(directory: Path, *, passed_gate: bool = True) -> tuple[Setting
     dataset = build_supervised_dataset(
         bars,
         barrier_atr_multiple=settings.barrier_atr_multiple,
-        barrier_horizon_candles=settings.barrier_horizon_candles,
-        minimum_barrier_bps=settings.barrier_cost_multiple * settings.round_trip_cost_bps,
+        barrier_horizon_candles=12,
+        minimum_barrier_bps=settings.barrier_target_bps,
     )
     backtest = walk_forward_backtest(
         dataset,

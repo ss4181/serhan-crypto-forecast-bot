@@ -5,7 +5,14 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from .config import INTERVALS, SYMBOLS, Settings, cache_path, model_path
+from .config import (
+    INTERVALS,
+    SYMBOLS,
+    Settings,
+    barrier_horizon_candles,
+    cache_path,
+    model_path,
+)
 from .data import load_cache
 from .features import build_supervised_dataset
 from .model import BacktestMetrics, fit_final_bundle, save_bundle, walk_forward_backtest
@@ -19,12 +26,20 @@ def research_one(
     symbol: str,
     interval: str,
 ) -> BacktestMetrics:
+    minimum_barrier = settings.minimum_barrier_cost_multiple * settings.round_trip_cost_bps
+    if settings.barrier_target_bps < minimum_barrier:
+        raise ValueError(
+            f"Bariyer {settings.barrier_target_bps:.0f} bps, {settings.round_trip_cost_bps:.0f} "
+            f"bps maliyet icin fazla dar; en az {minimum_barrier:.0f} bps olmali"
+        )
     bars = load_cache(cache_path(settings.data_dir, symbol, interval))
     dataset = build_supervised_dataset(
         bars,
         barrier_atr_multiple=settings.barrier_atr_multiple,
-        barrier_horizon_candles=settings.barrier_horizon_candles,
-        minimum_barrier_bps=settings.barrier_cost_multiple * settings.round_trip_cost_bps,
+        barrier_horizon_candles=barrier_horizon_candles(
+            interval, settings.barrier_horizon_hours
+        ),
+        minimum_barrier_bps=settings.barrier_target_bps,
     )
     metrics = walk_forward_backtest(
         dataset,

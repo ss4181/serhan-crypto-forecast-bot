@@ -21,11 +21,15 @@ durumu günlük olarak görünür, ama beklentisi negatif bir tahmin işlem siny
 gibi sunulmaz. Aradaki zamanda gereksiz mesaj gelmez; merak ettiğinizde
 `/durum` yazarak anlık cevabı alırsınız.
 
-**Bugünkü durum:** üçlü bariyer hedefi ve sızıntısız embargo ile altı modelin
-hiçbiri işlem kapısını geçmiyor. Anlamlı örneğe sahip tek model `BTCUSDT 1h`
-(216 sinyal, 51 ayrı gün): yön isabeti `%45.4` ve maliyet sonrası beklentisi
-sinyal başına `-24.7` bps, `%95` aralığı tamamen negatif. Kanal bu nedenle şu an
-yalnız GÖZLEM raporu yayınlar; doğru davranış budur.
+**Bugünkü durum:** altı modelin hiçbiri işlem kapısını geçmiyor. En iyisi
+`BTCUSDT 5m` (3.487 sinyal, 46 ayrı gün): `%51.7` isabet, brüt `+1.2` bps —
+ilk kez pozitif — ama `10` bps maliyetten sonra `-8.8` bps. Gereken `%55`.
+
+Daha rahatsız edici olan, aynı satırdaki **taban** değeri: bariyer hedefinde
+yukarı tarafın önce görülme oranı `%52.4`, yani hiç düşünmeden "yukarı" diyen
+bir kural modelden daha isabetli. Mevcut dokuz OHLCV belirteci bu hedefte yön
+bilgisi taşımıyor. Kanal bu nedenle şu an yalnız GÖZLEM raporu yayınlar;
+doğru davranış budur.
 
 ## Hedef: üçlü bariyer
 
@@ -35,15 +39,26 @@ komisyonlara para kaptırırken isabetli görünebilir.
 
 Yeni hedef, o mumda açılan bir işlemin **önce hangi bariyere** değdiğidir:
 
-- **Kâr al / zarar kes**: girişten `±X` baz puan uzaklıkta simetrik iki seviye.
-- **Süre bariyeri**: en fazla `barrier_horizon_candles` mum (varsayılan `12`);
-  o zamana kadar bir tarafa değilmezse işlem piyasadan kapanır.
-- **`X` asla maliyetin altına inmez**: `barrier_cost_multiple` (varsayılan `2`)
-  ile gidiş-dönüş maliyetinin en az iki katı olarak taban alınır. Yani kazanan
-  bir işlem her zaman kendi masrafını fazlasıyla karşılar.
+- **Kâr al / zarar kes**: girişten `barrier_target_bps` kadar uzaklıkta simetrik
+  iki seviye. Varsayılan `100` bps, yani hedeflenen `%1`'lik işlem.
+- **Süre bariyeri**: en fazla `barrier_horizon_hours` (varsayılan `24` saat);
+  o zamana kadar bir tarafa değilmezse işlem piyasadan kapanır. Saat cinsinden
+  tanımlıdır, böylece her zaman dilimi aynı piyasa süresini kapsar.
 - **Aynı mumda iki seviye birden görülürse** hangisinin önce geldiği mum
   verisinden bilinemez; bu durum **her iki yön için de zarar** sayılır. Bir
   tacir kanıtlayamadığı iyi sonucu varsayamaz.
+
+Bariyer genişliğinin maliyete oranı, işin yapılabilir olup olmadığını tek başına
+belirler. Simetrik bariyerde başabaş isabet oranı:
+
+**gerekli isabet = %50 + maliyet / (2 × bariyer)**
+
+- `40` bps bariyer, `20` bps spot maliyet → **%75** gerekir. Pratikte imkânsız.
+- `100` bps bariyer, `10` bps vadeli maliyet → **%55** gerekir. Ulaşılabilir bir bar.
+
+Bu yüzden varsayılan maliyet Binance USD-M vadeli taker (`%0.05` × 2 = `10` bps)
+ve bariyer `%1`'dir. Spot işlem yapacaksanız `round_trip_cost_bps` değerini `20`
+yapın — o zaman bariyeri de genişletmeniz gerekir, yoksa bar yükselir.
 
 Bariyer etiketi birden fazla mum ileriye baktığı için train/kalibrasyon/test
 dilimleri arasındaki embargo **tam bir etiket ufku** kadardır. Tek mumluk

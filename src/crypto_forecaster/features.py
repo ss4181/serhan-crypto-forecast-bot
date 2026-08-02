@@ -168,8 +168,10 @@ def build_supervised_dataset(
     """
     if barrier_horizon_candles < 1:
         raise ValueError("Bariyer ufku en az 1 mum olmali")
-    if barrier_atr_multiple <= 0 or minimum_barrier_bps < 0:
+    if barrier_atr_multiple < 0 or minimum_barrier_bps < 0:
         raise ValueError("Gecersiz bariyer olcusu")
+    if barrier_atr_multiple == 0 and minimum_barrier_bps <= 0:
+        raise ValueError("Bariyer genisligi sifir olamaz")
     featured = compute_feature_frame(bars)
     current_close = featured["close"].astype(float)
     atr = featured["atr"].astype(float)
