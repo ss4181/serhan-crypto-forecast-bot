@@ -311,9 +311,12 @@ Always Free ARM makine (4 çekirdek / 24 GB) kalıcı olarak ücretsizdir ve bu 
 yükü için fazlasıyla yeterlidir.
 
 1. Oracle Cloud hesabı açın, **Always Free** etiketli bir **Ampere (ARM)**
-   compute instance oluşturun, imaj olarak **Ubuntu 22.04/24.04** seçin ve SSH
-   anahtarınızı ekleyin. Gelen bağlantıya ihtiyaç yok; bot yalnızca dışa doğru
-   HTTPS konuşur, ek port açmayın.
+   compute instance oluşturun ve SSH anahtarınızı ekleyin. Gelen bağlantıya
+   ihtiyaç yok; bot yalnızca dışa doğru HTTPS konuşur, ek port açmayın.
+
+   İmaj olarak Oracle Linux (varsayılan) veya Ubuntu seçebilirsiniz; kurulum
+   script'i ikisini de destekler. **SSH kullanıcı adı imaja göre değişir:**
+   Oracle Linux'ta `opc`, Ubuntu'da `ubuntu`.
 2. Makineye bağlanıp depoyu çekin. Depo private olduğu için sunucuda bir SSH
    anahtarı üretip GitHub'da **Deploy key** (salt okunur) olarak ekleyin:
 
