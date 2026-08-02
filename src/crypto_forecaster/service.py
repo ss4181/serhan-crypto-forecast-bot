@@ -16,6 +16,7 @@ from .config import (
     SYMBOLS,
     Settings,
     cache_path,
+    local_text,
     model_path,
 )
 from .commands import CommandOutcome, poll_and_answer
@@ -248,7 +249,8 @@ def format_observation_digest(
     """
     if not predictions:
         raise ValueError("Gozlem raporu icin tahmin yok")
-    stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
+    current = now or datetime.now(timezone.utc)
+    stamp = local_text(int(current.timestamp() * 1000), with_seconds=False)
     tradeable = [item for item in predictions if item.eligible]
     lines = [
         f"🔎 GOZLEM RAPORU | {len(predictions)} model | {stamp}",
@@ -649,9 +651,7 @@ def _display_feature_value(name: str, value: float) -> str:
 
 
 def _utc_text(milliseconds: int) -> str:
-    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc).strftime(
-        "%Y-%m-%d %H:%M:%S UTC"
-    )
+    return local_text(milliseconds)
 
 
 def _iso_utc(milliseconds: int) -> str:

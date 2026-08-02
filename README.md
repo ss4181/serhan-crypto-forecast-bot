@@ -69,8 +69,10 @@ verirdi.
 
 Her bildirim şunları gösterir:
 
-- seviye (İŞLEM ADAYI / GÖZLEM), sinyal ve hedef mum zamanı (UTC), hedef mumda
-  kalan süre, son kapanmış mum fiyatı;
+- seviye (İŞLEM ADAYI / GÖZLEM), sinyal ve hedef mum zamanı, hedef mumda kalan
+  süre, son kapanmış mum fiyatı. Saatler okuyanın yerel diliminde yazılır ve
+  her zaman damgası hangi saat dilimi olduğunu söyler (varsayılan
+  `Europe/Istanbul`, `CRYPTO_DISPLAY_TIMEZONE` ile değiştirilir);
 - hedef tanımı: bariyer uzaklığı, süre sınırı ve geçmişte sinyallerin yüzde
   kaçının bariyere ulaştığı;
 - yukarı/aşağı kalibre olasılığı;

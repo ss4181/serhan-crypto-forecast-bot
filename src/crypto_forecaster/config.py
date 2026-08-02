@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone, tzinfo
+import os
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT")
+# Messages are read by a person, so they carry that person's clock.  Reading
+# "14:19" on a phone showing 17:19 makes a current report look three hours old.
+DISPLAY_TIMEZONE_ENV = "CRYPTO_DISPLAY_TIMEZONE"
+DEFAULT_DISPLAY_TIMEZONE = "Europe/Istanbul"
 INTERVALS = ("5m", "15m", "1h")
 INTERVAL_MILLISECONDS = {
     "5m": 5 * 60 * 1000,
@@ -64,6 +71,24 @@ def validate_interval(interval: str) -> str:
     if interval not in INTERVALS:
         raise ValueError(f"Zaman dilimi yalnizca {', '.join(INTERVALS)} olabilir")
     return interval
+
+
+def display_zone() -> tzinfo:
+    """The clock messages are written in.  Falls back to UTC if tzdata is thin."""
+    name = os.environ.get(DISPLAY_TIMEZONE_ENV, "").strip() or DEFAULT_DISPLAY_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return timezone.utc
+
+
+def local_text(milliseconds: int, *, with_seconds: bool = True) -> str:
+    """Format an instant for a reader, labelled so it cannot be misread."""
+    moment = datetime.fromtimestamp(milliseconds / 1000, tz=display_zone())
+    pattern = "%Y-%m-%d %H:%M:%S" if with_seconds else "%Y-%m-%d %H:%M"
+    offset = moment.strftime("%z")
+    label = f"UTC{offset[:3]}:{offset[3:]}" if offset else "UTC"
+    return f"{moment.strftime(pattern)} ({label})"
 
 
 def barrier_horizon_candles(interval: str, hours: float) -> int:
