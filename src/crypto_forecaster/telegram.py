@@ -24,7 +24,15 @@ _SIGNAL_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class TelegramError(RuntimeError):
-    pass
+    """Something went wrong and the message may or may not have been sent."""
+
+
+class TelegramRejected(TelegramError):
+    """Telegram answered and refused: nothing was delivered.
+
+    Worth separating, because a refusal is safe to retry once its cause is
+    fixed, while a timeout is not -- the message may already be in the channel.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +82,7 @@ class TelegramNotifier:
         except (UnicodeError, json.JSONDecodeError):
             raise TelegramError("Telegram yaniti dogrulanamadi") from None
         if not isinstance(decoded, dict) or decoded.get("ok") is not True:
-            raise TelegramError("Telegram istegi kabul etmedi")
+            raise TelegramRejected("Telegram istegi kabul etmedi")
         return decoded.get("result")
 
     def get_updates(self, *, offset: int, limit: int = 20) -> list[dict[str, object]]:
@@ -149,13 +157,13 @@ class TelegramNotifier:
             except HTTPError as error:
                 retryable = error.code == 429 or 500 <= error.code < 600
                 if not retryable or attempt == SEND_ATTEMPTS - 1:
-                    raise TelegramError(
+                    raise TelegramRejected(
                         f"Telegram istegi reddedildi (HTTP {error.code})"
                     ) from None
                 time.sleep(_retry_after_seconds(error))
             except Exception:
                 raise TelegramError("Telegram istegi basarisiz") from None
-        raise TelegramError("Telegram istegi basarisiz")
+        raise TelegramRejected("Telegram istegi reddedildi")
 
     def deliver_once(self, *, signal_id: str, text: str, state_dir: Path) -> TelegramDelivery:
         if not _SIGNAL_PATTERN.fullmatch(signal_id):
@@ -190,6 +198,12 @@ class TelegramNotifier:
             )
         try:
             message_id = self.send_message(text)
+        except TelegramRejected as error:
+            # Telegram refused, so nothing reached the channel.  Drop the intent
+            # so this signal is retried once the cause -- usually a missing
+            # posting permission -- is fixed.
+            intent.unlink(missing_ok=True)
+            return TelegramDelivery(status="REDDEDILDI", message_id=None, detail=str(error))
         except TelegramError as error:
             return TelegramDelivery(status="UNCERTAIN", message_id=None, detail=str(error))
         try:
@@ -270,6 +284,7 @@ __all__ = [
     "is_primary",
     "TelegramDelivery",
     "TelegramError",
+    "TelegramRejected",
     "TelegramNotifier",
     "digest_signal_id",
 ]

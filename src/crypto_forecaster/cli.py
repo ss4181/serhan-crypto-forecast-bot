@@ -23,6 +23,7 @@ from .service import (
     format_prediction,
     make_prediction,
     models_need_research,
+    record_open_interest,
     serve_forever,
 )
 from .telegram import (
@@ -150,6 +151,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if settled:
                 hits = sum(1 for row in settled if row["correct"])
                 print(f"{len(settled)} sinyal sonuclandi ({hits} yon dogru).")
+            added = record_open_interest(settings)
+            if added:
+                print(f"Acik pozisyon kaydi: {added} yeni satir.")
             if args.force_research or _research_is_due(settings):
                 print("Gunluk walk-forward arastirma yenileniyor...")
                 research_all(settings, progress=print)

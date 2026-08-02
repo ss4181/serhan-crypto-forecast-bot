@@ -23,6 +23,7 @@ from .data import BinanceMarketDataClient, load_cache, update_cache
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
+from .openinterest import OpenInterestError, update_open_interest
 from .outcomes import (
     format_scorecard,
     load_ledger,
@@ -533,6 +534,7 @@ def serve_forever(
                 round_trip_cost_bps=settings.round_trip_cost_bps,
                 now=now,
             )
+            record_open_interest(settings, now=now)
             today = now.date().isoformat()
             if models_need_research(settings) or last_research_day != today:
                 progress("Gunluk walk-forward arastirma ve model yenileme basladi")
@@ -569,6 +571,17 @@ def serve_forever(
             time.sleep(backoff)
             continue
         time.sleep(poll_seconds)
+
+
+def record_open_interest(settings: Settings, *, now: datetime | None = None) -> int:
+    """Keep the forward record growing.  A failure here must never stop a cycle."""
+    added = 0
+    for symbol in SYMBOLS:
+        try:
+            added += update_open_interest(settings.data_dir, symbol, now=now)
+        except (OpenInterestError, OSError):
+            continue
+    return added
 
 
 def models_need_research(settings: Settings) -> bool:
@@ -656,5 +669,6 @@ __all__ = [
     "format_prediction",
     "make_prediction",
     "models_need_research",
+    "record_open_interest",
     "serve_forever",
 ]

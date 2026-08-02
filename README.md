@@ -127,7 +127,16 @@ iyileşen `BTCUSDT 1h`'de bile alt sınır `-34.8` bps'de kaldı.
 **Açık pozisyon (open interest) test edilemedi.** Binance'in
 `futures/data/openInterestHist` uç noktası yalnız son ~30 günü tutuyor; 60 gün
 öncesi `HTTP 400` veriyor. Bir yıllık walk-forward için yeterli geçmiş yok.
-İleride ölçebilmek adına şimdiden günlük kayıt toplamak gerekir.
+
+Bu yüzden bot **şimdiden ileriye doğru kayıt tutuyor**: her turda açık pozisyon
+verisini çekip `data/{SEMBOL}_open_interest.csv` dosyasına ekliyor (5 dakikalık
+ızgara, mükerrer satır yazmadan). Bu kayıt hiçbir modeli beslemiyor ve hiçbir
+iddia taşımıyor — amacı, birkaç ay sonra test edilebilir bir geçmişin var
+olması. Ne kadar biriktiğini görmek için:
+
+```powershell
+python -c "from pathlib import Path; from crypto_forecaster.openinterest import coverage; print(coverage(Path('data'), 'BTCUSDT'))"
+```
 
 ## Araştırma protokolü
 

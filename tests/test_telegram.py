@@ -83,6 +83,44 @@ class TelegramTests(unittest.TestCase):
         self.assertEqual(attempts, 1)
 
     @patch.dict(os.environ, CREDENTIALS, clear=False)
+    def test_a_refusal_is_retried_once_its_cause_is_fixed(self) -> None:
+        # A 403 means the bot is not allowed to post: nothing was delivered, so
+        # the signal must not be written off forever.  Treating it as uncertain
+        # left the channel silent even after the permission was granted.
+        attempts = 0
+
+        def opener(_request, timeout):  # type: ignore[no-untyped-def]
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                headers = Message()
+                raise HTTPError("https://api.telegram.org", 403, "Forbidden", headers, None)
+            return FakeResponse()
+
+        notifier = TelegramNotifier(opener=opener)
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            first = notifier.deliver_once(signal_id="c" * 64, text="test", state_dir=state)
+            self.assertEqual(first.status, "REDDEDILDI")
+            self.assertIn("403", first.detail)
+            self.assertEqual(list(state.glob("*.intent.json")), [])
+            second = notifier.deliver_once(signal_id="c" * 64, text="test", state_dir=state)
+        self.assertEqual(second.status, "SENT")
+
+    @patch.dict(os.environ, CREDENTIALS, clear=False)
+    def test_an_uncertain_failure_still_blocks_forever(self) -> None:
+        def opener(_request, timeout):  # type: ignore[no-untyped-def]
+            raise URLError("timed out")
+
+        notifier = TelegramNotifier(opener=opener)
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            notifier.deliver_once(signal_id="d" * 64, text="test", state_dir=state)
+            # The message may have arrived, so the intent stays and no second
+            # attempt is made.
+            self.assertEqual(len(list(state.glob("*.intent.json"))), 1)
+
+    @patch.dict(os.environ, CREDENTIALS, clear=False)
     def test_failed_delivery_records_the_reason(self) -> None:
         def opener(_request, timeout):  # type: ignore[no-untyped-def]
             raise URLError("timed out")

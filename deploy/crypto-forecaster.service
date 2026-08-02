@@ -3,6 +3,9 @@ Description=BTC/ETH olasilik arastirma botu (serve)
 Documentation=https://github.com/ss4181/serhan-crypto-forecast-bot
 After=network-online.target
 Wants=network-online.target
+# Never give up after repeated crashes; a broken exchange API must not stop the
+# bot permanently.  This key belongs to [Unit], not [Service].
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -19,9 +22,6 @@ ExecStart=/opt/crypto-forecaster/.venv/bin/python -u run.py serve --days 365 --p
 
 Restart=always
 RestartSec=15
-# Do not give up after repeated crashes; a broken exchange API must not stop
-# the bot permanently.
-StartLimitIntervalSec=0
 
 # The loop already retries with backoff, so a hang is the real failure mode.
 TimeoutStopSec=30
