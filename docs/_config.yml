@@ -1,0 +1,11 @@
+# Minimal Pages setup: readability over design, per the brief.
+title: Trade Lab
+description: BTC/ETH olasılık araştırma botu — yöntem, sonuçlar ve gerekçeler
+theme: jekyll-theme-minimal
+lang: tr
+
+# The site is documentation, not the bot.  Nothing under these paths belongs in
+# a published page even by accident.
+exclude:
+  - "*.csv"
+  - "*.jsonl"

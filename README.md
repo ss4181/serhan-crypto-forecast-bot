@@ -1,5 +1,8 @@
 # BTC/ETH olasılık araştırma botu
 
+> Projenin yöntemini, sonuçlarını ve elenen hipotezleri bir arada anlatan
+> portföy sayfası: [`docs/index.md`](docs/index.md)
+
 Bu proje yalnızca `BTCUSDT` ve `ETHUSDT` için Binance Spot'un kapanmış `5m`, `15m`
 ve `1h` mumlarını kullanır. Bir sonraki mum kapanışının yukarı/aşağı olasılığını
 hesaplar ve sonucu Telegram kanalına yollar. Emir vermez, borsa hesabına bağlanmaz
