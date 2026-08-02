@@ -306,6 +306,28 @@ denemek için:
 python run.py commands
 ```
 
+### Kanal mesajı gitmiyorsa
+
+Günlükte `REDDEDILDI (... HTTP 403)` görüyorsanız bot kanala yazma yetkisine
+sahip değildir. Telegram'da kanal → **Administrators** → **Add Admin** ile botu
+ekleyin ve **Post Messages** yetkisini açık bırakın. Kanal kimliğini
+`@kullaniciadi` olarak verdiyseniz kanalın herkese açık olması gerekir; özel
+kanalda `-100...` ile başlayan sayısal kimliği kullanın.
+
+Bot komutlara cevap verip kanala yazamıyorsa sorun token değil, yetkidir:
+özel mesaj her zaman çalışır, kanala yazmak ayrı izin ister.
+
+`0.1.0` öncesi bir sürümden güncellediyseniz diskte takılı kalmış bir teslimat
+niyeti olabilir — o sürüm reddedilen gönderimi de "sonucu bilinmiyor" sayıp bir
+daha denemiyordu. Bir kez temizleyin:
+
+```bash
+sudo rm -f /opt/crypto-forecaster/state/telegram/*.intent.json
+```
+
+Makbuzu olan sinyaller makbuzdan tanındığı için bu işlem mükerrer mesaja yol
+açmaz.
+
 ### Canlı karne
 
 Gönderilen her sinyal, hedef mumu kapandığında gerçek sonucuyla eşleştirilip
