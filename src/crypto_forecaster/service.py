@@ -564,6 +564,8 @@ def _record(settings: Settings, prediction: Prediction) -> None:
         source_close_time_ms=prediction.source_close_time_ms,
         target_close_time_ms=prediction.target_close_time_ms,
         delivered_at_ms=prediction.evaluated_at_ms,
+        barrier_bps=settings.barrier_target_bps,
+        horizon_ms=int(settings.barrier_horizon_hours * 60 * 60 * 1000),
     )
 
 

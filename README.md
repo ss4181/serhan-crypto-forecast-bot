@@ -332,9 +332,13 @@ açmaz.
 
 ### Canlı karne
 
-Gönderilen her sinyal, hedef mumu kapandığında gerçek sonucuyla eşleştirilip
-`state/outcomes/ledger.jsonl` dosyasına yazılır. Backtest modeli ölçer, karne
-botun kendisini ölçer:
+Gönderilen her sinyal, **bariyeri çözülene kadar** bekletilir — kâr al, zarar
+kes ya da süre dolması — ve backtest'in puanladığı şekilde puanlanıp
+`state/outcomes/ledger.jsonl` dosyasına yazılır. Sonraki mumun kapanışına
+bakmak, modele sorulandan başka bir soruyu ölçerdi; yanlış şeyi ölçen bir ileri
+test, hiç test olmamasından kötüdür çünkü kanıt gibi görünür.
+
+Backtest modeli ölçer, karne botun kendisini ölçer:
 
 ```powershell
 python run.py scorecard --days 30
