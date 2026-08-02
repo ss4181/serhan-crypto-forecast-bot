@@ -12,7 +12,7 @@ import numpy as np
 from .features import FEATURE_NAMES, SupervisedDataset
 
 
-SCHEMA_VERSION = "btc-eth-probability-model-v3"
+SCHEMA_VERSION = "btc-eth-probability-model-v4"
 PROBABILITY_EDGES = (0.0, 0.35, 0.45, 0.55, 0.65, 1.0000001)
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 20260801

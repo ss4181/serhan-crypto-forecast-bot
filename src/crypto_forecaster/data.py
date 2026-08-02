@@ -25,6 +25,12 @@ CSV_COLUMNS = (
     "close",
     "volume",
     "close_time_ms",
+    # Binance sends these in every kline and they carry information OHLCV
+    # cannot: which side was the aggressor, and whether the flow came from
+    # many small trades or a few large ones.
+    "quote_volume",
+    "trade_count",
+    "taker_buy_base",
 )
 
 
@@ -137,7 +143,7 @@ class BinanceMarketDataClient:
         if not isinstance(decoded, list):
             raise MarketDataError("Binance kline yaniti liste degil")
         for row in decoded:
-            if not isinstance(row, list) or len(row) < 7:
+            if not isinstance(row, list) or len(row) < 11:
                 raise MarketDataError("Binance kline satiri gecersiz")
         return decoded
 
@@ -160,7 +166,15 @@ def update_cache(
     end_ms = int(now.timestamp() * 1000)
     requested_start = int((now - timedelta(days=days)).timestamp() * 1000)
     path = cache_path(data_dir, symbol, interval)
-    existing = load_cache(path) if path.exists() else _empty_frame()
+    existing = _empty_frame()
+    if path.exists():
+        try:
+            existing = load_cache(path)
+        except MarketDataError:
+            # An older cache predates the taker-flow columns, or is corrupt.
+            # Re-downloading costs a few requests; guessing does not.
+            if warn is not None:
+                warn(f"{symbol} {interval}: onbellek okunamadi, bastan indiriliyor")
     if existing.empty:
         start_ms = requested_start
     else:
@@ -220,6 +234,9 @@ def _rows_to_frame(rows: list[list[object]], *, closed_before_ms: int) -> pd.Dat
                 "close": _positive_float(row[4], "close"),
                 "volume": _nonnegative_float(row[5], "volume"),
                 "close_time_ms": close_time,
+                "quote_volume": _nonnegative_float(row[7], "quote volume"),
+                "trade_count": _integer(row[8], "trade count"),
+                "taker_buy_base": _nonnegative_float(row[9], "taker buy volume"),
             }
         )
     return _validate_frame(pd.DataFrame(normalized, columns=CSV_COLUMNS))
@@ -230,9 +247,9 @@ def _validate_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise MarketDataError(f"Eksik veri sutunlari: {', '.join(sorted(missing))}")
     result = frame.loc[:, CSV_COLUMNS].copy()
-    for column in ("open_time_ms", "close_time_ms"):
+    for column in ("open_time_ms", "close_time_ms", "trade_count"):
         result[column] = pd.to_numeric(result[column], errors="raise").astype("int64")
-    for column in ("open", "high", "low", "close", "volume"):
+    for column in ("open", "high", "low", "close", "volume", "quote_volume", "taker_buy_base"):
         result[column] = pd.to_numeric(result[column], errors="raise").astype("float64")
     result = result.sort_values("open_time_ms").drop_duplicates("open_time_ms", keep="last")
     if result.empty:
@@ -240,6 +257,11 @@ def _validate_frame(frame: pd.DataFrame) -> pd.DataFrame:
     price_columns = ["open", "high", "low", "close"]
     if (result[price_columns] <= 0).any().any() or (result["volume"] < 0).any():
         raise MarketDataError("Negatif veya sifir piyasa verisi")
+    if (result["trade_count"] < 0).any() or (result["quote_volume"] < 0).any():
+        raise MarketDataError("Negatif islem sayisi veya hacmi")
+    # A tolerance because Binance rounds the two volumes independently.
+    if (result["taker_buy_base"] > result["volume"] * 1.0001 + 1e-8).any():
+        raise MarketDataError("Taker alim hacmi toplam hacmi asiyor")
     if (result["high"] < result[price_columns].max(axis=1)).any():
         raise MarketDataError("Kline high alani tutarsiz")
     if (result["low"] > result[price_columns].min(axis=1)).any():

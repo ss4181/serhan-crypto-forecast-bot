@@ -34,6 +34,9 @@ def write_candles(data_dir: Path, closes: dict[int, float]) -> None:
                 "close": close,
                 "volume": 10.0,
                 "close_time_ms": close_time,
+                "quote_volume": 10.0 * close,
+                "trade_count": 55,
+                "taker_buy_base": 5.2,
             }
         )
     pd.DataFrame(rows).to_csv(cache_path(data_dir, "BTCUSDT", "5m"), index=False)

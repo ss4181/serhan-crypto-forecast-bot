@@ -12,6 +12,7 @@ from crypto_forecaster.features import (
     UPPER_FIRST,
     build_supervised_dataset,
 )
+from market_fixtures import ohlcv, with_flow
 
 
 STEP_MS = 300_000
@@ -31,17 +32,8 @@ def quiet_bars(count: int = 400, spike_at: int | None = None, spike: float = 0.0
             high[spike_at] = close[spike_at] * (1.0 + spike)
         else:
             low[spike_at] = close[spike_at] * (1.0 + spike)
-    open_time = 1_700_000_000_000 + np.arange(count) * STEP_MS
-    return pd.DataFrame(
-        {
-            "open_time_ms": open_time,
-            "open": close,
-            "high": high,
-            "low": low,
-            "close": close,
-            "volume": volume,
-            "close_time_ms": open_time + STEP_MS - 1,
-        }
+    return with_flow(
+        ohlcv(close=close, high=high, low=low, volume=volume, open_price=close)
     )
 
 
@@ -49,17 +41,14 @@ def drifting_bars(count: int = 900, seed: int = 3) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     close = 60_000 * np.exp(np.cumsum(rng.normal(0, 0.0015, count)))
     spread = close * rng.uniform(0.0003, 0.0015, count)
-    open_time = 1_700_000_000_000 + np.arange(count) * STEP_MS
-    return pd.DataFrame(
-        {
-            "open_time_ms": open_time,
-            "open": np.r_[close[0], close[:-1]],
-            "high": close + spread,
-            "low": close - spread,
-            "close": close,
-            "volume": rng.lognormal(8, 0.3, count),
-            "close_time_ms": open_time + STEP_MS - 1,
-        }
+    return with_flow(
+        ohlcv(
+            close=close,
+            high=close + spread,
+            low=close - spread,
+            volume=rng.lognormal(8, 0.3, count),
+        ),
+        seed=seed,
     )
 
 

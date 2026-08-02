@@ -16,15 +16,19 @@ START_MS = 1_760_000_000_000
 
 
 def frame(open_times: list[int]) -> pd.DataFrame:
+    count = len(open_times)
     return pd.DataFrame(
         {
             "open_time_ms": open_times,
-            "open": [100.0] * len(open_times),
-            "high": [101.0] * len(open_times),
-            "low": [99.0] * len(open_times),
-            "close": [100.5] * len(open_times),
-            "volume": [5.0] * len(open_times),
+            "open": [100.0] * count,
+            "high": [101.0] * count,
+            "low": [99.0] * count,
+            "close": [100.5] * count,
+            "volume": [5.0] * count,
             "close_time_ms": [item + STEP_MS - 1 for item in open_times],
+            "quote_volume": [502.5] * count,
+            "trade_count": [40] * count,
+            "taker_buy_base": [2.5] * count,
         }
     )
 

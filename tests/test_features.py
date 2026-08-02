@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from crypto_forecaster.features import FEATURE_NAMES, build_supervised_dataset, compute_feature_frame
+from market_fixtures import ohlcv, with_flow
 
 
 def sample_bars(count: int = 500, seed: int = 7) -> pd.DataFrame:
@@ -14,20 +15,15 @@ def sample_bars(count: int = 500, seed: int = 7) -> pd.DataFrame:
     close = 50_000 * np.exp(np.cumsum(returns))
     open_price = np.r_[close[0], close[:-1]]
     spread = close * rng.uniform(0.0005, 0.003, count)
-    high = np.maximum(open_price, close) + spread
-    low = np.minimum(open_price, close) - spread
-    start = 1_700_000_000_000
-    step = 300_000
-    return pd.DataFrame(
-        {
-            "open_time_ms": start + np.arange(count) * step,
-            "open": open_price,
-            "high": high,
-            "low": low,
-            "close": close,
-            "volume": rng.lognormal(8, 0.5, count),
-            "close_time_ms": start + (np.arange(count) + 1) * step - 1,
-        }
+    return with_flow(
+        ohlcv(
+            close=close,
+            high=np.maximum(open_price, close) + spread,
+            low=np.minimum(open_price, close) - spread,
+            volume=rng.lognormal(8, 0.5, count),
+            open_price=open_price,
+        ),
+        seed=seed,
     )
 
 

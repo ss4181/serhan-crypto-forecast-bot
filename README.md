@@ -96,8 +96,19 @@ Model yalnızca mumun o anda bilinen OHLCV değerlerinden şu dokuz girdiyi üre
 6. 20 mumluk log-hacim z-skoru;
 7. kapanışın mum aralığındaki alıcı/satıcı baskısı.
 
-Haber, sosyal medya, zincir verisi, fonlama, emir defteri veya gelecekte oluşan bir değer
+Haber, sosyal medya, zincir verisi, fonlama veya gelecekte oluşan bir değer
 kullanılmaz. Her sembol/zaman dilimi ayrı düzenlileştirilmiş lojistik modeldir.
+
+### Denenip elenenler
+
+Onbellek Binance'in gönderdiği `quote_volume`, `trade_count` ve
+`taker_buy_base` alanlarını da saklar, ama model bunları **kullanmaz**. Emir
+akışından türetilen dört ayrı form denendi — taker alıcı/satıcı dengesinin ham
+değeri, 12 mumluk ortalaması, 20 mumluk z-skoru ve 3 mumluk değişimi, ayrıca
+ortalama işlem büyüklüğü. Aynı walk-forward dilimlerinde 18 model
+karşılaştırmasının 16'sında net beklentiyi **kötüleştirdiler**: agresör ayrımı
+büyük ölçüde `candle_pressure`'ın tekrarı olduğu için bilgi katmadan varyans
+ekliyor. Sütunlar farklı bir model sınıfı tekrar denesin diye tutuluyor.
 
 ## Araştırma protokolü
 

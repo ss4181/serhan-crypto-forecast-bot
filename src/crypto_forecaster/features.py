@@ -17,6 +17,12 @@ FEATURE_NAMES = (
     "volume_z_20",
     "candle_pressure",
 )
+# Tried and rejected: taker buy/sell imbalance (raw level, 12-candle average,
+# 20-candle z-score, and 3-candle change) plus average trade size.  On identical
+# walk-forward folds every form made the net edge worse in 16 of 18 model
+# comparisons -- the aggressor split is largely a restatement of
+# candle_pressure, so it added variance without information.  The underlying
+# columns are still cached, so a different model class can revisit them.
 
 FEATURE_LABELS_TR = {
     "momentum_1_atr": "1 mum momentumu",

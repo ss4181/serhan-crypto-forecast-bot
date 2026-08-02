@@ -14,6 +14,7 @@ import pandas as pd
 from crypto_forecaster.config import Settings, cache_path, model_path
 from crypto_forecaster.data import MarketDataError
 from crypto_forecaster.features import build_supervised_dataset
+from market_fixtures import ohlcv, with_flow
 from crypto_forecaster.model import BacktestMetrics, fit_final_bundle, save_bundle, walk_forward_backtest
 from crypto_forecaster.service import (
     IndicatorContribution,
@@ -72,17 +73,16 @@ def synthetic_bars(count: int = 1600, seed: int = 11) -> pd.DataFrame:
     close = 60_000 * np.exp(np.cumsum(returns))
     open_price = np.r_[close[0], close[:-1]]
     spread = close * rng.uniform(0.0004, 0.002, count)
-    open_time = 1_700_000_000_000 + np.arange(count) * STEP_MS
-    return pd.DataFrame(
-        {
-            "open_time_ms": open_time,
-            "open": open_price,
-            "high": np.maximum(open_price, close) + spread,
-            "low": np.minimum(open_price, close) - spread,
-            "close": close,
-            "volume": rng.lognormal(8, 0.4, count),
-            "close_time_ms": open_time + STEP_MS - 1,
-        }
+    return with_flow(
+        ohlcv(
+            close=close,
+            high=np.maximum(open_price, close) + spread,
+            low=np.minimum(open_price, close) - spread,
+            volume=rng.lognormal(8, 0.4, count),
+            open_price=open_price,
+            step_ms=STEP_MS,
+        ),
+        seed=seed,
     )
 
 
