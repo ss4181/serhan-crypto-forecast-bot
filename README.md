@@ -1,7 +1,8 @@
 # BTC/ETH olasılık araştırma botu
 
 > Projenin yöntemini, sonuçlarını ve elenen hipotezleri bir arada anlatan
-> portföy sayfası: [`docs/index.md`](docs/index.md)
+> portföy sayfası: [`docs/index.md`](docs/index.md). Tarayıcıda açılabilen
+> tek dosyalık sürüm: `docs/index.html` — `python docs/build.py` ile üretilir.
 
 Bu proje yalnızca `BTCUSDT` ve `ETHUSDT` için Binance Spot'un kapanmış `5m`, `15m`
 ve `1h` mumlarını kullanır. Bir sonraki mum kapanışının yukarı/aşağı olasılığını

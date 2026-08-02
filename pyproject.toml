@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "markdown>=3.5"]
 
 [project.scripts]
 crypto-forecast = "crypto_forecaster.cli:main"
