@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import math
@@ -72,6 +72,9 @@ class Prediction:
     backtest: BacktestMetrics
     eligible: bool
     ineligible_reasons: tuple[str, ...]
+    # Reasons that cannot change while this candle is still the latest closed
+    # one.  Kept apart so a reused answer only has its clock recomputed.
+    stable_ineligible_reasons: tuple[str, ...] = ()
 
     @property
     def signal_id(self) -> str:
@@ -86,13 +89,41 @@ class Prediction:
         return "ISLEM" if self.eligible else "GOZLEM"
 
 
+class PredictionCache:
+    """Reuse a model's answer while its source candle is still the latest.
+
+    Nothing the model reads changes until the next candle closes, and the close
+    time is known exactly, so this is an identity -- not an approximation.  It
+    matters because recomputing indicators over a year of 5m candles six times
+    a minute saturates a small machine.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, str], Prediction] = {}
+
+    def get(self, symbol: str, interval: str, current_ms: int) -> Prediction | None:
+        entry = self._entries.get((symbol, interval))
+        if entry is None or current_ms >= entry.target_close_time_ms:
+            return None
+        return entry
+
+    def put(self, prediction: Prediction) -> None:
+        self._entries[(prediction.symbol, prediction.interval)] = prediction
+
+
 def make_prediction(
     settings: Settings,
     symbol: str,
     interval: str,
     *,
     now: datetime | None = None,
+    cache: PredictionCache | None = None,
 ) -> Prediction:
+    current_ms = int((now or datetime.now(timezone.utc)).timestamp() * 1000)
+    if cache is not None:
+        reusable = cache.get(symbol, interval, current_ms)
+        if reusable is not None:
+            return _retimed(settings, reusable, current_ms)
     bars = load_cache(cache_path(settings.data_dir, symbol, interval))
     bundle = load_bundle(model_path(settings.model_dir, symbol, interval))
     if bundle.symbol != symbol or bundle.interval != interval:
@@ -115,32 +146,22 @@ def make_prediction(
     close_median = price * math.exp(float(scenario["close_return_atr_p50"]) * atr / price)
     close_high = price * math.exp(float(scenario["close_return_atr_p90"]) * atr / price)
     indicators = _indicator_contributions(bundle, vector, direction)
-    current_ms = int((now or datetime.now(timezone.utc)).timestamp() * 1000)
     latest_close_ms = int(row["close_time_ms"])
     interval_ms = INTERVAL_MILLISECONDS[interval]
     target_close_ms = latest_close_ms + interval_ms
-    remaining_ms = target_close_ms - current_ms
-    reasons: list[str] = []
+    stable_reasons: list[str] = []
     if not bundle.backtest.passed_research_gate:
-        reasons.append("model walk-forward arastirma kapisini gecemedi")
+        stable_reasons.append("model walk-forward arastirma kapisini gecemedi")
     if confidence < bundle.backtest.signal_threshold:
-        reasons.append(
+        stable_reasons.append(
             f"yon olasiligi %{bundle.backtest.signal_threshold * 100:.0f} esiginin altinda"
         )
-    # A forecast about a candle that is nearly over cannot be acted on, and one
-    # about a candle that already closed is not a forecast at all.
-    if remaining_ms < settings.minimum_remaining_fraction * interval_ms:
-        if remaining_ms <= 0:
-            reasons.append("hedef mum zaten kapandi")
-        else:
-            reasons.append(
-                f"hedef mumun yalnizca {remaining_ms / 60000:.1f} dakikasi kaldi; "
-                f"en az %{settings.minimum_remaining_fraction * 100:.0f} kalmali"
-            )
     maximum_model_age_ms = settings.maximum_model_age_days * 24 * 60 * 60 * 1000
     if latest_close_ms - bundle.training_last_close_ms > maximum_model_age_ms:
-        reasons.append("model yeniden arastirilacak kadar eski")
-    return Prediction(
+        stable_reasons.append("model yeniden arastirilacak kadar eski")
+    stable = tuple(stable_reasons)
+    reasons = stable + _timing_reasons(settings, target_close_ms, interval_ms, current_ms)
+    prediction = Prediction(
         symbol=symbol,
         interval=interval,
         source_open_time_ms=int(row["open_time_ms"]),
@@ -166,7 +187,43 @@ def make_prediction(
         indicators=indicators,
         backtest=bundle.backtest,
         eligible=not reasons,
-        ineligible_reasons=tuple(reasons),
+        ineligible_reasons=reasons,
+        stable_ineligible_reasons=stable,
+    )
+    if cache is not None:
+        cache.put(prediction)
+    return prediction
+
+
+def _timing_reasons(
+    settings: Settings, target_close_ms: int, interval_ms: int, current_ms: int
+) -> tuple[str, ...]:
+    """A forecast about a candle that is nearly over cannot be acted on, and one
+    about a candle that already closed is not a forecast at all."""
+    remaining_ms = target_close_ms - current_ms
+    if remaining_ms >= settings.minimum_remaining_fraction * interval_ms:
+        return ()
+    if remaining_ms <= 0:
+        return ("hedef mum zaten kapandi",)
+    return (
+        f"hedef mumun yalnizca {remaining_ms / 60000:.1f} dakikasi kaldi; "
+        f"en az %{settings.minimum_remaining_fraction * 100:.0f} kalmali",
+    )
+
+
+def _retimed(settings: Settings, cached: Prediction, current_ms: int) -> Prediction:
+    """Same model output, current clock: only the timing gate can have moved."""
+    reasons = cached.stable_ineligible_reasons + _timing_reasons(
+        settings,
+        cached.target_close_time_ms,
+        INTERVAL_MILLISECONDS[cached.interval],
+        current_ms,
+    )
+    return replace(
+        cached,
+        evaluated_at_ms=current_ms,
+        eligible=not reasons,
+        ineligible_reasons=reasons,
     )
 
 
@@ -294,9 +351,14 @@ def _first_reason(reasons: tuple[str, ...]) -> str:
     return reason if len(reason) <= 150 else reason[:147] + "..."
 
 
-def evaluate_all(settings: Settings) -> list[Prediction]:
+def evaluate_all(
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+    cache: PredictionCache | None = None,
+) -> list[Prediction]:
     return [
-        make_prediction(settings, symbol, interval)
+        make_prediction(settings, symbol, interval, now=now, cache=cache)
         for symbol in SYMBOLS
         for interval in INTERVALS
     ]
@@ -517,11 +579,18 @@ def serve_forever(
     client = BinanceMarketDataClient()
     last_research_day: str | None = None
     consecutive_failures = 0
+    cache = PredictionCache()
+    # Nothing to download for a series whose next candle has not closed yet.
+    next_close_ms: dict[tuple[str, str], int] = {}
     while True:
         try:
             now = datetime.now(timezone.utc)
+            now_ms = int(now.timestamp() * 1000)
             for symbol in SYMBOLS:
                 for interval in INTERVALS:
+                    due = next_close_ms.get((symbol, interval))
+                    if due is not None and now_ms < due:
+                        continue
                     update_cache(
                         settings.data_dir,
                         symbol,
@@ -542,7 +611,12 @@ def serve_forever(
                 progress("Gunluk walk-forward arastirma ve model yenileme basladi")
                 research_all(settings, progress=progress)
                 last_research_day = today
-            predictions = evaluate_all(settings)
+                cache = PredictionCache()  # fresh models invalidate every answer
+            predictions = evaluate_all(settings, now=now, cache=cache)
+            for prediction in predictions:
+                next_close_ms[(prediction.symbol, prediction.interval)] = (
+                    prediction.target_close_time_ms
+                )
             if is_primary():
                 deliveries = deliver_eligible(settings, predictions)
                 for prediction, delivery in deliveries:
@@ -662,6 +736,7 @@ def _iso_utc(milliseconds: int) -> str:
 
 __all__ = [
     "Prediction",
+    "PredictionCache",
     "answer_commands",
     "dashboard_snapshot",
     "deliver_eligible",

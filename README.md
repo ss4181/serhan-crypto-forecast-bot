@@ -433,6 +433,13 @@ yükü için fazlasıyla yeterlidir.
    workflow zaten `standby` varsayar. Sunucu devre dışı kalırsa bu değişkeni
    `primary` yaparak Actions'ı geçici gönderici hâline getirebilirsiniz.
 
+Tarama her 60 saniyede bir döner ama ağır işi tekrarlamaz: bir modelin girdisi
+ancak yeni bir mum kapandığında değişir, o yüzden kapanış zamanı geçene kadar
+hem indirme hem belirteç hesabı atlanır. Kapanış anı tam olarak bilindiği için
+bu bir yaklaşıklık değil; `1h` modeli saatte bir, `5m` modeli beş dakikada bir
+hesaplanır. Küçük makinede fark büyük — altı model için tur süresi `2.8` saniye
+yerine milisaniyeler.
+
 Servis `Restart=always` ile çalışır, systemd sertleştirmesi altındadır
 (salt okunur kök dosya sistemi, capability yok, yalnızca kendi veri dizinlerine
 yazar) ve gizli değerler yalnızca `0600` izinli `/etc/crypto-forecaster.env`

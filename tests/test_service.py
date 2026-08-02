@@ -25,6 +25,7 @@ from crypto_forecaster.service import (
     format_observation_digest,
     format_prediction,
     make_prediction,
+    PredictionCache,
 )
 
 
@@ -65,6 +66,10 @@ def sample_prediction(**overrides) -> Prediction:  # type: ignore[no-untyped-def
     )
     base.update(overrides)
     return Prediction(**base)  # type: ignore[arg-type]
+
+
+def moment(ms: int) -> datetime:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
 
 
 def synthetic_bars(count: int = 1600, seed: int = 11) -> pd.DataFrame:
@@ -213,6 +218,61 @@ class ServiceTests(unittest.TestCase):
             with self.assertRaises(MarketDataError):
                 evaluate_all(settings)
 
+
+class PredictionCacheTests(unittest.TestCase):
+    def test_answer_is_reused_while_its_candle_is_still_the_latest(self) -> None:
+        # Recomputing indicators over a year of candles every minute saturated
+        # the box, so the reuse must be real: delete the inputs and it should
+        # still answer.
+        with tempfile.TemporaryDirectory() as directory:
+            settings, last_close_ms = build_fixture(Path(directory))
+            cache = PredictionCache()
+            first = make_prediction(
+                settings, "BTCUSDT", "5m", now=moment(last_close_ms + 1_000), cache=cache
+            )
+            cache_path(settings.data_dir, "BTCUSDT", "5m").unlink()
+            second = make_prediction(
+                settings, "BTCUSDT", "5m", now=moment(last_close_ms + 60_000), cache=cache
+            )
+        self.assertEqual(first.probability_up, second.probability_up)
+        self.assertEqual(first.source_close_time_ms, second.source_close_time_ms)
+        self.assertEqual(second.evaluated_at_ms, last_close_ms + 60_000)
+
+    def test_a_reused_answer_still_ages_out_of_the_timing_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings, last_close_ms = build_fixture(Path(directory))
+            cache = PredictionCache()
+            fresh = make_prediction(
+                settings, "BTCUSDT", "5m", now=moment(last_close_ms + 1_000), cache=cache
+            )
+            late = make_prediction(
+                settings, "BTCUSDT", "5m", now=moment(last_close_ms + 4 * 60_000), cache=cache
+            )
+        self.assertFalse([r for r in fresh.ineligible_reasons if "kalmali" in r])
+        self.assertTrue([r for r in late.ineligible_reasons if "kalmali" in r])
+
+    def test_the_cache_expires_when_the_next_candle_closes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings, last_close_ms = build_fixture(Path(directory))
+            cache = PredictionCache()
+            make_prediction(
+                settings, "BTCUSDT", "5m", now=moment(last_close_ms + 1_000), cache=cache
+            )
+            self.assertIsNone(
+                cache.get("BTCUSDT", "5m", last_close_ms + STEP_MS + 1)
+            )
+
+    def test_reuse_changes_nothing_a_fresh_computation_would_not(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings, last_close_ms = build_fixture(Path(directory))
+            when = moment(last_close_ms + 30_000)
+            direct = make_prediction(settings, "BTCUSDT", "5m", now=when)
+            cache = PredictionCache()
+            make_prediction(
+                settings, "BTCUSDT", "5m", now=moment(last_close_ms + 1_000), cache=cache
+            )
+            reused = make_prediction(settings, "BTCUSDT", "5m", now=when, cache=cache)
+        self.assertEqual(direct, reused)
 
 if __name__ == "__main__":
     unittest.main()
