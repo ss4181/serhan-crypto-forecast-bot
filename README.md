@@ -318,9 +318,11 @@ yükü için fazlasıyla yeterlidir.
    script'i ikisini de destekler. **SSH kullanıcı adı imaja göre değişir:**
    Oracle Linux'ta `opc`, Ubuntu'da `ubuntu`.
 2. Makineye bağlanıp depoyu çekin. Depo private olduğu için sunucuda bir SSH
-   anahtarı üretip GitHub'da **Deploy key** (salt okunur) olarak ekleyin:
+   anahtarı üretip GitHub'da **Deploy key** (salt okunur) olarak ekleyin.
+   Oracle Linux'un minimal imajında `git` kurulu gelmez, önce onu kurun:
 
    ```bash
+   sudo dnf install -y git        # Ubuntu'da: sudo apt-get install -y git
    ssh-keygen -t ed25519 -C "oracle-bot" -f ~/.ssh/id_ed25519 -N ""
    cat ~/.ssh/id_ed25519.pub   # GitHub > Settings > Deploy keys > Add
    git clone git@github.com:ss4181/serhan-crypto-forecast-bot.git
