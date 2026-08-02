@@ -362,7 +362,9 @@ def walk_forward_backtest(
         gross_edge = float(np.mean(gross))
         net_edge = float(np.mean(net))
         signal_days_index = close_times[signal_mask] // 86_400_000
-        net_low, net_high = day_block_bootstrap_interval(net, signal_days_index)
+        net_low, net_high = block_bootstrap_interval(
+            net, close_times[signal_mask] // bootstrap_block_ms(dataset)
+        )
         average_win = float(np.mean(wins)) if wins.size else 0.0
         average_loss = float(np.mean(losses)) if losses.size else 0.0
         signal_days = int(np.unique(signal_days_index).size)
@@ -400,7 +402,7 @@ def walk_forward_backtest(
         )
     elif net_low <= minimum_net_edge_bps:
         reasons.append(
-            f"maliyet sonrasi beklentinin gun-blok %95 alt siniri {net_low:+.2f} bps; "
+            f"maliyet sonrasi beklentinin blok-bootstrap %95 alt siniri {net_low:+.2f} bps; "
             "sifirdan anlamli sekilde buyuk degil"
         )
     return BacktestMetrics(
@@ -436,18 +438,33 @@ def walk_forward_backtest(
     )
 
 
-def day_block_bootstrap_interval(
+def bootstrap_block_ms(dataset: SupervisedDataset) -> int:
+    """Block length that outlives the dependence it has to survive.
+
+    A barrier label reads `label_horizon` candles ahead, so two signals closer
+    together than that are scored on overlapping price action.  With a 24 hour
+    horizon on 5m candles, calendar days still overlap -- blocks have to be at
+    least twice the label window, and never shorter than a day.
+    """
+    if len(dataset) < 2:
+        return 86_400_000
+    steps = np.diff(np.sort(dataset.close_time_ms))
+    step_ms = int(np.median(steps[steps > 0])) if np.any(steps > 0) else 60_000
+    return int(max(86_400_000, 2 * dataset.label_horizon * step_ms))
+
+
+def block_bootstrap_interval(
     values: np.ndarray,
     day_index: np.ndarray,
     *,
     resamples: int = BOOTSTRAP_RESAMPLES,
     seed: int = BOOTSTRAP_SEED,
 ) -> tuple[float, float]:
-    """95% interval for the mean, resampling whole UTC days.
+    """95% interval for the mean, resampling whole blocks.
 
     High-confidence signals arrive in bursts inside the same session, so an
-    interval that assumes independent draws is too narrow.  Resampling days
-    keeps the within-day correlation intact.
+    interval that assumes independent draws is too narrow.  Resampling blocks
+    keeps the within-block correlation intact.
     """
     values = np.asarray(values, dtype=np.float64).reshape(-1)
     day_index = np.asarray(day_index, dtype=np.int64).reshape(-1)
@@ -660,7 +677,8 @@ __all__ = [
     "BacktestMetrics",
     "ModelBundle",
     "Standardizer",
-    "day_block_bootstrap_interval",
+    "block_bootstrap_interval",
+    "bootstrap_block_ms",
     "fit_final_bundle",
     "fit_logistic",
     "fit_platt",

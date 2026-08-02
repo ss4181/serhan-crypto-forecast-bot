@@ -8,7 +8,7 @@ import numpy as np
 
 from crypto_forecaster.features import FEATURE_NAMES, SupervisedDataset
 from crypto_forecaster.model import (
-    day_block_bootstrap_interval,
+    block_bootstrap_interval,
     fit_final_bundle,
     load_bundle,
     save_bundle,
@@ -93,14 +93,14 @@ class ModelTests(unittest.TestCase):
         self.assertGreaterEqual(metrics.net_edge_ci95_high, metrics.net_edge_bps)
         self.assertGreater(metrics.signal_days, 1)
 
-    def test_day_block_bootstrap_is_wider_than_ignoring_clusters(self) -> None:
+    def test_block_bootstrap_is_wider_than_ignoring_clusters(self) -> None:
         rng = np.random.default_rng(7)
         # Ten days, each with its own offset: every observation inside a day
         # tells you almost the same thing, so the honest interval is wide.
         day_effect = rng.normal(0, 5.0, 10)
         days = np.repeat(np.arange(10), 50)
         values = day_effect[days] + rng.normal(0, 0.1, days.size)
-        low, high = day_block_bootstrap_interval(values, days)
+        low, high = block_bootstrap_interval(values, days)
         naive = 1.96 * float(np.std(values, ddof=1)) / np.sqrt(values.size)
         self.assertGreater(high - low, 2 * naive)
 

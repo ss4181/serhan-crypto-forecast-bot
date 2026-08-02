@@ -13,7 +13,7 @@ bildirimler iki seviyeye ayrılmıştır.
 
 | Seviye | Ne demek | Ne zaman gelir |
 |---|---|---|
-| **İŞLEM ADAYI** | Modelin maliyet sonrası ölçülen beklentisi pozitif ve bu beklentinin gün bloklu `%95` alt sınırı sıfırın üstünde | Yalnız araştırma kapısını geçen modellerden, hedef mumun en az `%60`'ı önündeyken |
+| **İŞLEM ADAYI** | Modelin maliyet sonrası ölçülen beklentisi pozitif ve bu beklentinin blok-bootstrap `%95` alt sınırı sıfırın üstünde | Yalnız araştırma kapısını geçen modellerden, hedef mumun en az `%60`'ı önündeyken |
 | **GÖZLEM** | Model bir tahmin üretti ama işlem beklentisi kanıtlanmadı | Altı modelin tamamı için **günde bir** tek özet mesaj |
 
 GÖZLEM seviyesi sayesinde **hiçbir model sessiz kalmaz**: kanalda altı modelin de
@@ -22,14 +22,14 @@ gibi sunulmaz. Aradaki zamanda gereksiz mesaj gelmez; merak ettiğinizde
 `/durum` yazarak anlık cevabı alırsınız.
 
 **Bugünkü durum:** altı modelin hiçbiri işlem kapısını geçmiyor. En iyisi
-`BTCUSDT 5m` (3.487 sinyal, 46 ayrı gün): `%51.7` isabet, brüt `+1.2` bps —
-ilk kez pozitif — ama `10` bps maliyetten sonra `-8.8` bps. Gereken `%55`.
+`BTCUSDT 5m` (3.333 sinyal, 46 ayrı gün): `%53.9` isabet, brüt `+5.1` bps,
+`10` bps maliyetten sonra `-4.9` bps. Gereken `%55`.
 
 Daha rahatsız edici olan, aynı satırdaki **taban** değeri: bariyer hedefinde
-yukarı tarafın önce görülme oranı `%52.4`, yani hiç düşünmeden "yukarı" diyen
-bir kural modelden daha isabetli. Mevcut dokuz OHLCV belirteci bu hedefte yön
-bilgisi taşımıyor. Kanal bu nedenle şu an yalnız GÖZLEM raporu yayınlar;
-doğru davranış budur.
+yukarı tarafın önce görülme oranı `%52.5`, yani hiç düşünmeden "yukarı" diyen
+bir kural modele yakın isabet veriyor. Mevcut dokuz OHLCV belirteci bu hedefte
+güçlü bir yön bilgisi taşımıyor. Kanal bu nedenle şu an yalnız GÖZLEM raporu
+yayınlar; doğru davranış budur.
 
 ## Hedef: üçlü bariyer
 
@@ -74,7 +74,7 @@ Her bildirim şunları gösterir:
 - hedef tanımı: bariyer uzaklığı, süre sınırı ve geçmişte sinyallerin yüzde
   kaçının bariyere ulaştığı;
 - yukarı/aşağı kalibre olasılığı;
-- **maliyet sonrası beklenti**: sinyal başına net baz puan, gün bloklu `%95`
+- **maliyet sonrası beklenti**: sinyal başına net baz puan, blok-bootstrap `%95`
   aralığı, ortalama kazanç ve ortalama kayıp;
 - mevcut ATR'nin `+0.5` ve `-0.5` katındaki fiyatlara dokunma olasılığı ve
   **ikisinin aynı mumda birlikte görülme olasılığı** — mum verisinden hangisinin
@@ -110,6 +110,14 @@ karşılaştırmasının 16'sında net beklentiyi **kötüleştirdiler**: agres�
 büyük ölçüde `candle_pressure`'ın tekrarı olduğu için bilgi katmadan varyans
 ekliyor. Sütunlar farklı bir model sınıfı tekrar denesin diye tutuluyor.
 
+**Gradient boosting (HistGradientBoosting)** de aynı dilimlerde denendi. Ham
+ortalamalar cazip görünüyordu — `ETHUSDT 5m` için `%70.6` isabet ve `+27.3` bps —
+ama sinyaller yalnız 10 ayrı haftaya düşüyordu ve blok bootstrap alt sınırı
+`-16.0` bps çıktı. Altı modelin hiçbirinde alt sınır sıfırı geçmedi; üstelik
+`BTCUSDT 15m`'de isabet `%34.9`'a düştü. Bu tutarsızlık sinyal değil varyans
+işaretidir, o yüzden `scikit-learn` bağımlılığı eklenmedi. Bu deney, blok
+uzunluğunun etiket ufkundan büyük olması gerektiğini de ortaya çıkardı.
+
 ## Araştırma protokolü
 
 Veri rastgele karıştırılmaz. Her fold şu sıradadır:
@@ -127,15 +135,21 @@ Bildirim kapısı şu koşulların tamamını ister:
 - Brier skoru fold'un yalnız tarihsel yukarı oranını kullanan tabandan iyi;
 - ECE en fazla `%10`;
 - **gidiş-dönüş maliyeti düşüldükten sonra sinyal başına beklenti pozitif**;
-- **bu beklentinin gün bloklu bootstrap ile hesaplanan `%95` alt sınırı sıfırın
+- **bu beklentinin blok bootstrap ile hesaplanan `%95` alt sınırı sıfırın
   üstünde.**
 
 Son iki koşul belirleyicidir. Yüksek güven sinyalleri aynı seansta kümelendiği
-için bağımsız örnek varsayan güven aralığı fazla dardır; bootstrap tüm günü
+için bağımsız örnek varsayan güven aralığı fazla dardır; bootstrap blokları
 birlikte yeniden örnekler.
 
-Maliyet `Settings.round_trip_cost_bps` ile ayarlanır. Varsayılan `20.0`, Binance
-Spot taker ücretinin (`%0.10` × 2) karşılığıdır. Vadeli taker için `10.0` yazın.
+**Blok uzunluğu etiket ufkundan büyük olmalıdır.** Bariyer etiketi ileriye
+`barrier_horizon_hours` kadar baktığı için, birbirine bu süreden yakın iki
+sinyal aynı fiyat hareketiyle puanlanır. 24 saatlik ufukta takvim günleri bile
+örtüşür; blok en az etiket penceresinin iki katı ve asla bir günden kısa
+olmayacak şekilde veriden türetilir.
+
+Maliyet `Settings.round_trip_cost_bps` ile ayarlanır. Varsayılan `10.0`, Binance
+USD-M vadeli taker ücretinin (`%0.05` × 2) karşılığıdır. Spot için `20.0` yazın.
 Kayma ve emir gerçekleşmesi hâlâ ölçülmez, yani gerçek maliyet bundan yüksektir.
 
 ## Kurulum (Windows PowerShell)
