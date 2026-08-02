@@ -126,6 +126,18 @@ ile yapıldı, yani bir mum yalnız kapanışından önce ödenmiş funding'i g�
 Altı modelin beşinde net beklenti kötüleşti (en kötüsü `-17.4` bps); tek
 iyileşen `BTCUSDT 1h`'de bile alt sınır `-34.8` bps'de kaldı.
 
+**Çapraz varlık öncülüğü** — her modele diğer sembolün 1 ve 3 mumluk momentumu
+ve ikisinin farkı eklendi, `close_time_ms` üzerinden birebir hizalanarak. Altı
+modelin beşinde net beklenti kötüleşti; hiçbirinde blok alt sınırı sıfıra
+yaklaşmadı.
+
+**Oynaklık rejimi filtresi** — sinyal yalnız `ATR × √ufuk ≥ bariyer` iken
+alınacaktı. Ölçüm önermeyi çürüttü: bu koşul zaten zamanın `%91-100`'ünde
+sağlanıyor, çünkü `5m` için `ATR × √288 ≈ 204` bps, bariyerin iki katı. `%1`
+hedefi sakin dönemlerde de ulaşılabilir; "durgun rejimde ölü ağırlık taşıyoruz"
+varsayımı yanlıştı. Filtrenin fiilen eledigi tek yerde (`BTCUSDT 5m`, sinyallerin
+`%26`'sı) sonuç `-4.9` bps'den `-9.7` bps'ye geriledi.
+
 **Açık pozisyon (open interest) test edilemedi.** Binance'in
 `futures/data/openInterestHist` uç noktası yalnız son ~30 günü tutuyor; 60 gün
 öncesi `HTTP 400` veriyor. Bir yıllık walk-forward için yeterli geçmiş yok.
