@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from crypto_forecaster.commands import load_members, poll_and_answer, safe_name, save_members
 from crypto_forecaster.config import Settings
+from crypto_forecaster.telegram import TelegramError
 
 
 OWNER = 500100
@@ -157,6 +158,46 @@ class DisabledCommandTests(unittest.TestCase):
         self.assertEqual(outcome.received, 0)
         self.assertEqual(notifier.offsets, [])
 
+class FailureVisibilityTests(unittest.TestCase):
+    @patch.dict(os.environ, {"CRYPTO_TELEGRAM_OWNER_ID": str(OWNER)}, clear=False)
+    def test_a_send_failure_is_counted_and_explained(self) -> None:
+        # A dropped reply used to look exactly like a command that was never
+        # sent: consumed, unanswered, unlogged.
+        class BrokenNotifier(FakeNotifier):
+            def send_reply(self, chat_id: int, text: str) -> int:
+                raise TelegramError("kanal reddetti")
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(telegram_state_dir=Path(directory))
+            outcome = poll_and_answer(
+                settings,
+                status_text=lambda: "DURUM",
+                performance_text=lambda days: "KARNE",
+                notifier=BrokenNotifier([update(1, OWNER, "/durum")]),
+            )
+        self.assertEqual(outcome.answered, 0)
+        self.assertEqual(outcome.failed, 1)
+        self.assertIn("kanal reddetti", outcome.detail)
+
+    @patch.dict(os.environ, {"CRYPTO_TELEGRAM_OWNER_ID": str(OWNER)}, clear=False)
+    def test_a_broken_status_report_still_answers_the_asker(self) -> None:
+        def exploding() -> str:
+            raise ValueError("mesaj 4096 karakteri asti")
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(telegram_state_dir=Path(directory))
+            notifier = FakeNotifier([update(1, OWNER, "/durum")])
+            outcome = poll_and_answer(
+                settings,
+                status_text=exploding,
+                performance_text=lambda days: "KARNE",
+                notifier=notifier,
+            )
+        # The person asking gets told, the cycle survives, the log records why.
+        self.assertEqual(outcome.answered, 1)
+        self.assertEqual(outcome.failed, 1)
+        self.assertIn("4096", outcome.detail)
+        self.assertIn("uretilemedi", notifier.sent[0][1])
 
 if __name__ == "__main__":
     unittest.main()

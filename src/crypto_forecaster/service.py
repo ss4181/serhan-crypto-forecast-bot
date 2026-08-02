@@ -552,11 +552,14 @@ def serve_forever(
                 if digest is not None and digest.status != "DEDUPLICATED":
                     progress(f"Gozlem raporu: {digest.status}{_detail_suffix(digest)}")
                 answers = answer_commands(settings, predictions, now=now)
-                if answers.received:
-                    progress(
+                if answers.received or answers.failed:
+                    line = (
                         f"Komut: {answers.received} guncelleme, {answers.answered} yanit, "
                         f"{answers.refused} yetkisiz"
                     )
+                    if answers.failed:
+                        line += f", {answers.failed} HATA ({answers.detail})"
+                    progress(line)
             snapshot = dashboard_snapshot(predictions)
             write_snapshot(settings.report_dir, snapshot)
             if hub_configured():

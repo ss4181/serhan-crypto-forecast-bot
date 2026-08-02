@@ -34,6 +34,8 @@ class CommandOutcome:
     received: int
     answered: int
     refused: int
+    failed: int = 0
+    detail: str = ""
 
 
 def owner_id() -> int | None:
@@ -101,10 +103,13 @@ def poll_and_answer(
     offset = _load_offset(state_dir)
     try:
         updates = client.get_updates(offset=offset, limit=MAXIMUM_UPDATES_PER_RUN)
-    except TelegramError:
-        return CommandOutcome(received=0, answered=0, refused=0)
+    except TelegramError as error:
+        return CommandOutcome(
+            received=0, answered=0, refused=0, failed=1, detail=f"getUpdates: {error}"
+        )
     members = load_members(state_dir)
-    answered = refused = 0
+    answered = refused = failed = 0
+    detail = ""
     highest = offset - 1
     for update in updates:
         update_id = update.get("update_id")
@@ -127,26 +132,40 @@ def poll_and_answer(
             # able to make the bot emit traffic on demand.
             refused += 1
             continue
-        reply = _answer(
-            text,
-            sender_id=int(sender_id),
-            owner=owner,
-            members=members,
-            state_dir=state_dir,
-            status_text=status_text,
-            performance_text=performance_text,
-            now=now or datetime.now(timezone.utc),
-        )
+        try:
+            reply = _answer(
+                text,
+                sender_id=int(sender_id),
+                owner=owner,
+                members=members,
+                state_dir=state_dir,
+                status_text=status_text,
+                performance_text=performance_text,
+                now=now or datetime.now(timezone.utc),
+            )
+        except Exception as error:  # a bad answer must not kill the cycle
+            failed += 1
+            detail = f"yanit uretilemedi: {error}"
+            reply = "Durum raporu su an uretilemedi. Sunucu gunlugunde ayrinti var."
         if reply is None:
             continue
         try:
             client.send_reply(int(chat_id), reply)
             answered += 1
-        except (TelegramError, ValueError):
-            continue
+        except (TelegramError, ValueError) as error:
+            # Silence here used to consume the command and leave no trace, so a
+            # broken /durum looked identical to one that was never sent.
+            failed += 1
+            detail = str(error)
     if highest >= offset:
         _save_offset(state_dir, highest + 1)
-    return CommandOutcome(received=len(updates), answered=answered, refused=refused)
+    return CommandOutcome(
+        received=len(updates),
+        answered=answered,
+        refused=refused,
+        failed=failed,
+        detail=detail,
+    )
 
 
 def _answer(

@@ -318,11 +318,14 @@ def _answer_cloud_commands(settings: Settings, predictions) -> None:  # type: ig
     if not _telegram_configured() or owner_id() is None:
         return
     outcome = answer_commands(settings, predictions)
-    if outcome.received:
-        print(
+    if outcome.received or outcome.failed:
+        line = (
             f"Komut: {outcome.received} guncelleme, {outcome.answered} yanit, "
             f"{outcome.refused} yetkisiz"
         )
+        if outcome.failed:
+            line += f", {outcome.failed} HATA ({outcome.detail})"
+        print(line)
 
 
 def _deliver_cloud_scorecard(settings: Settings) -> None:
