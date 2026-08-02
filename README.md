@@ -118,6 +118,17 @@ ama sinyaller yalnız 10 ayrı haftaya düşüyordu ve blok bootstrap alt sını
 işaretidir, o yüzden `scikit-learn` bağımlılığı eklenmedi. Bu deney, blok
 uzunluğunun etiket ufkundan büyük olması gerektiğini de ortaya çıkardı.
 
+**Vadeli funding oranı** üç formda denendi: son ödenen oran, 30 ödemelik
+z-skoru ve son 24 saatin toplamı. Hizalama `merge_asof(direction="backward")`
+ile yapıldı, yani bir mum yalnız kapanışından önce ödenmiş funding'i görür.
+Altı modelin beşinde net beklenti kötüleşti (en kötüsü `-17.4` bps); tek
+iyileşen `BTCUSDT 1h`'de bile alt sınır `-34.8` bps'de kaldı.
+
+**Açık pozisyon (open interest) test edilemedi.** Binance'in
+`futures/data/openInterestHist` uç noktası yalnız son ~30 günü tutuyor; 60 gün
+öncesi `HTTP 400` veriyor. Bir yıllık walk-forward için yeterli geçmiş yok.
+İleride ölçebilmek adına şimdiden günlük kayıt toplamak gerekir.
+
 ## Araştırma protokolü
 
 Veri rastgele karıştırılmaz. Her fold şu sıradadır:
