@@ -4,10 +4,40 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, tzinfo
 import os
 from pathlib import Path
+import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-SYMBOLS = ("BTCUSDT", "ETHUSDT")
+SYMBOLS_ENV = "CRYPTO_SYMBOLS"
+DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
+_SYMBOL_PATTERN = re.compile(r"[A-Z0-9]{2,20}USDT\Z")
+
+
+def _configured_symbols() -> tuple[str, ...]:
+    """Which markets to research.  Fixed at import so every module agrees.
+
+    Hardcoding BTC and ETH made the tool study markets its owner does not
+    trade.  A comma-separated list is accepted, but the shape is still
+    validated: an unchecked symbol becomes a path segment on disk.
+    """
+    raw = os.environ.get(SYMBOLS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_SYMBOLS
+    chosen: list[str] = []
+    for item in raw.split(","):
+        candidate = item.strip().upper()
+        if not candidate:
+            continue
+        if not _SYMBOL_PATTERN.fullmatch(candidate):
+            raise ValueError(f"{SYMBOLS_ENV} icinde gecersiz sembol: {item.strip()}")
+        if candidate not in chosen:
+            chosen.append(candidate)
+    if not chosen:
+        return DEFAULT_SYMBOLS
+    return tuple(chosen)
+
+
+SYMBOLS = _configured_symbols()
 # Messages are read by a person, so they carry that person's clock.  Reading
 # "14:19" on a phone showing 17:19 makes a current report look three hours old.
 DISPLAY_TIMEZONE_ENV = "CRYPTO_DISPLAY_TIMEZONE"
@@ -63,7 +93,10 @@ class Settings:
 def validate_symbol(symbol: str) -> str:
     normalized = symbol.upper()
     if normalized not in SYMBOLS:
-        raise ValueError(f"Sembol yalnizca {', '.join(SYMBOLS)} olabilir")
+        raise ValueError(
+            f"Sembol yalnizca {', '.join(SYMBOLS)} olabilir; "
+            f"baskasi icin {SYMBOLS_ENV} degiskenini kullanin"
+        )
     return normalized
 
 

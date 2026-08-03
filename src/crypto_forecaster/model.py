@@ -5,10 +5,12 @@ from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any
 
 import numpy as np
 
+from .config import INTERVALS, SYMBOLS
 from .features import FEATURE_NAMES, SupervisedDataset
 
 
@@ -344,10 +346,8 @@ def walk_forward_backtest(
         successes = int(np.sum(predictions[signal_mask] == labels[signal_mask]))
         signal_accuracy = float(successes / signal_count)
         ci_low, ci_high = wilson_interval(successes, signal_count)
-        # Six fixed symbol/horizon models are assessed together.  This z value is
-        # the two-sided Bonferroni 95% family-wise level: Phi^-1(1 - .05/(2*6)).
         family_low, family_high = wilson_interval(
-            successes, signal_count, z=2.638257273476751
+            successes, signal_count, z=familywise_z()
         )
         # Direction accuracy above 50% is not an edge: wins and losses have
         # different sizes and every round trip pays a fee.  Score the money the
@@ -600,6 +600,16 @@ def expected_calibration_error(
     return float(error)
 
 
+def familywise_z(models: int | None = None) -> float:
+    """Two-sided Bonferroni 95% level for however many models are assessed.
+
+    This used to be hardcoded for exactly six.  Adding a symbol silently made
+    the correction too weak, which is the direction that invents edges.
+    """
+    count = max(1, models if models is not None else len(SYMBOLS) * len(INTERVALS))
+    return NormalDist().inv_cdf(1.0 - 0.05 / (2 * count))
+
+
 def wilson_interval(successes: int, trials: int, *, z: float = 1.959963984540054) -> tuple[float, float]:
     if trials <= 0 or successes < 0 or successes > trials:
         raise ValueError("Gecersiz Wilson araligi girdisi")
@@ -679,6 +689,7 @@ __all__ = [
     "Standardizer",
     "block_bootstrap_interval",
     "bootstrap_block_ms",
+    "familywise_z",
     "fit_final_bundle",
     "fit_logistic",
     "fit_platt",
