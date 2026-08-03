@@ -137,6 +137,16 @@ ve ikisinin farkı eklendi, `close_time_ms` üzerinden birebir hizalanarak. Alt�
 modelin beşinde net beklenti kötüleşti; hiçbirinde blok alt sınırı sıfıra
 yaklaşmadı.
 
+**Altcoin evreni** — sahibin bir aylık vadeli işlem geçmişi, botun yanlış
+piyasaları izlediğini gösterdi: 18 sembolde işlem yapılmış, bot ikisine
+bakıyordu. Onun işlem yaptığı 8 altcoin'de dördü `%55` barını geçiyordu, ama o
+semboller **kârlı işlem yaptığı yerlerden** seçilmişti. Evren sonuçlara
+bakılmadan sabitlenince (400+ gün önce listelenmiş USDT vadeli sözleşmeler,
+hacimde ilk 40, hepsi ölçülüp hepsi raporlandı): **0/40 kapıyı geçti**, `n≥100`
+olanlarda medyan isabet `%51.35`, örneklem-ağırlıklı net `-8.20` bps — hiç kenar
+olmasa `-10.00` beklenirdi. `%55` üstü sembol oranı yanlı seçimde `4/8` iken
+temiz evrende `4/14`'e düştü.
+
 **Oynaklık rejimi filtresi** — sinyal yalnız `ATR × √ufuk ≥ bariyer` iken
 alınacaktı. Ölçüm önermeyi çürüttü: bu koşul zaten zamanın `%91-100`'ünde
 sağlanıyor, çünkü `5m` için `ATR × √288 ≈ 204` bps, bariyerin iki katı. `%1`
