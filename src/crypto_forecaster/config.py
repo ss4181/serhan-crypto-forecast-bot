@@ -38,6 +38,19 @@ def _configured_symbols() -> tuple[str, ...]:
 
 
 SYMBOLS = _configured_symbols()
+# The perpetual contract is what gets traded, so it is what gets modelled.
+# Spot prices track it closely but are a different instrument, and a cache
+# holding one must never be mistaken for the other -- hence the market in the
+# filename rather than a flag somewhere.
+MARKET_ENV = "CRYPTO_MARKET"
+MARKETS = ("futures", "spot")
+
+
+def market() -> str:
+    choice = os.environ.get(MARKET_ENV, "").strip().lower() or MARKETS[0]
+    if choice not in MARKETS:
+        raise ValueError(f"{MARKET_ENV} yalnizca {', '.join(MARKETS)} olabilir")
+    return choice
 # Messages are read by a person, so they carry that person's clock.  Reading
 # "14:19" on a phone showing 17:19 makes a current report look three hours old.
 DISPLAY_TIMEZONE_ENV = "CRYPTO_DISPLAY_TIMEZONE"
@@ -133,7 +146,10 @@ def barrier_horizon_candles(interval: str, hours: float) -> int:
 
 
 def cache_path(data_dir: Path, symbol: str, interval: str) -> Path:
-    return data_dir / f"{validate_symbol(symbol)}_{validate_interval(interval)}.csv"
+    return (
+        data_dir
+        / f"{validate_symbol(symbol)}_{validate_interval(interval)}_{market()}.csv"
+    )
 
 
 def model_path(model_dir: Path, symbol: str, interval: str) -> Path:

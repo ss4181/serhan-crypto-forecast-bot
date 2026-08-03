@@ -70,7 +70,7 @@ araştırma botu. Emir vermez, borsa hesabına bağlanmaz, API anahtarı kullanm
 bir araştırma kaydının değeri doğruladıklarında değil, elediklerindedir.</p>
 <hr />
 <h2>Bir cümlelik özet</h2>
-<p>Beş ayrı hipotez test edildi, <strong>beşi de reddedildi</strong>; altı modelin hiçbiri
+<p>Altı ayrı hipotez test edildi, <strong>altısı da reddedildi</strong>; hiçbir model
 maliyet sonrası pozitif beklenti üretmiyor, ve bot bu yüzden hiçbir işlem
 sinyali göndermiyor — bu bir arıza değil, sistemin doğru çalışmasıdır.</p>
 <hr />
@@ -81,10 +81,15 @@ sinyali göndermiyor — bu bir arıza değil, sistemin doğru çalışmasıdır
    → kronolojik walk-forward + Platt kalibrasyonu
    → maliyet sonrası beklenti kapısı
    → Telegram (iki seviye) + canlı karne</code></p>
-<p>Altı bağımsız model var: <code>BTCUSDT</code> ve <code>ETHUSDT</code> × <code>5m</code>, <code>15m</code>, <code>1h</code>. Her biri
-kendi ayrı düzenlileştirilmiş lojistik regresyonu.</p>
-<p><strong>Veri:</strong> Binance'in salt-okunur market-data kökünden yalnızca <strong>kapanmış</strong>
-mumlar. Açık mum asla kullanılmaz. Önbellekte OHLCV'ye ek olarak <code>quote_volume</code>,
+<p>Varsayılan olarak altı bağımsız model var: <code>BTCUSDT</code> ve <code>ETHUSDT</code> × <code>5m</code>,
+<code>15m</code>, <code>1h</code>. Her biri kendi ayrı düzenlileştirilmiş lojistik regresyonu. İzlenen
+semboller <code>CRYPTO_SYMBOLS</code> ile değiştirilebilir; Bonferroni düzeltmesi model
+sayısından türetildiği için evren büyüdükçe kapı kendiliğinden sıkılaşır.</p>
+<p><strong>Veri:</strong> Binance'in salt-okunur kline uç noktasından yalnızca <strong>kapanmış</strong>
+mumlar; varsayılan olarak <strong>sürekli vadeli sözleşme</strong>, çünkü işlem yapılan
+enstrüman o. Spot fiyat yakın seyreder ama farklı bir enstrümandır, bu yüzden
+önbellek dosya adı piyasayı içerir — biri diğeri sanılamaz. Açık mum asla
+kullanılmaz. Önbellekte OHLCV'ye ek olarak <code>quote_volume</code>,
 <code>trade_count</code> ve <code>taker_buy_base</code> da saklanır.</p>
 <p><strong>Belirteçler (9):</strong> ATR'ye bölünmüş 1/3/12 mum momentumu, EMA(8/21) farkı,
 RSI(14), Bollinger(20) z-konumu, log ATR(14) yüzdesi, 20 mumluk log-hacim
@@ -147,8 +152,9 @@ puanlandığı fiyat hareketini görmesine izin verirdi.</p>
 <ol>
 <li>En az 100 yüksek güven OOS örneği</li>
 <li>Yüksek güven yön doğruluğu ≥ <code>%53</code></li>
-<li>Altı model birlikte değerlendirildiği için Bonferroni aile-düzeltmeli
-   <code>%95 Wilson</code> alt sınırı <code>%50</code> üzerinde</li>
+<li>Tüm modeller birlikte değerlendirildiği için Bonferroni aile-düzeltmeli
+   <code>%95 Wilson</code> alt sınırı <code>%50</code> üzerinde — düzeltme model sayısından türetilir,
+   böylece evren büyüdükçe bar kendiliğinden yükselir</li>
 <li>Brier skoru, yalnız tarihsel yukarı oranını kullanan tabandan iyi</li>
 <li>ECE ≤ <code>%10</code></li>
 <li><strong>Maliyet düşüldükten sonra sinyal başına beklenti pozitif</strong></li>
@@ -243,7 +249,7 @@ isabet <code>%55</code>. Ölçüm 365 günlük veri, tamamen OOS dilimlerden:</p
 </tbody>
 </table></div>
 <p><strong>Hiçbiri geçmiyor.</strong> En iyisi <code>BTCUSDT 5m</code>: %53.89 isabet, gereken %55. Aradaki
-1,1 puan küçük görünüyor ama beş farklı yoldan kapatmaya çalıştık ve hiçbiri
+1,1 puan küçük görünüyor ama altı farklı yoldan kapatmaya çalıştık ve hiçbiri
 tutmadı.</p>
 <p>Bir de rahatsız edici bir referans var: bariyer hedefinde yukarı tarafın önce
 görülme oranı <code>%52.5</code>. Yani hiç düşünmeden "yukarı" diyen bir kural, modele
@@ -322,7 +328,66 @@ taşımayalım. Filtre: <code>ATR × √ufuk ≥ bariyer</code>.</p>
 <code>5m</code> için <code>ATR × √288 ≈ 204</code> bps, bariyerin iki katı. <code>%1</code> hedefi sakin
 dönemlerde de ulaşılabilir. Filtrenin fiilen elediği tek yerde
 (<code>BTCUSDT 5m</code>, sinyallerin %26'sı) sonuç −4,9'dan −9,7 bps'ye geriledi.</p>
-<h3>5.6 Açık pozisyon — test <strong>edilemedi</strong></h3>
+<h3>5.6 Altcoin evreni — reddedildi, ve önce beni yanılttı</h3>
+<p>Proje sahibinin bir aylık vadeli işlem geçmişi, botun <strong>yanlış piyasaları</strong>
+izlediğini gösterdi: 18 sembolde işlem yapılmış, bot ikisine bakıyordu ve
+<code>ETHUSDT</code> sonucun <code>%0.5</code>'iydi. Kârın <code>%83</code>'ü iki altcoin'den geliyordu.</p>
+<p>İlk ölçüm umut verdi. Onun işlem yaptığı 8 altcoin'de dördü <code>%55</code> barının
+üzerindeydi, ikisinin net beklentisi pozitifti — <code>BTC</code> ve <code>ETH</code> ise listenin en
+altındaydı.</p>
+<p><strong>Ama sembolleri, onun kârlı işlem yaptığı yerlerden seçmiştim.</strong> Yani listeye
+geriye dönük olarak "hareketli çıkmış" varlıklar koymuş oldum. Bu, tam olarak
+kapının engellemeye çalıştığı hatanın bir biçimi.</p>
+<p>Temiz test için evren <strong>sonuçlara bakılmadan</strong> sabitlendi: en az 400 gün önce
+listelenmiş USDT sürekli vadeli sözleşmeler, güncel hacme göre ilk 40. Hepsi
+ölçüldü, hiçbiri sonradan elenmedi.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>Ölçülen</th>
+<th>Kenar yoksa beklenen</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kapıyı geçen</td>
+<td><strong>0 / 40</strong></td>
+<td>0</td>
+</tr>
+<tr>
+<td>Medyan isabet (n≥100)</td>
+<td><code>%51.35</code></td>
+<td><code>%50</code></td>
+</tr>
+<tr>
+<td>Medyan net</td>
+<td><code>-10.37</code> bps</td>
+<td><code>-10.00</code> bps</td>
+</tr>
+<tr>
+<td>Örneklem-ağırlıklı net</td>
+<td><code>-8.20</code> bps</td>
+<td><code>-10.00</code> bps</td>
+</tr>
+<tr>
+<td>Alt sınırı sıfırı geçen</td>
+<td><code>0 / 14</code></td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<p>Ağırlıklı net ile "kenar yok" varsayımı arasındaki fark <code>1.8</code> bps — komisyonu
+bile karşılamayan bir gürültü farkı. <code>%55</code> barını geçen sembol oranı, yanlı
+seçimde <code>4/8</code> iken önceden belirlenmiş evrende <code>4/14</code>'e düştü ve hiçbiri güven
+aralığı sınavını geçemedi.</p>
+<p>Küçük örneklem tuzağı da görünür oldu: <code>n&lt;100</code> olan 13 sembolün 5'i pozitif net
+gösteriyor, medyan örneklemleri 36. <code>LINKUSDT</code> <code>%68</code> isabet (n=19), <code>NEARUSDT</code>
+<code>%100</code> (n=3). Kapının 100 eşiği tam olarak bunları elemek için var.</p>
+<p>Bu deney iki düzeltme getirdi: izlenen semboller artık ayarlanabilir, ve
+Bonferroni düzeltmesi model sayısından türüyor — sabit <code>z</code> 40 sembolde düzeltmeyi
+sessizce zayıflatırdı, ki bu olmayan kenarları var gösteren yöndür.</p>
+<h3>5.7 Açık pozisyon — test <strong>edilemedi</strong></h3>
 <p>Binance <code>openInterestHist</code> uç noktası yalnız son ~30 günü tutuyor; 60 gün öncesi
 <code>HTTP 400</code> veriyor. Bir yıllık walk-forward için geçmiş yok.</p>
 <p>Bu yüzden bot <strong>ileriye doğru kayıt tutuyor</strong>: her turda veriyi çekip
@@ -476,7 +541,7 @@ hesap 360'tan 34'e indi.</p>
 <li>Veri kaynağı tek borsa (Binance); başka borsada fiyat ve likidite farklı olabilir.</li>
 <li>Backtest komisyonu hesaba katar ama <strong>kaymayı ve emir gerçekleşmesini ölçmez</strong> —
   gerçek maliyet raporlanandan yüksektir.</li>
-<li>Beş hipotez denendi; her ek deneme, şans eseri barı geçen bir şey bulma
+<li>Altı hipotez denendi; her ek deneme, şans eseri barı geçen bir şey bulma
   ihtimalini artırır. Bonferroni düzeltmesi altı modeli kapsar, <strong>kaç fikir
   denediğimizi kapsamaz</strong>.</li>
 <li><code>%50</code> yakınındaki kısa vadeli piyasa yönü normaldir. Kapıyı hiçbir model
@@ -493,8 +558,11 @@ hesap 360'tan 34'e indi.</p>
 </ol>
 <p>Kalan ucuz fikirler tükendi. Daha fazla varyant denemek, er ya da geç şans eseri
 geçen bir şey bulmak demektir — ve o noktada gerçek mi tesadüf mü ayırt etmek
-mümkün olmaz. <strong>Beş temiz ret, arayıp bulunacak bir "başarı"dan daha güvenilir
+mümkün olmaz. <strong>Altı temiz ret, arayıp bulunacak bir "başarı"dan daha güvenilir
 bir bilgidir.</strong></p>
+<p>Sonuncusu bunun neden böyle olduğunu da gösterdi: yanlı seçilmiş sekiz sembol
+"altcoin'lerde kenar var" dedi, önceden belirlenmiş kırk sembol demedi. Aradaki
+tek fark, listeyi kimin ve neye bakarak yaptığıydı.</p>
 <hr />
 <h2>Çalışma ilkesi</h2>
 <p>Bu projede tek bir kural her şeyin önünde geldi:</p>

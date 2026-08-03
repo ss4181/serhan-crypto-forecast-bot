@@ -11,12 +11,21 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from .config import INTERVAL_MILLISECONDS, cache_path, validate_interval, validate_symbol
+from .config import (
+    INTERVAL_MILLISECONDS,
+    cache_path,
+    market,
+    validate_interval,
+    validate_symbol,
+)
 
 
-BINANCE_MARKET_DATA_ORIGIN = "https://data-api.binance.vision"
-KLINE_LIMIT = 1000
-MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+# Both are public, read-only kline endpoints; neither takes an API key.
+MARKET_ENDPOINTS = {
+    "futures": ("https://fapi.binance.com", "/fapi/v1/klines", 1500),
+    "spot": ("https://data-api.binance.vision", "/api/v3/klines", 1000),
+}
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 CSV_COLUMNS = (
     "open_time_ms",
     "open",
@@ -43,7 +52,11 @@ def _utc_now() -> datetime:
 
 
 class BinanceMarketDataClient:
-    """Read-only Binance Spot market-data client; no API key or trading surface."""
+    """Read-only Binance kline client; no API key or trading surface.
+
+    Reads the perpetual contract by default, because that is the instrument
+    being traded; set CRYPTO_MARKET=spot for the spot series instead.
+    """
 
     def __init__(
         self,
@@ -57,6 +70,7 @@ class BinanceMarketDataClient:
         self.timeout_seconds = timeout_seconds
         self.request_pause_seconds = request_pause_seconds
         self._opener = opener or urlopen
+        self.origin, self.path, self.page_limit = MARKET_ENDPOINTS[market()]
 
     def fetch_klines(
         self,
@@ -98,7 +112,7 @@ class BinanceMarketDataClient:
             if next_cursor <= cursor:
                 raise MarketDataError("Binance sayfalama ilerlemedi")
             cursor = next_cursor
-            if len(payload) < KLINE_LIMIT:
+            if len(payload) < self.page_limit:
                 break
             time.sleep(self.request_pause_seconds)
         return _rows_to_frame(rows, closed_before_ms=end_ms)
@@ -117,11 +131,11 @@ class BinanceMarketDataClient:
                 "interval": interval,
                 "startTime": start_ms,
                 "endTime": end_ms,
-                "limit": KLINE_LIMIT,
+                "limit": self.page_limit,
             }
         )
         request = Request(
-            f"{BINANCE_MARKET_DATA_ORIGIN}/api/v3/klines?{query}",
+            f"{self.origin}{self.path}?{query}",
             headers={"Accept": "application/json", "User-Agent": "btc-eth-probability-bot/0.1"},
             method="GET",
         )

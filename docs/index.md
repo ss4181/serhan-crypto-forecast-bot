@@ -15,7 +15,7 @@ bir araştırma kaydının değeri doğruladıklarında değil, elediklerindedir
 
 ## Bir cümlelik özet
 
-Beş ayrı hipotez test edildi, **beşi de reddedildi**; altı modelin hiçbiri
+Altı ayrı hipotez test edildi, **altısı da reddedildi**; hiçbir model
 maliyet sonrası pozitif beklenti üretmiyor, ve bot bu yüzden hiçbir işlem
 sinyali göndermiyor — bu bir arıza değil, sistemin doğru çalışmasıdır.
 
@@ -32,11 +32,16 @@ Binance kapalı mumlar
    → Telegram (iki seviye) + canlı karne
 ```
 
-Altı bağımsız model var: `BTCUSDT` ve `ETHUSDT` × `5m`, `15m`, `1h`. Her biri
-kendi ayrı düzenlileştirilmiş lojistik regresyonu.
+Varsayılan olarak altı bağımsız model var: `BTCUSDT` ve `ETHUSDT` × `5m`,
+`15m`, `1h`. Her biri kendi ayrı düzenlileştirilmiş lojistik regresyonu. İzlenen
+semboller `CRYPTO_SYMBOLS` ile değiştirilebilir; Bonferroni düzeltmesi model
+sayısından türetildiği için evren büyüdükçe kapı kendiliğinden sıkılaşır.
 
-**Veri:** Binance'in salt-okunur market-data kökünden yalnızca **kapanmış**
-mumlar. Açık mum asla kullanılmaz. Önbellekte OHLCV'ye ek olarak `quote_volume`,
+**Veri:** Binance'in salt-okunur kline uç noktasından yalnızca **kapanmış**
+mumlar; varsayılan olarak **sürekli vadeli sözleşme**, çünkü işlem yapılan
+enstrüman o. Spot fiyat yakın seyreder ama farklı bir enstrümandır, bu yüzden
+önbellek dosya adı piyasayı içerir — biri diğeri sanılamaz. Açık mum asla
+kullanılmaz. Önbellekte OHLCV'ye ek olarak `quote_volume`,
 `trade_count` ve `taker_buy_base` da saklanır.
 
 **Belirteçler (9):** ATR'ye bölünmüş 1/3/12 mum momentumu, EMA(8/21) farkı,
@@ -100,8 +105,9 @@ Bir modelin işlem sinyali gönderebilmesi için **hepsi** gerekir:
 
 1. En az 100 yüksek güven OOS örneği
 2. Yüksek güven yön doğruluğu ≥ `%53`
-3. Altı model birlikte değerlendirildiği için Bonferroni aile-düzeltmeli
-   `%95 Wilson` alt sınırı `%50` üzerinde
+3. Tüm modeller birlikte değerlendirildiği için Bonferroni aile-düzeltmeli
+   `%95 Wilson` alt sınırı `%50` üzerinde — düzeltme model sayısından türetilir,
+   böylece evren büyüdükçe bar kendiliğinden yükselir
 4. Brier skoru, yalnız tarihsel yukarı oranını kullanan tabandan iyi
 5. ECE ≤ `%10`
 6. **Maliyet düşüldükten sonra sinyal başına beklenti pozitif**
@@ -136,7 +142,7 @@ isabet `%55`. Ölçüm 365 günlük veri, tamamen OOS dilimlerden:
 | ETHUSDT 1h | 3.439 | %100 | %47.50 (400) | −8.72 | −18.72 | −43.23 / +2.41 | KALDI |
 
 **Hiçbiri geçmiyor.** En iyisi `BTCUSDT 5m`: %53.89 isabet, gereken %55. Aradaki
-1,1 puan küçük görünüyor ama beş farklı yoldan kapatmaya çalıştık ve hiçbiri
+1,1 puan küçük görünüyor ama altı farklı yoldan kapatmaya çalıştık ve hiçbiri
 tutmadı.
 
 Bir de rahatsız edici bir referans var: bariyer hedefinde yukarı tarafın önce
@@ -208,7 +214,46 @@ taşımayalım. Filtre: `ATR × √ufuk ≥ bariyer`.
 dönemlerde de ulaşılabilir. Filtrenin fiilen elediği tek yerde
 (`BTCUSDT 5m`, sinyallerin %26'sı) sonuç −4,9'dan −9,7 bps'ye geriledi.
 
-### 5.6 Açık pozisyon — test **edilemedi**
+### 5.6 Altcoin evreni — reddedildi, ve önce beni yanılttı
+
+Proje sahibinin bir aylık vadeli işlem geçmişi, botun **yanlış piyasaları**
+izlediğini gösterdi: 18 sembolde işlem yapılmış, bot ikisine bakıyordu ve
+`ETHUSDT` sonucun `%0.5`'iydi. Kârın `%83`'ü iki altcoin'den geliyordu.
+
+İlk ölçüm umut verdi. Onun işlem yaptığı 8 altcoin'de dördü `%55` barının
+üzerindeydi, ikisinin net beklentisi pozitifti — `BTC` ve `ETH` ise listenin en
+altındaydı.
+
+**Ama sembolleri, onun kârlı işlem yaptığı yerlerden seçmiştim.** Yani listeye
+geriye dönük olarak "hareketli çıkmış" varlıklar koymuş oldum. Bu, tam olarak
+kapının engellemeye çalıştığı hatanın bir biçimi.
+
+Temiz test için evren **sonuçlara bakılmadan** sabitlendi: en az 400 gün önce
+listelenmiş USDT sürekli vadeli sözleşmeler, güncel hacme göre ilk 40. Hepsi
+ölçüldü, hiçbiri sonradan elenmedi.
+
+| | Ölçülen | Kenar yoksa beklenen |
+|---|---|---|
+| Kapıyı geçen | **0 / 40** | 0 |
+| Medyan isabet (n≥100) | `%51.35` | `%50` |
+| Medyan net | `-10.37` bps | `-10.00` bps |
+| Örneklem-ağırlıklı net | `-8.20` bps | `-10.00` bps |
+| Alt sınırı sıfırı geçen | `0 / 14` | 0 |
+
+Ağırlıklı net ile "kenar yok" varsayımı arasındaki fark `1.8` bps — komisyonu
+bile karşılamayan bir gürültü farkı. `%55` barını geçen sembol oranı, yanlı
+seçimde `4/8` iken önceden belirlenmiş evrende `4/14`'e düştü ve hiçbiri güven
+aralığı sınavını geçemedi.
+
+Küçük örneklem tuzağı da görünür oldu: `n<100` olan 13 sembolün 5'i pozitif net
+gösteriyor, medyan örneklemleri 36. `LINKUSDT` `%68` isabet (n=19), `NEARUSDT`
+`%100` (n=3). Kapının 100 eşiği tam olarak bunları elemek için var.
+
+Bu deney iki düzeltme getirdi: izlenen semboller artık ayarlanabilir, ve
+Bonferroni düzeltmesi model sayısından türüyor — sabit `z` 40 sembolde düzeltmeyi
+sessizce zayıflatırdı, ki bu olmayan kenarları var gösteren yöndür.
+
+### 5.7 Açık pozisyon — test **edilemedi**
 
 Binance `openInterestHist` uç noktası yalnız son ~30 günü tutuyor; 60 gün öncesi
 `HTTP 400` veriyor. Bir yıllık walk-forward için geçmiş yok.
@@ -319,7 +364,7 @@ Bu bölüm sonuçlar kadar önemli, çünkü hepsi sessizce yanlış sonuç üre
 - Veri kaynağı tek borsa (Binance); başka borsada fiyat ve likidite farklı olabilir.
 - Backtest komisyonu hesaba katar ama **kaymayı ve emir gerçekleşmesini ölçmez** —
   gerçek maliyet raporlanandan yüksektir.
-- Beş hipotez denendi; her ek deneme, şans eseri barı geçen bir şey bulma
+- Altı hipotez denendi; her ek deneme, şans eseri barı geçen bir şey bulma
   ihtimalini artırır. Bonferroni düzeltmesi altı modeli kapsar, **kaç fikir
   denediğimizi kapsamaz**.
 - `%50` yakınındaki kısa vadeli piyasa yönü normaldir. Kapıyı hiçbir model
@@ -338,8 +383,12 @@ Kendiliğinden ilerleyen iki şey var:
 
 Kalan ucuz fikirler tükendi. Daha fazla varyant denemek, er ya da geç şans eseri
 geçen bir şey bulmak demektir — ve o noktada gerçek mi tesadüf mü ayırt etmek
-mümkün olmaz. **Beş temiz ret, arayıp bulunacak bir "başarı"dan daha güvenilir
+mümkün olmaz. **Altı temiz ret, arayıp bulunacak bir "başarı"dan daha güvenilir
 bir bilgidir.**
+
+Sonuncusu bunun neden böyle olduğunu da gösterdi: yanlı seçilmiş sekiz sembol
+"altcoin'lerde kenar var" dedi, önceden belirlenmiş kırk sembol demedi. Aradaki
+tek fark, listeyi kimin ve neye bakarak yaptığıydı.
 
 ---
 

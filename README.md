@@ -4,8 +4,10 @@
 > portföy sayfası: [`docs/index.md`](docs/index.md). Tarayıcıda açılabilen
 > tek dosyalık sürüm: `docs/index.html` — `python docs/build.py` ile üretilir.
 
-Bu proje yalnızca `BTCUSDT` ve `ETHUSDT` için Binance Spot'un kapanmış `5m`, `15m`
-ve `1h` mumlarını kullanır. Bir sonraki mum kapanışının yukarı/aşağı olasılığını
+Bu proje varsayılan olarak `BTCUSDT` ve `ETHUSDT` için Binance **sürekli vadeli**
+sözleşmesinin kapanmış `5m`, `15m` ve `1h` mumlarını kullanır (işlem yapılan
+enstrüman o; `CRYPTO_MARKET=spot` ile spot seriye geçilebilir, semboller
+`CRYPTO_SYMBOLS` ile değiştirilebilir). Bir sonraki mum kapanışının yukarı/aşağı olasılığını
 hesaplar ve sonucu Telegram kanalına yollar. Emir vermez, borsa hesabına bağlanmaz
 ve Binance API anahtarı kullanmaz.
 
