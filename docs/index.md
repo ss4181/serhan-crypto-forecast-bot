@@ -112,6 +112,8 @@ Bir modelin işlem sinyali gönderebilmesi için **hepsi** gerekir:
 5. ECE ≤ `%10`
 6. **Maliyet düşüldükten sonra sinyal başına beklenti pozitif**
 7. **Bu beklentinin blok bootstrap `%95` alt sınırı sıfırın üstünde**
+8. **Sinyaller en az 12 bağımsız bloğa dağılmış** — daha azında aralık
+   güvenilmez (ölçüldü: 2 blokta null altında `%26` yanlış pozitif)
 
 Son iki madde belirleyicidir. Yön isabetinin `%50` üzerinde olması tek başına
 hiçbir şey ifade etmez: kazanan ve kaybeden işlemlerin büyüklükleri farklıdır.
@@ -124,6 +126,17 @@ mum ileri baktığı için sonuç penceresi tam bir gün kaplar, komşu günler 
 
 Blok artık veriden türetilir: **en az etiket penceresinin iki katı, asla bir
 günden kısa değil.** Bu hatayı bir deney sırasında bulduk — ayrıntısı aşağıda.
+
+**Blok sayısı da yetmeli.** Bir bootstrap'ın yeniden örnekleyecek bloğa ihtiyacı
+var. Gerçek bir 12 günlük örneklemde günlük sonuçların işareti rastgele
+çevrilerek (gerçek ortalama sıfır) ölçüldü: **2 blokla** `%95` alt sınırı
+zamanın `%26`'sında sıfırı geçiyor, **4 blokla** `%12`'sinde — nominal `%5`'e
+karşı. 12 blokta `%6.7`'ye iniyor. Bu yüzden kapı artık en az 12 bağımsız blok
+istiyor; daha azında aralık ne kadar güvenli görünürse görünsün kanıt değildir.
+
+Bu kuralın izi eski ölçümlerde zaten vardı: evren testinde `NEARUSDT` üç sinyal
+ve iki günle `+90.00` bps alt sınır üretmişti — kapıdan yalnızca "en az 100
+sinyal" kuralı sayesinde geçememişti. Kural artık örtük değil.
 
 ---
 

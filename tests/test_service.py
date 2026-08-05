@@ -42,6 +42,7 @@ def metrics(**overrides) -> BacktestMetrics:  # type: ignore[no-untyped-def]
         round_trip_cost_bps=20.0, gross_edge_bps=26.0, net_edge_bps=6.0,
         net_edge_ci95_low=1.5, net_edge_ci95_high=10.5,
         average_win_bps=30.0, average_loss_bps=-24.0, signal_days=60,
+        bootstrap_blocks=30,
         barrier_bps_median=40.0, barrier_horizon_candles=12,
         resolved_fraction=.82, ambiguous_fraction=.03,
         passed_research_gate=True, gate_reasons=(),

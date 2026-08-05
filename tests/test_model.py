@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -31,7 +32,9 @@ GATE = {
 HORIZON = 12
 
 
-def predictive_dataset(count: int = 4000) -> SupervisedDataset:
+# Long enough that the test folds span more than the twelve blocks the gate
+# now requires: 12000 five-minute candles is about six weeks.
+def predictive_dataset(count: int = 12000) -> SupervisedDataset:
     rng = np.random.default_rng(42)
     x = rng.normal(size=(count, len(FEATURE_NAMES)))
     latent = 1.2 * x[:, 0] - 0.8 * x[:, 3] + 0.35 * x[:, 7]
@@ -86,6 +89,26 @@ class ModelTests(unittest.TestCase):
         self.assertAlmostEqual(
             metrics.net_edge_bps, metrics.gross_edge_bps - 500.0, places=9
         )
+
+    def test_too_few_blocks_is_not_evidence(self) -> None:
+        # Sign-flipping a real 12-day sample showed a 2-block interval clearing
+        # zero 26% of the time under a true null.  A confident-looking number
+        # from three blocks must not open the gate.
+        dataset = predictive_dataset()
+        one_day = 86_400_000
+        squeezed = replace(
+            dataset,
+            close_time_ms=dataset.open_time_ms[0] + (np.arange(len(dataset)) % 3) * one_day,
+        )
+        metrics = walk_forward_backtest(squeezed, **GATE)
+        self.assertLess(metrics.bootstrap_blocks, 12)
+        self.assertFalse(metrics.passed_research_gate)
+        self.assertTrue(any("blok" in reason for reason in metrics.gate_reasons))
+
+    def test_enough_blocks_leaves_the_gate_open(self) -> None:
+        metrics = walk_forward_backtest(predictive_dataset(), **GATE)
+        self.assertGreaterEqual(metrics.bootstrap_blocks, 12)
+        self.assertTrue(metrics.passed_research_gate)
 
     def test_net_edge_interval_brackets_the_mean(self) -> None:
         metrics = walk_forward_backtest(predictive_dataset(), **GATE)

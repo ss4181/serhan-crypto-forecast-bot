@@ -186,7 +186,9 @@ Bildirim kapısı şu koşulların tamamını ister:
 - ECE en fazla `%10`;
 - **gidiş-dönüş maliyeti düşüldükten sonra sinyal başına beklenti pozitif**;
 - **bu beklentinin blok bootstrap ile hesaplanan `%95` alt sınırı sıfırın
-  üstünde.**
+  üstünde**;
+- **sinyaller en az 12 bağımsız bloğa dağılmış olmalı** — daha azında aralığın
+  kendisi güvenilmez.
 
 Son iki koşul belirleyicidir. Yüksek güven sinyalleri aynı seansta kümelendiği
 için bağımsız örnek varsayan güven aralığı fazla dardır; bootstrap blokları

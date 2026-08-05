@@ -18,6 +18,12 @@ SCHEMA_VERSION = "btc-eth-probability-model-v5"
 PROBABILITY_EDGES = (0.0, 0.35, 0.45, 0.55, 0.65, 1.0000001)
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 20260801
+# A block bootstrap needs blocks to resample.  Measured on a real 12-day sample
+# by sign-flipping the daily results to impose a true mean of zero: with 2
+# blocks the 95% lower bound cleared zero 26% of the time and with 4 blocks 12%,
+# against a nominal 5%.  Twelve blocks brought it to 6.7%.  Below that the
+# interval is not evidence, however confident it looks.
+MINIMUM_BOOTSTRAP_BLOCKS = 12
 
 
 def sigmoid(values: np.ndarray | float) -> np.ndarray:
@@ -85,6 +91,7 @@ class BacktestMetrics:
     average_win_bps: float
     average_loss_bps: float
     signal_days: int
+    bootstrap_blocks: int
     barrier_bps_median: float
     barrier_horizon_candles: int
     resolved_fraction: float
@@ -123,6 +130,7 @@ class BacktestMetrics:
             average_win_bps=float(payload["average_win_bps"]),
             average_loss_bps=float(payload["average_loss_bps"]),
             signal_days=int(payload["signal_days"]),
+            bootstrap_blocks=int(payload["bootstrap_blocks"]),
             barrier_bps_median=float(payload["barrier_bps_median"]),
             barrier_horizon_candles=int(payload["barrier_horizon_candles"]),
             resolved_fraction=float(payload["resolved_fraction"]),
@@ -362,9 +370,9 @@ def walk_forward_backtest(
         gross_edge = float(np.mean(gross))
         net_edge = float(np.mean(net))
         signal_days_index = close_times[signal_mask] // 86_400_000
-        net_low, net_high = block_bootstrap_interval(
-            net, close_times[signal_mask] // bootstrap_block_ms(dataset)
-        )
+        block_index = close_times[signal_mask] // bootstrap_block_ms(dataset)
+        bootstrap_blocks = int(np.unique(block_index).size)
+        net_low, net_high = block_bootstrap_interval(net, block_index)
         average_win = float(np.mean(wins)) if wins.size else 0.0
         average_loss = float(np.mean(losses)) if losses.size else 0.0
         signal_days = int(np.unique(signal_days_index).size)
@@ -384,6 +392,7 @@ def walk_forward_backtest(
         signal_days = 0
         barrier_median = float(np.median(dataset.barrier_bps))
         resolved_fraction = ambiguous_fraction = 0.0
+        bootstrap_blocks = 0
     reasons: list[str] = []
     if signal_count < minimum_signal_count:
         reasons.append(f"yuksek guven ornegi {minimum_signal_count} altinda")
@@ -399,6 +408,13 @@ def walk_forward_backtest(
         reasons.append(
             f"maliyet sonrasi beklenti {net_edge:+.2f} bps; {round_trip_cost_bps:.1f} bps "
             "gidis-donus maliyetini karsilamiyor"
+        )
+    elif bootstrap_blocks < MINIMUM_BOOTSTRAP_BLOCKS:
+        # Too few blocks and the interval is wishful, not wrong-looking: under a
+        # true null it clears zero far more often than 5% of the time.
+        reasons.append(
+            f"bagimsiz blok sayisi {bootstrap_blocks}; guven araligi icin en az "
+            f"{MINIMUM_BOOTSTRAP_BLOCKS} blok gerekir"
         )
     elif net_low <= minimum_net_edge_bps:
         reasons.append(
@@ -429,6 +445,7 @@ def walk_forward_backtest(
         average_win_bps=average_win,
         average_loss_bps=average_loss,
         signal_days=signal_days,
+        bootstrap_blocks=bootstrap_blocks,
         barrier_bps_median=barrier_median,
         barrier_horizon_candles=int(np.max(dataset.exit_offset)) if len(dataset) else 0,
         resolved_fraction=resolved_fraction,

@@ -159,6 +159,8 @@ puanlandığı fiyat hareketini görmesine izin verirdi.</p>
 <li>ECE ≤ <code>%10</code></li>
 <li><strong>Maliyet düşüldükten sonra sinyal başına beklenti pozitif</strong></li>
 <li><strong>Bu beklentinin blok bootstrap <code>%95</code> alt sınırı sıfırın üstünde</strong></li>
+<li><strong>Sinyaller en az 12 bağımsız bloğa dağılmış</strong> — daha azında aralık
+   güvenilmez (ölçüldü: 2 blokta null altında <code>%26</code> yanlış pozitif)</li>
 </ol>
 <p>Son iki madde belirleyicidir. Yön isabetinin <code>%50</code> üzerinde olması tek başına
 hiçbir şey ifade etmez: kazanan ve kaybeden işlemlerin büyüklükleri farklıdır.</p>
@@ -168,6 +170,15 @@ aralığı bu yüzden fazla dardır. Ama <strong>takvim günü de yetmez</strong
 mum ileri baktığı için sonuç penceresi tam bir gün kaplar, komşu günler örtüşür.</p>
 <p>Blok artık veriden türetilir: <strong>en az etiket penceresinin iki katı, asla bir
 günden kısa değil.</strong> Bu hatayı bir deney sırasında bulduk — ayrıntısı aşağıda.</p>
+<p><strong>Blok sayısı da yetmeli.</strong> Bir bootstrap'ın yeniden örnekleyecek bloğa ihtiyacı
+var. Gerçek bir 12 günlük örneklemde günlük sonuçların işareti rastgele
+çevrilerek (gerçek ortalama sıfır) ölçüldü: <strong>2 blokla</strong> <code>%95</code> alt sınırı
+zamanın <code>%26</code>'sında sıfırı geçiyor, <strong>4 blokla</strong> <code>%12</code>'sinde — nominal <code>%5</code>'e
+karşı. 12 blokta <code>%6.7</code>'ye iniyor. Bu yüzden kapı artık en az 12 bağımsız blok
+istiyor; daha azında aralık ne kadar güvenli görünürse görünsün kanıt değildir.</p>
+<p>Bu kuralın izi eski ölçümlerde zaten vardı: evren testinde <code>NEARUSDT</code> üç sinyal
+ve iki günle <code>+90.00</code> bps alt sınır üretmişti — kapıdan yalnızca "en az 100
+sinyal" kuralı sayesinde geçememişti. Kural artık örtük değil.</p>
 <hr />
 <h2>4. Bugünkü sonuçlar</h2>
 <p>Bariyer <code>±100</code> bps, maliyet <code>10</code> bps (Binance USD-M vadeli taker), gereken
