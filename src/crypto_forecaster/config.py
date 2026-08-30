@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, tzinfo
 import os
 from pathlib import Path
@@ -9,8 +9,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 SYMBOLS_ENV = "CRYPTO_SYMBOLS"
+SCALP_OBSERVATION_ENV = "CRYPTO_SCALP_OBSERVATION"
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
-_SYMBOL_PATTERN = re.compile(r"[A-Z0-9]{2,20}USDT\Z")
+_SYMBOL_PATTERN = re.compile(r"[A-Z0-9]{1,20}USDT\Z")
 
 
 def _configured_symbols() -> tuple[str, ...]:
@@ -71,6 +72,8 @@ class Settings:
     report_dir: Path = Path("artifacts/reports")
     telegram_state_dir: Path = Path("state/telegram")
     outcome_state_dir: Path = Path("state/outcomes")
+    scalp_data_dir: Path = Path("data/scalp")
+    scalp_state_dir: Path = Path("state/scalp")
     signal_threshold: float = 0.60
     minimum_signal_count: int = 100
     minimum_signal_accuracy: float = 0.53
@@ -101,15 +104,47 @@ class Settings:
     barrier_horizon_hours: float = 24.0
     # Refuse to research a barrier too thin to survive its own costs.
     minimum_barrier_cost_multiple: float = 4.0
+    # Broad-universe scalping stays separate from the verified-model path.  It
+    # is deliberately opt-in and can only emit RESEARCH-ONLY observation
+    # digests; no setting here can promote one to an actionable signal.
+    scalp_observation_enabled: bool = field(
+        default_factory=lambda: _environment_bool(SCALP_OBSERVATION_ENV, False)
+    )
+    scalp_top_k: int = field(
+        default_factory=lambda: _environment_int("CRYPTO_SCALP_TOP_K", 5, 1, 10)
+    )
+    scalp_cache_days: int = field(
+        default_factory=lambda: _environment_int("CRYPTO_SCALP_CACHE_DAYS", 3, 2, 30)
+    )
+    scalp_maximum_bar_age_minutes: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_MAXIMUM_BAR_AGE_MINUTES", 15, 5, 60
+        )
+    )
+    scalp_minimum_coverage: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MINIMUM_COVERAGE", 0.90, 0.50, 1.0
+        )
+    )
 
 
 def validate_symbol(symbol: str) -> str:
-    normalized = symbol.upper()
+    normalized = validate_market_symbol(symbol)
     if normalized not in SYMBOLS:
         raise ValueError(
             f"Sembol yalnizca {', '.join(SYMBOLS)} olabilir; "
             f"baskasi icin {SYMBOLS_ENV} degiskenini kullanin"
         )
+    return normalized
+
+
+def validate_market_symbol(symbol: str) -> str:
+    """Validate a Binance-style symbol without adding it to the model universe."""
+    if not isinstance(symbol, str):
+        raise ValueError("Sembol metin olmali")
+    normalized = symbol.strip().upper()
+    if not _SYMBOL_PATTERN.fullmatch(normalized):
+        raise ValueError(f"Gecersiz sembol: {symbol}")
     return normalized
 
 
@@ -154,3 +189,39 @@ def cache_path(data_dir: Path, symbol: str, interval: str) -> Path:
 
 def model_path(model_dir: Path, symbol: str, interval: str) -> Path:
     return model_dir / f"{validate_symbol(symbol)}_{validate_interval(interval)}.json"
+
+
+def _environment_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} true/false olmali")
+
+
+def _environment_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name)
+    try:
+        value = default if raw is None or not raw.strip() else int(raw)
+    except ValueError:
+        raise ValueError(f"{name} tam sayi olmali") from None
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} {minimum} ile {maximum} arasinda olmali")
+    return value
+
+
+def _environment_float(
+    name: str, default: float, minimum: float, maximum: float
+) -> float:
+    raw = os.environ.get(name)
+    try:
+        value = default if raw is None or not raw.strip() else float(raw)
+    except ValueError:
+        raise ValueError(f"{name} sayi olmali") from None
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} {minimum} ile {maximum} arasinda olmali")
+    return value

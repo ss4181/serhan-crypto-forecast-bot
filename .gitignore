@@ -8,13 +8,17 @@ __pycache__/
 .env
 web/
 data/*.csv
+data/scalp/*.csv
 artifacts/models/*.json
 artifacts/reports/*.json
 artifacts/reports/*.md
 state/telegram/*
 state/outcomes/*
+state/scalp/*
 !data/.gitkeep
+!data/scalp/.gitkeep
 !artifacts/models/.gitkeep
 !artifacts/reports/.gitkeep
 !state/telegram/.gitkeep
 !state/outcomes/.gitkeep
+!state/scalp/.gitkeep

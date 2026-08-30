@@ -33,7 +33,15 @@ from .outcomes import (
     settle_pending,
 )
 from .research import research_all
+from .scalping import (
+    SCALP_STEP_MS,
+    deliver_scalp_observations,
+    record_scalp_observations,
+    refresh_and_scan_scalp_universe,
+    settle_scalp_observations,
+)
 from .telegram import TelegramDelivery, TelegramNotifier, digest_signal_id, is_primary
+from .universe import UniverseManifest, load_trade1_universe
 
 
 @dataclass(frozen=True, slots=True)
@@ -582,6 +590,16 @@ def serve_forever(
     last_research_day: str | None = None
     consecutive_failures = 0
     cache = PredictionCache()
+    scalp_manifest: UniverseManifest | None = None
+    scalp_entries = ()
+    next_scalp_scan_ms = 0
+    if settings.scalp_observation_enabled:
+        scalp_manifest = load_trade1_universe()
+        scalp_entries = scalp_manifest.selected_entries()
+        progress(
+            f"Deneysel scalp gozlemi acik: {len(scalp_entries)} piyasa, "
+            f"evren {scalp_manifest.version}"
+        )
     # Nothing to download for a series whose next candle has not closed yet.
     next_close_ms: dict[tuple[str, str], int] = {}
     while True:
@@ -608,6 +626,48 @@ def serve_forever(
                 now=now,
             )
             record_open_interest(settings, now=now)
+            if scalp_manifest is not None and now_ms >= next_scalp_scan_ms:
+                try:
+                    scalp_report = refresh_and_scan_scalp_universe(
+                        settings,
+                        manifest=scalp_manifest,
+                        entries=scalp_entries,
+                        now=now,
+                        progress=progress,
+                    )
+                    scalp_settled = settle_scalp_observations(
+                        settings.scalp_state_dir,
+                        settings.scalp_data_dir,
+                        now=now,
+                    )
+                    scalp_recorded = record_scalp_observations(
+                        settings.scalp_state_dir,
+                        scalp_report.observations,
+                        manifest=scalp_manifest,
+                    )
+                    progress(
+                        f"Scalp gozlem: {scalp_report.fresh}/{scalp_report.attempted} taze, "
+                        f"{len(scalp_report.observations)} kurulum, "
+                        f"{scalp_recorded} yeni, {len(scalp_settled)} sonuc"
+                    )
+                    if is_primary():
+                        scalp_delivery = deliver_scalp_observations(
+                            settings, scalp_report, manifest=scalp_manifest
+                        )
+                        if (
+                            scalp_delivery is not None
+                            and scalp_delivery.status != "DEDUPLICATED"
+                        ):
+                            progress(
+                                f"Scalp Telegram: {scalp_delivery.status}"
+                                f"{_detail_suffix(scalp_delivery)}"
+                            )
+                except (OSError, RuntimeError, TypeError, ValueError) as error:
+                    # Experimental observation must never take the verified
+                    # BTC/ETH service down or trigger its exponential backoff.
+                    progress(f"Scalp gozlem hatasi: {error}")
+                finally:
+                    next_scalp_scan_ms = _next_scalp_scan_ms(now_ms)
             today = now.date().isoformat()
             if models_need_research(settings) or last_research_day != today:
                 progress("Gunluk walk-forward arastirma ve model yenileme basladi")
@@ -652,6 +712,12 @@ def serve_forever(
             time.sleep(backoff)
             continue
         time.sleep(poll_seconds)
+
+
+def _next_scalp_scan_ms(current_ms: int, *, close_delay_seconds: int = 20) -> int:
+    delay_ms = close_delay_seconds * 1000
+    completed_bucket = max(0, (current_ms - delay_ms) // SCALP_STEP_MS)
+    return int((completed_bucket + 1) * SCALP_STEP_MS + delay_ms)
 
 
 def record_open_interest(settings: Settings, *, now: datetime | None = None) -> int:

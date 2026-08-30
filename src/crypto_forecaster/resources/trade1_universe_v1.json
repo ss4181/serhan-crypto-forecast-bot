@@ -1,0 +1,52 @@
+{
+  "schema": "trade1-universe-v1",
+  "version": "2026-07-ek-g",
+  "source": "trade1 research/REPORT.md Ek G",
+  "exchange": "binance",
+  "quote_asset": "USDT",
+  "groups": {
+    "core30": {
+      "trade1_strategies": ["S1", "S1+S4", "S2", "S3"],
+      "spot_symbols": [
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "TRXUSDT", "LINKUSDT", "AVAXUSDT",
+        "LTCUSDT", "DOTUSDT", "BCHUSDT", "UNIUSDT", "ATOMUSDT",
+        "NEARUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "FILUSDT",
+        "SUIUSDT", "INJUSDT", "SEIUSDT", "TIAUSDT", "AAVEUSDT",
+        "ETCUSDT", "XLMUSDT", "SANDUSDT", "GALAUSDT", "PEPEUSDT"
+      ]
+    },
+    "extended59": {
+      "trade1_strategies": ["S1", "S1+S4"],
+      "spot_symbols": [
+        "RIFUSDT", "ZECUSDT", "WLDUSDT", "ENAUSDT", "TAOUSDT",
+        "SHIBUSDT", "HBARUSDT", "BONKUSDT", "STXUSDT", "JTOUSDT",
+        "TLMUSDT", "LDOUSDT", "ACEUSDT", "WIFUSDT", "VANRYUSDT",
+        "DASHUSDT", "FETUSDT", "XECUSDT", "ICPUSDT", "ZILUSDT",
+        "SKLUSDT", "ZROUSDT", "ORDIUSDT", "JUPUSDT", "ETHFIUSDT",
+        "RENDERUSDT", "CRVUSDT", "CHRUSDT", "TUSDT", "PENDLEUSDT",
+        "ALGOUSDT", "LUNCUSDT", "QTUMUSDT", "APEUSDT", "ONEUSDT",
+        "BOMEUSDT", "AXSUSDT", "ZENUSDT", "TNSRUSDT", "CHZUSDT",
+        "HOTUSDT", "DYDXUSDT", "LISTAUSDT", "PYTHUSDT", "IDUSDT",
+        "FLOKIUSDT", "1INCHUSDT", "GRTUSDT", "LSKUSDT", "COMPUSDT",
+        "ALICEUSDT", "SNXUSDT", "ARUSDT", "RSRUSDT", "STRKUSDT",
+        "ENSUSDT", "BLURUSDT", "AGLDUSDT", "CAKEUSDT"
+      ]
+    }
+  },
+  "perpetual_overrides": {
+    "PEPEUSDT": "1000PEPEUSDT",
+    "SHIBUSDT": "1000SHIBUSDT",
+    "BONKUSDT": "1000BONKUSDT",
+    "XECUSDT": "1000XECUSDT",
+    "LUNCUSDT": "1000LUNCUSDT",
+    "FLOKIUSDT": "1000FLOKIUSDT"
+  },
+  "scalp_policy": {
+    "status": "research_only",
+    "bar_interval": "5m",
+    "evaluation_horizons_minutes": [15, 30, 60],
+    "round_trip_cost_bps": 12.0,
+    "note": "Trade1 5m F1/F2/F3 families failed the historical production gate; observations from this universe are not trade candidates."
+  }
+}

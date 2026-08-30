@@ -24,6 +24,7 @@ from crypto_forecaster.service import (
     evaluate_all,
     format_observation_digest,
     format_prediction,
+    _next_scalp_scan_ms,
     make_prediction,
     PredictionCache,
 )
@@ -151,6 +152,10 @@ class FreshnessTests(unittest.TestCase):
         # The old rule allowed three whole intervals, so a delayed cloud run
         # could announce a forecast for a candle that had already closed.
         self.assertIn("hedef mum zaten kapandi", self._reasons(11 * 60 * 1000))
+
+    def test_scalp_schedule_waits_for_the_exchange_close_delay(self) -> None:
+        self.assertEqual(_next_scalp_scan_ms(310_000), 320_000)
+        self.assertEqual(_next_scalp_scan_ms(325_000), 620_000)
 
 
 class MessageTests(unittest.TestCase):

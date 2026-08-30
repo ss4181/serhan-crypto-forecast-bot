@@ -8,7 +8,7 @@ import unittest
 import pandas as pd
 
 from crypto_forecaster.config import cache_path
-from crypto_forecaster.data import MarketDataError, update_cache
+from crypto_forecaster.data import MarketDataError, update_cache, update_market_cache
 
 
 STEP_MS = 300_000
@@ -38,6 +38,19 @@ class StubClient:
         self.rows = rows
 
     def fetch_klines(self, symbol, interval, *, start_ms, end_ms):  # type: ignore[no-untyped-def]
+        selected = self.rows[
+            (self.rows["open_time_ms"] >= start_ms) & (self.rows["close_time_ms"] < end_ms)
+        ]
+        return selected.reset_index(drop=True)
+
+
+class StubMarketClient:
+    market_name = "futures"
+
+    def __init__(self, rows: pd.DataFrame) -> None:
+        self.rows = rows
+
+    def fetch_market_klines(self, symbol, interval, *, start_ms, end_ms):  # type: ignore[no-untyped-def]
         selected = self.rows[
             (self.rows["open_time_ms"] >= start_ms) & (self.rows["close_time_ms"] < end_ms)
         ]
@@ -95,6 +108,24 @@ class DataTests(unittest.TestCase):
                     client=StubClient(frame([])),
                     now=datetime.now(timezone.utc),
                 )
+
+    def test_broad_market_cache_is_isolated_from_the_model_cache(self) -> None:
+        opens = [START_MS + index * STEP_MS for index in range(12)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "scalp" / "TUSDT_5m_futures.csv"
+            now = datetime.fromtimestamp((opens[-1] + STEP_MS) / 1000, tz=timezone.utc)
+            result = update_market_cache(
+                path,
+                "TUSDT",
+                "5m",
+                days=2,
+                client=StubMarketClient(frame(opens)),  # type: ignore[arg-type]
+                now=now,
+            )
+            self.assertTrue(path.exists())
+            self.assertEqual(len(result), len(opens))
+            self.assertFalse((root / "TUSDT_5m_futures.csv").exists())
 
 
 if __name__ == "__main__":

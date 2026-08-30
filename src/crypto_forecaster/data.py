@@ -16,6 +16,7 @@ from .config import (
     cache_path,
     market,
     validate_interval,
+    validate_market_symbol,
     validate_symbol,
 )
 
@@ -64,13 +65,18 @@ class BinanceMarketDataClient:
         timeout_seconds: float = 20.0,
         request_pause_seconds: float = 0.06,
         opener: Callable[..., object] | None = None,
+        market_name: str | None = None,
     ) -> None:
         if timeout_seconds <= 0 or request_pause_seconds < 0:
             raise ValueError("Gecersiz veri istemcisi zaman ayari")
         self.timeout_seconds = timeout_seconds
         self.request_pause_seconds = request_pause_seconds
         self._opener = opener or urlopen
-        self.origin, self.path, self.page_limit = MARKET_ENDPOINTS[market()]
+        selected_market = market() if market_name is None else market_name.strip().lower()
+        if selected_market not in MARKET_ENDPOINTS:
+            raise ValueError("Piyasa yalnizca futures veya spot olabilir")
+        self.market_name = selected_market
+        self.origin, self.path, self.page_limit = MARKET_ENDPOINTS[selected_market]
 
     def fetch_klines(
         self,
@@ -80,8 +86,37 @@ class BinanceMarketDataClient:
         start_ms: int,
         end_ms: int,
     ) -> pd.DataFrame:
-        symbol = validate_symbol(symbol)
-        interval = validate_interval(interval)
+        return self._fetch_klines(
+            validate_symbol(symbol),
+            validate_interval(interval),
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+
+    def fetch_market_klines(
+        self,
+        symbol: str,
+        interval: str,
+        *,
+        start_ms: int,
+        end_ms: int,
+    ) -> pd.DataFrame:
+        """Fetch a validated public market outside the configured model set."""
+        return self._fetch_klines(
+            validate_market_symbol(symbol),
+            validate_interval(interval),
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+
+    def _fetch_klines(
+        self,
+        symbol: str,
+        interval: str,
+        *,
+        start_ms: int,
+        end_ms: int,
+    ) -> pd.DataFrame:
         if start_ms < 0 or end_ms <= start_ms:
             raise ValueError("Gecersiz kline tarih araligi")
         step_ms = INTERVAL_MILLISECONDS[interval]
@@ -215,6 +250,69 @@ def update_cache(
         warn(
             f"{symbol} {interval}: mum araliginda kopukluk bulundu; en eski {dropped} mum "
             "atildi ve son kesintisiz dizi tutuldu"
+        )
+    if combined.empty:
+        raise MarketDataError(f"{symbol} {interval} icin kesintisiz mum dizisi yok")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(path, index=False, encoding="utf-8", lineterminator="\n")
+    return combined
+
+
+def update_market_cache(
+    path: Path,
+    symbol: str,
+    interval: str,
+    *,
+    days: int,
+    client: BinanceMarketDataClient,
+    now: datetime | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> pd.DataFrame:
+    """Update a cache for a public symbol outside the configured model set.
+
+    This is used by the isolated scalp observer.  The caller supplies an
+    explicit, already-scoped path so broad-universe data can never overwrite a
+    model cache.
+    """
+    symbol = validate_market_symbol(symbol)
+    interval = validate_interval(interval)
+    if client.market_name != "futures":
+        raise ValueError("Scalp piyasa onbellegi futures istemcisi gerektirir")
+    if days < 1:
+        raise ValueError("Gun sayisi en az 1 olmali")
+    now = (now or _utc_now()).astimezone(timezone.utc)
+    end_ms = int(now.timestamp() * 1000)
+    requested_start = int((now - timedelta(days=days)).timestamp() * 1000)
+    existing = _empty_frame()
+    if path.exists():
+        try:
+            existing = load_cache(path)
+        except MarketDataError:
+            if warn is not None:
+                warn(f"{symbol} {interval}: scalp onbellegi okunamadi, bastan indiriliyor")
+    start_ms = (
+        requested_start
+        if existing.empty
+        else max(requested_start, int(existing["open_time_ms"].iloc[-1]))
+    )
+    fetched = client.fetch_market_klines(
+        symbol,
+        interval,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    combined = pd.concat([existing, fetched], ignore_index=True)
+    if combined.empty:
+        raise MarketDataError(f"{symbol} {interval} icin kapali mum bulunamadi")
+    combined = _validate_frame(combined)
+    combined = combined[combined["open_time_ms"] >= requested_start].reset_index(drop=True)
+    before = len(combined)
+    combined = _trim_to_contiguous_tail(combined, INTERVAL_MILLISECONDS[interval])
+    dropped = before - len(combined)
+    if dropped and warn is not None:
+        warn(
+            f"{symbol} {interval}: scalp mum araliginda kopukluk bulundu; "
+            f"en eski {dropped} mum atildi"
         )
     if combined.empty:
         raise MarketDataError(f"{symbol} {interval} icin kesintisiz mum dizisi yok")

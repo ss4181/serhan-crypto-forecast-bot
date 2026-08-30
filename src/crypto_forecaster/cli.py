@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import datetime, timezone
 import os
 import sys
@@ -13,6 +14,17 @@ from .data import BinanceMarketDataClient, MarketDataError, update_cache
 from .hub import post_snapshot, write_snapshot
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .research import research_all
+from .scalping import (
+    deliver_scalp_observations,
+    format_scalp_observation_digest,
+    format_scalp_scorecard,
+    load_scalp_ledger,
+    record_scalp_observations,
+    refresh_and_scan_scalp_universe,
+    scalp_scorecard,
+    scan_cached_scalp_universe,
+    settle_scalp_observations,
+)
 from .service import (
     answer_commands,
     dashboard_snapshot,
@@ -35,6 +47,7 @@ from .telegram import (
     digest_signal_id,
     is_primary,
 )
+from .universe import load_trade1_universe
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -76,6 +89,26 @@ def build_parser() -> argparse.ArgumentParser:
     cloud.add_argument("--days", type=_positive_days, default=365)
     cloud.add_argument("--force-research", action="store_true")
 
+    scalp = subparsers.add_parser(
+        "scalp-observe",
+        help="Trade1 89-coin evreninde research-only 5m kurulumlarini gozle",
+    )
+    scalp.add_argument(
+        "--offline", action="store_true", help="Ag cagirmadan mevcut scalp CSV'lerini kullan"
+    )
+    scalp.add_argument("--days", type=_scalp_days, default=None)
+    scalp.add_argument("--top-k", type=_scalp_top_k, default=None)
+    scalp.add_argument("--send", action="store_true", help="Top-K gozlem ozetini Telegram'a gonder")
+
+    scalp_card = subparsers.add_parser(
+        "scalp-scorecard", help="15/30/60dk deneysel scalp ileri-test sonuclarini ozetle"
+    )
+    scalp_card.add_argument("--days", type=int, default=30)
+
+    subparsers.add_parser(
+        "scalp-universe", help="Surumlu trade1 scalp evrenini ve yetki gruplarini listele"
+    )
+
     subparsers.add_parser("telegram-test", help="Ucuncu Telegram kanalina sabit test mesaji gonder")
 
     verify = subparsers.add_parser(
@@ -106,8 +139,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     _configure_console_encoding()
     args = build_parser().parse_args(argv)
-    settings = Settings()
     try:
+        settings = Settings()
         if args.command == "download":
             symbols = (args.symbol,) if args.symbol else SYMBOLS
             intervals = (args.interval,) if args.interval else INTERVALS
@@ -168,6 +201,53 @@ def main(argv: Sequence[str] | None = None) -> int:
             write_snapshot(settings.report_dir, snapshot)
             posted = post_snapshot(snapshot)
             print("Panel guncellendi." if posted else "Panel baglantisi tanimli degil; yerel ozet yazildi.")
+            if settings.scalp_observation_enabled:
+                try:
+                    _run_scalp_once(settings, refresh=True, send=True)
+                except (MarketDataError, OSError, RuntimeError, TypeError, ValueError) as error:
+                    print(
+                        f"Scalp gozlem hatasi (ana bulut kosusu tamamlandi): {error}",
+                        file=sys.stderr,
+                    )
+            return 0
+        if args.command == "scalp-observe":
+            scalp_settings = settings
+            if args.days is not None:
+                scalp_settings = replace(scalp_settings, scalp_cache_days=args.days)
+            if args.top_k is not None:
+                scalp_settings = replace(scalp_settings, scalp_top_k=args.top_k)
+            _run_scalp_once(scalp_settings, refresh=not args.offline, send=args.send)
+            return 0
+        if args.command == "scalp-scorecard":
+            print(
+                format_scalp_scorecard(
+                    scalp_scorecard(
+                        load_scalp_ledger(settings.scalp_state_dir), days=args.days
+                    )
+                )
+            )
+            return 0
+        if args.command == "scalp-universe":
+            manifest = load_trade1_universe()
+            entries = manifest.selected_entries()
+            counts = {
+                group: sum(entry.group == group for entry in entries)
+                for group in ("core30", "extended59")
+            }
+            print(
+                f"Trade1 evreni {manifest.version}: {len(entries)} sembol "
+                f"(core30={counts['core30']}, extended59={counts['extended59']})"
+            )
+            for entry in entries:
+                mapping = (
+                    f" -> {entry.perpetual_symbol}"
+                    if entry.perpetual_symbol != entry.spot_symbol
+                    else ""
+                )
+                print(
+                    f"{entry.spot_symbol}{mapping} [{entry.group}] "
+                    f"trade1={','.join(entry.trade1_strategies)} scalp=RESEARCH_ONLY"
+                )
             return 0
         if args.command == "telegram-test":
             message_id = TelegramNotifier().send_message(
@@ -364,6 +444,20 @@ def _positive_days(value: str) -> int:
     return parsed
 
 
+def _scalp_days(value: str) -> int:
+    parsed = int(value)
+    if not 2 <= parsed <= 30:
+        raise argparse.ArgumentTypeError("Scalp onbellegi 2 ile 30 gun arasinda olmali")
+    return parsed
+
+
+def _scalp_top_k(value: str) -> int:
+    parsed = int(value)
+    if not 1 <= parsed <= 10:
+        raise argparse.ArgumentTypeError("Scalp top-K 1 ile 10 arasinda olmali")
+    return parsed
+
+
 def _research_is_due(settings: Settings) -> bool:
     if models_need_research(settings):
         return True
@@ -372,6 +466,46 @@ def _research_is_due(settings: Settings) -> bool:
         return True
     age_seconds = datetime.now(timezone.utc).timestamp() - report.stat().st_mtime
     return age_seconds >= 20 * 60 * 60
+
+
+def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
+    manifest = load_trade1_universe()
+    entries = manifest.selected_entries()
+    report = (
+        refresh_and_scan_scalp_universe(
+            settings, manifest=manifest, entries=entries, progress=print
+        )
+        if refresh
+        else scan_cached_scalp_universe(settings, manifest=manifest, entries=entries)
+    )
+    settled = settle_scalp_observations(
+        settings.scalp_state_dir, settings.scalp_data_dir
+    )
+    recorded = record_scalp_observations(
+        settings.scalp_state_dir, report.observations, manifest=manifest
+    )
+    print(
+        f"Scalp gozlem: {report.fresh}/{report.attempted} taze, "
+        f"{len(report.observations)} kurulum, {recorded} yeni kayit, "
+        f"{len(settled)} olgun sonuc."
+    )
+    if report.errors:
+        print(f"Scalp veri hatasi: {len(report.errors)} sembol.", file=sys.stderr)
+    if report.observations:
+        print(
+            format_scalp_observation_digest(
+                report, manifest=manifest, top_k=settings.scalp_top_k
+            )
+        )
+    if not send:
+        return
+    if not _telegram_configured():
+        print("Telegram kanali tanimli/primary degil; scalp gozlemi gonderilmedi.")
+        return
+    delivery = deliver_scalp_observations(settings, report, manifest=manifest)
+    if delivery is not None:
+        detail = f" ({delivery.detail})" if delivery.detail else ""
+        print(f"Scalp Telegram: {delivery.status}{detail}")
 
 
 

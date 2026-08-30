@@ -245,6 +245,70 @@ Testler:
 python -m unittest discover -s tests -t tests
 ```
 
+## Deneysel 89-coin scalp gözlemi
+
+Trade1'in Temmuz 2026 Ek G araştırmasındaki statik evren bu projeye sürümlü
+bir manifest olarak eklenmiştir: **30 çekirdek + 59 genişletilmiş = 89 coin**.
+Bu evren mevcut BTC/ETH modellerine bağlanmaz; dolayısıyla `89 × 3` model
+oluşturmaz ve 24 saatlik bariyer tahminini scalp diye yeniden adlandırmaz.
+
+Scalp gözlem motoru yalnız kapanmış `5m` USD-M futures mumlarında, trade1'de
+önceden kaydedilip test edilmiş üç aileyi izler:
+
+- **F1:** yukarı bar + log-hacim anomalisi;
+- **F2:** hacimle doğrulanan 30 dakikalık kaskad düşüş;
+- **F3:** hacimle doğrulanan 12 saatlik zirve kırılımı.
+
+Bu ailelerin üçü de tarihsel 30-coin testinde üretim kapısını geçemedi. Bu
+bu yüzden kodda otomatik terfi yolu yoktur: bütün mesajlar açıkça **SCALP GÖZLEM /
+İŞLEM ADAYI DEĞİL** yazar. Doğrulanmış 89 piyasanın tamamı taranır; en yüksek
+puanlı en fazla beş kurulum tek kompakt Telegram satır özetinde gösterilir, 89
+ayrı mesaj gönderilmez.
+Mesajdaki puan bir olasılık veya beklenen getiri değildir; yalnız aynı taramadaki
+eşik aşım şiddetini sıralar. Sabit `12 bps` araştırma maliyeti gerçek anlık
+spread, kayma ve manuel işlem gecikmesini ölçmez.
+
+Evreni ve spot→vadeli kontrat eşlemelerini ağsız doğrulama:
+
+```powershell
+python run.py scalp-universe
+```
+
+İlk denemede küçük bir alt kümeyle başlamak için:
+
+```powershell
+$env:CRYPTO_SCALP_SYMBOLS="BTCUSDT,ETHUSDT,SOLUSDT"
+python run.py scalp-observe
+```
+
+Tüm 89 coin için `CRYPTO_SCALP_SYMBOLS` boş bırakılır. `--send` yalnız o an
+kurulum varsa top-K özetini Telegram'a yollar:
+
+```powershell
+python run.py scalp-observe --send
+```
+
+Her gözlem, sonraki 5m barın açılışını giriş kabul ederek sabit `15/30/60`
+dakika zaman çıkışlarında ve `12 bps` gidiş-dönüş maliyetle ileriye dönük
+puanlanır. Sonuçlar stratejiyi otomatik olarak yetkilendirmez; yalnız sonraki
+araştırma için değiştirilemez bir canlı kayıt oluşturur:
+
+```powershell
+python run.py scalp-scorecard --days 30
+```
+
+7/24 `serve` döngüsünde açmak için `.env`/sunucu ortamında:
+
+```text
+CRYPTO_SCALP_OBSERVATION=true
+CRYPTO_SCALP_TOP_K=5
+CRYPTO_SCALP_CACHE_DAYS=3
+CRYPTO_SCALP_MINIMUM_COVERAGE=0.90
+```
+
+Taze veri kapsamı eşik altındaysa Telegram gönderimi kapalı kalır; deneysel
+tarayıcıdaki hata mevcut BTC/ETH servisinin çalışmasını durdurmaz.
+
 ## Üçüncü Telegram kanalı
 
 Telegram'da üçüncü kanalı oluşturun. BotFather ile yeni bir bot oluşturabilir veya mevcut
