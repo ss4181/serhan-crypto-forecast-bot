@@ -30,7 +30,12 @@ from .data import (
     load_cache,
     update_market_cache,
 )
-from .telegram import TelegramDelivery, TelegramNotifier, digest_signal_id
+from .telegram import (
+    TelegramDelivery,
+    TelegramNotifier,
+    digest_signal_id,
+    telegram_menu_keyboard,
+)
 from .universe import UniverseEntry, UniverseManifest, load_trade1_universe
 
 SCALP_INTERVAL = "5m"
@@ -560,6 +565,7 @@ def deliver_scalp_observations(
             ledger=ledger,
         ),
         state_dir=settings.telegram_state_dir / "scalp",
+        reply_markup=telegram_menu_keyboard(),
     )
 
 

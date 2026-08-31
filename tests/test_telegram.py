@@ -9,7 +9,12 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-from crypto_forecaster.telegram import TelegramError, TelegramNotifier, digest_signal_id
+from crypto_forecaster.telegram import (
+    TelegramError,
+    TelegramNotifier,
+    digest_signal_id,
+    telegram_menu_keyboard,
+)
 
 
 CREDENTIALS = {
@@ -44,6 +49,23 @@ class FakeResponse:
 
 
 class TelegramTests(unittest.TestCase):
+    @patch.dict(os.environ, CREDENTIALS, clear=False)
+    def test_inline_keyboard_is_sent_with_a_message(self) -> None:
+        requests = []
+
+        def opener(request, timeout):  # type: ignore[no-untyped-def]
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        keyboard = telegram_menu_keyboard()
+        self.assertEqual(
+            TelegramNotifier(opener=opener).send_message(
+                "test", reply_markup=keyboard
+            ),
+            99,
+        )
+        self.assertEqual(requests[0]["reply_markup"], keyboard)
+
     @patch.dict(os.environ, CREDENTIALS, clear=False)
     def test_rate_limited_send_is_retried(self) -> None:
         attempts = 0

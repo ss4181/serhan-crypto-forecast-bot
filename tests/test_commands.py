@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from crypto_forecaster.commands import load_members, poll_and_answer, safe_name, save_members
 from crypto_forecaster.config import Settings
-from crypto_forecaster.telegram import TelegramError
+from crypto_forecaster.telegram import TelegramError, telegram_menu_keyboard
 
 
 OWNER = 500100
@@ -21,14 +21,24 @@ class FakeNotifier:
         self._updates = updates
         self.sent: list[tuple[int, str]] = []
         self.offsets: list[int] = []
+        self.callbacks: list[str] = []
 
     def get_updates(self, *, offset: int, limit: int = 20) -> list[dict]:
         self.offsets.append(offset)
         return [item for item in self._updates if item["update_id"] >= offset][:limit]
 
-    def send_reply(self, chat_id: int, text: str) -> int:
+    def send_reply(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        reply_markup: dict[str, object] | None = None,
+    ) -> int:
         self.sent.append((chat_id, text))
         return len(self.sent)
+
+    def answer_callback_query(self, callback_query_id: str) -> None:
+        self.callbacks.append(callback_query_id)
 
 
 def update(update_id: int, sender: int, text: str, chat: int | None = None) -> dict:
@@ -38,6 +48,20 @@ def update(update_id: int, sender: int, text: str, chat: int | None = None) -> d
             "from": {"id": sender},
             "chat": {"id": chat if chat is not None else sender},
             "text": text,
+        },
+    }
+
+
+def callback_update(
+    update_id: int, sender: int, data: str, chat: int | None = None
+) -> dict:
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": f"callback-{update_id}",
+            "from": {"id": sender},
+            "message": {"chat": {"id": chat if chat is not None else sender}},
+            "data": data,
         },
     }
 
@@ -52,6 +76,7 @@ def run(directory: Path, updates: list[dict], members: dict[int, str] | None = N
         status_text=lambda: "DURUM METNI",
         performance_text=lambda days: f"KARNE {days} GUN",
         notifier=notifier,
+        reply_markup=telegram_menu_keyboard(),
     )
     return outcome, notifier, settings
 
@@ -77,6 +102,26 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(outcome.answered, 2)
         self.assertEqual(notifier.sent[0], (MEMBER, "DURUM METNI"))
         self.assertEqual(notifier.sent[1], (MEMBER, "KARNE 7 GUN"))
+
+    def test_authorized_inline_button_returns_explanations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            outcome, notifier, _ = run(
+                Path(directory), [callback_update(1, OWNER, "explanations")]
+            )
+        self.assertEqual(outcome.answered, 1)
+        self.assertEqual(notifier.callbacks, ["callback-1"])
+        self.assertIn("ACIKLAMALAR", notifier.sent[0][1])
+        self.assertIn("SCALP AILELERI", notifier.sent[0][1])
+
+    def test_unauthorized_inline_button_is_silent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            outcome, notifier, _ = run(
+                Path(directory), [callback_update(1, STRANGER, "explanations")]
+            )
+        self.assertEqual(outcome.refused, 1)
+        self.assertEqual(outcome.answered, 0)
+        self.assertEqual(notifier.callbacks, ["callback-1"])
+        self.assertEqual(notifier.sent, [])
 
     def test_performance_defaults_to_thirty_days(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -164,7 +209,13 @@ class FailureVisibilityTests(unittest.TestCase):
         # A dropped reply used to look exactly like a command that was never
         # sent: consumed, unanswered, unlogged.
         class BrokenNotifier(FakeNotifier):
-            def send_reply(self, chat_id: int, text: str) -> int:
+            def send_reply(
+                self,
+                chat_id: int,
+                text: str,
+                *,
+                reply_markup: dict[str, object] | None = None,
+            ) -> int:
                 raise TelegramError("kanal reddetti")
 
         with tempfile.TemporaryDirectory() as directory:

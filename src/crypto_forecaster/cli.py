@@ -46,6 +46,7 @@ from .telegram import (
     TelegramNotifier,
     digest_signal_id,
     is_primary,
+    telegram_menu_keyboard,
 )
 from .universe import load_trade1_universe
 
@@ -295,7 +296,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "telegram-test":
             message_id = TelegramNotifier().send_message(
                 "BTC/ETH olasilik botu — ucuncu kanal baglanti testi.\n\n"
-                "Yalnizca arastirma altyapisidir; yatirim tavsiyesi veya emir degildir."
+                "Yalnizca arastirma altyapisidir; yatirim tavsiyesi veya emir degildir.",
+                reply_markup=telegram_menu_keyboard(),
             )
             print(f"Telegram test mesaji gonderildi (message_id={message_id}).")
             return 0
@@ -403,6 +405,7 @@ def _verify_models(settings: Settings, *, send: bool) -> int:
                     signal_id=digest_signal_id(f"verify|{key}", bucket),
                     text=text,
                     state_dir=settings.telegram_state_dir,
+                    reply_markup=telegram_menu_keyboard(),
                 )
                 status = delivery.status + (
                     f" ({delivery.detail})" if delivery.detail else ""

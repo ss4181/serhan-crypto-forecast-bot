@@ -19,7 +19,7 @@ from .config import (
     local_text,
     model_path,
 )
-from .commands import CommandOutcome, poll_and_answer
+from .commands import CommandOutcome, format_explanations, poll_and_answer
 from .data import BinanceMarketDataClient, load_cache, update_cache
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
@@ -40,7 +40,13 @@ from .scalping import (
     refresh_and_scan_scalp_universe,
     settle_scalp_observations,
 )
-from .telegram import TelegramDelivery, TelegramNotifier, digest_signal_id, is_primary
+from .telegram import (
+    TelegramDelivery,
+    TelegramNotifier,
+    digest_signal_id,
+    is_primary,
+    telegram_menu_keyboard,
+)
 from .universe import UniverseManifest, load_trade1_universe
 
 
@@ -501,6 +507,7 @@ def deliver_eligible(
             signal_id=prediction.signal_id,
             text=format_prediction(prediction),
             state_dir=settings.telegram_state_dir,
+            reply_markup=telegram_menu_keyboard(),
         )
         if delivery.status == "SENT":
             _record(settings, prediction)
@@ -528,6 +535,7 @@ def deliver_observation_digest(
         signal_id=signal_id,
         text=format_observation_digest(predictions, now=current),
         state_dir=settings.telegram_state_dir,
+        reply_markup=telegram_menu_keyboard(),
     )
     if delivery.status == "SENT":
         for prediction in predictions:
@@ -552,6 +560,7 @@ def deliver_scorecard(
         signal_id=signal_id,
         text=format_scorecard(card),
         state_dir=settings.telegram_state_dir,
+        reply_markup=telegram_menu_keyboard(),
     )
 
 
@@ -570,6 +579,8 @@ def answer_commands(
         performance_text=lambda days: format_scorecard(
             scorecard(load_ledger(settings.outcome_state_dir), days=days, now=current)
         ),
+        explanation_text=format_explanations,
+        reply_markup=telegram_menu_keyboard(),
         notifier=notifier,
         now=current,
     )

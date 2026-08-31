@@ -92,6 +92,8 @@ def poll_and_answer(
     *,
     status_text: Callable[[], str],
     performance_text: Callable[[int], str],
+    explanation_text: Callable[[], str] | None = None,
+    reply_markup: dict[str, object] | None = None,
     notifier: TelegramNotifier | None = None,
     now: datetime | None = None,
 ) -> CommandOutcome:
@@ -115,6 +117,54 @@ def poll_and_answer(
         update_id = update.get("update_id")
         if isinstance(update_id, int) and not isinstance(update_id, bool):
             highest = max(highest, update_id)
+        callback = update.get("callback_query")
+        if isinstance(callback, dict):
+            callback_id = callback.get("id")
+            if isinstance(callback_id, str):
+                try:
+                    client.answer_callback_query(callback_id)
+                except (TelegramError, ValueError) as error:
+                    failed += 1
+                    detail = str(error)
+            sender = callback.get("from")
+            callback_message = callback.get("message")
+            callback_chat = (
+                callback_message.get("chat")
+                if isinstance(callback_message, dict)
+                else None
+            )
+            data = callback.get("data")
+            sender_id = sender.get("id") if isinstance(sender, dict) else None
+            chat_id = callback_chat.get("id") if isinstance(callback_chat, dict) else None
+            if (
+                not isinstance(data, str)
+                or not _is_identifier(sender_id)
+                or not _is_identifier(chat_id)
+            ):
+                continue
+            if sender_id != owner and sender_id not in members:
+                refused += 1
+                continue
+            try:
+                reply = _answer_callback(
+                    data,
+                    status_text=status_text,
+                    performance_text=performance_text,
+                    explanation_text=explanation_text or format_explanations,
+                )
+            except Exception as error:  # a bad answer must not kill the cycle
+                failed += 1
+                detail = f"dugme yaniti uretilemedi: {error}"
+                reply = "Bilgi su an uretilemedi. Sunucu gunlugunde ayrinti var."
+            if reply is None:
+                continue
+            try:
+                _send_reply(client, int(chat_id), reply, reply_markup=reply_markup)
+                answered += 1
+            except (TelegramError, ValueError) as error:
+                failed += 1
+                detail = str(error)
+            continue
         message = update.get("message")
         if not isinstance(message, dict):
             continue
@@ -141,6 +191,7 @@ def poll_and_answer(
                 state_dir=state_dir,
                 status_text=status_text,
                 performance_text=performance_text,
+                explanation_text=explanation_text or format_explanations,
                 now=now or datetime.now(timezone.utc),
             )
         except Exception as error:  # a bad answer must not kill the cycle
@@ -150,7 +201,7 @@ def poll_and_answer(
         if reply is None:
             continue
         try:
-            client.send_reply(int(chat_id), reply)
+            _send_reply(client, int(chat_id), reply, reply_markup=reply_markup)
             answered += 1
         except (TelegramError, ValueError) as error:
             # Silence here used to consume the command and leave no trace, so a
@@ -168,6 +219,18 @@ def poll_and_answer(
     )
 
 
+def _send_reply(
+    client: TelegramNotifier,
+    chat_id: int,
+    text: str,
+    *,
+    reply_markup: dict[str, object] | None,
+) -> int:
+    if reply_markup is None:
+        return client.send_reply(chat_id, text)
+    return client.send_reply(chat_id, text, reply_markup=reply_markup)
+
+
 def _answer(
     text: str,
     *,
@@ -177,6 +240,7 @@ def _answer(
     state_dir: Path,
     status_text: Callable[[], str],
     performance_text: Callable[[int], str],
+    explanation_text: Callable[[], str],
     now: datetime,
 ) -> str | None:
     match = _COMMAND.match(text.strip())
@@ -186,6 +250,8 @@ def _answer(
     argument = (match.group(2) or "").strip()
     if command in ("yardim", "start", "help"):
         return _help_text(is_owner=sender_id == owner)
+    if command in ("aciklamalar", "explanations", "strateji"):
+        return explanation_text()
     if command in ("durum", "status"):
         return status_text()
     if command in ("performans", "karne"):
@@ -197,6 +263,22 @@ def _answer(
             return "Bu komutu yalnizca kanal sahibi kullanabilir."
         return _change_members(command, argument, members=members, state_dir=state_dir)
     return "Bilinmeyen komut. /yardim yazin."
+
+
+def _answer_callback(
+    data: str,
+    *,
+    status_text: Callable[[], str],
+    performance_text: Callable[[int], str],
+    explanation_text: Callable[[], str],
+) -> str | None:
+    if data == "explanations":
+        return explanation_text()
+    if data == "status":
+        return status_text()
+    if data.startswith("performance:"):
+        return performance_text(_days_argument(data.partition(":")[2]))
+    return "Bilinmeyen dugme. /yardim yazin."
 
 
 def _change_members(
@@ -242,6 +324,7 @@ def _help_text(*, is_owner: bool) -> str:
         "",
         "/durum — alti modelin su anki durumu",
         "/performans [gun] — gonderilen sinyallerin gercek sonucu (varsayilan 30 gun)",
+        "/aciklamalar — bildirim alanlari ve strateji mantigi",
         "/kisiler — yetkili kisiler",
         "/yardim — bu liste",
     ]
@@ -261,6 +344,53 @@ def _help_text(*, is_owner: bool) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def format_explanations() -> str:
+    """Explain every alert field and the research-only scalp hypotheses."""
+    return "\n".join(
+        [
+            "📖 ACIKLAMALAR — bildirimleri nasil okumali?",
+            "",
+            "SINYAL ALANLARI",
+            "• Sinyal fiyati: kosulun olustugu kapanmis 5m mum fiyati; guncel fiyat degildir.",
+            "• Aile: sinyali ureten teknik gozlem turu.",
+            "• Skor: kosulun gucu; olasilik veya kar tahmini degildir.",
+            "• Tetikleyici: gozlemin neden olustugunu aciklar.",
+            "• Spread: en iyi alis-satis farki; dusuk olmasi daha sagliklidir.",
+            "• Maliyet: komisyon + spread + tahmini kayma dahil gidis-donus maliyeti.",
+            "  1 bps = %0,01; maliyet sonrasi hareket pozitif degilse avantaj yoktur.",
+            "",
+            "SCALP AILELERI (ARASTIRMA)",
+            "• F1 hacim momentumu: yukari mum + log-hacim z en az 3.",
+            "• F2 kaskad dusus: 30dk getiri en az 3 sigma asagi + hacim z en az 2.",
+            "• F3 kirilim devami: onceki 12s zirve ustu kapanis + hacim z en az 2.",
+            "• B1 boga kirilimi: boga rejiminde onceki 24s zirve ustu + hacim z en az 1.",
+            "• B2 geri cekilme donusu: trend icinde kontrollu dusus sonrasi toparlanma.",
+            "• B3 goreli guc gecisi: 24s getiride ilk %10'a yeni giris + kisa donem yukari.",
+            "",
+            "REJIM VE ETIKET",
+            "• BOGA: BTC/ETH trendi ve piyasalarin genis bolumu yukari.",
+            "• GECIS: kosullar karisik; KAPALI: boga kosulu yok.",
+            "• Genislik: 89 piyasanin 48 saatlik trend filtresinin ustunde olan orani.",
+            "• RADAR: tek aile goruldu; KURULUM: ayni coinde coklu aile + boga rejimi + uygun spread.",
+            "  Ikisi de islem emri veya yatirim tavsiyesi degildir.",
+            "",
+            "BT 15/30/60dk",
+            "• Yalnizca kapanmis ileri-test sonuclaridir; her ufuk ayri hesaplanir.",
+            "• Yukari/asagi olasiligi: gecmiste fiyat hangi yonde hareket etti.",
+            "• Medyan hareket: tipik brut hareket (bps ve %).",
+            "• Medyan net hareket: tahmini maliyet cikarildiktan sonraki tipik hareket.",
+            "• n: hesaba giren sonuc sayisi; n dusukse belirsizlik yuksektir.",
+            "",
+            "BTC/ETH MODEL MESAJLARI",
+            "• Yukari/asagi yuzdeleri: kalibre edilmis model olasiligi.",
+            "• Medyan kapanis: benzer gecmis durumlarin tahmini kapanis seviyesi.",
+            "• Net beklenti ve isabet: tamamen dis-ornek walk-forward backtest metrikleri.",
+            "",
+            "Bot emir vermez; tum scalp bildirimleri gozlem ve arastirma amaclidir.",
+        ]
+    )
 
 
 def _days_argument(argument: str) -> int:
@@ -303,6 +433,7 @@ __all__ = [
     "load_members",
     "owner_id",
     "poll_and_answer",
+    "format_explanations",
     "safe_name",
     "save_members",
 ]

@@ -23,6 +23,19 @@ _CHAT_PATTERN = re.compile(r"(?:-?[1-9][0-9]{0,19}|@[A-Za-z][A-Za-z0-9_]{4,31})\
 _SIGNAL_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
+def telegram_menu_keyboard() -> dict[str, object]:
+    """Return the fixed, read-only menu attached to bot messages."""
+    return {
+        "inline_keyboard": [
+            [{"text": "📖 Açıklamalar", "callback_data": "explanations"}],
+            [
+                {"text": "📊 Güncel durum", "callback_data": "status"},
+                {"text": "📈 Performans 30g", "callback_data": "performance:30"},
+            ],
+        ]
+    }
+
+
 class TelegramError(RuntimeError):
     """Something went wrong and the message may or may not have been sent."""
 
@@ -93,36 +106,48 @@ class TelegramNotifier:
                 "offset": int(offset),
                 "limit": max(1, min(int(limit), 100)),
                 "timeout": 0,
-                "allowed_updates": ["message"],
+                "allowed_updates": ["message", "callback_query"],
             },
         )
         if not isinstance(result, list):
             raise TelegramError("Telegram guncelleme listesi gecersiz")
         return [item for item in result if isinstance(item, dict)]
 
-    def send_reply(self, chat_id: int, text: str) -> int:
+    def send_reply(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        reply_markup: dict[str, object] | None = None,
+    ) -> int:
         """Answer one authorised person in their own chat, not in the channel."""
         if isinstance(chat_id, bool) or not isinstance(chat_id, int):
             raise ValueError("Gecersiz sohbet kimligi")
         _validate_text(text)
-        result = self._api(
-            "sendMessage",
-            {"chat_id": chat_id, "text": text, "link_preview_options": {"is_disabled": True}},
-        )
+        payload: dict[str, object] = {
+            "chat_id": chat_id,
+            "text": text,
+            "link_preview_options": {"is_disabled": True},
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        result = self._api("sendMessage", payload)
         if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
             raise TelegramError("Telegram yaniti dogrulanamadi")
         return int(result["message_id"])
 
-    def send_message(self, text: str) -> int:
+    def send_message(
+        self, text: str, *, reply_markup: dict[str, object] | None = None
+    ) -> int:
         _validate_text(text)
-        result = self._api(
-            "sendMessage",
-            {
-                "chat_id": self._chat_id,
-                "text": text,
-                "link_preview_options": {"is_disabled": True},
-            },
-        )
+        payload: dict[str, object] = {
+            "chat_id": self._chat_id,
+            "text": text,
+            "link_preview_options": {"is_disabled": True},
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        result = self._api("sendMessage", payload)
         try:
             message_id = result["message_id"]  # type: ignore[index]
             response_chat = result["chat"]  # type: ignore[index]
@@ -141,6 +166,16 @@ class TelegramNotifier:
             ):
                 raise TelegramError("Telegram hedef kanali dogrulanamadi")
         return message_id
+
+    def answer_callback_query(self, callback_query_id: str) -> None:
+        """Stop Telegram's loading spinner after an inline button is pressed."""
+        if (
+            not isinstance(callback_query_id, str)
+            or not 1 <= len(callback_query_id) <= 256
+            or "\x00" in callback_query_id
+        ):
+            raise ValueError("Gecersiz callback kimligi")
+        self._api("answerCallbackQuery", {"callback_query_id": callback_query_id})
 
     def _post(self, request: Request) -> tuple[int, bytes]:
         """Send once, retrying only when Telegram itself rejected the call.
@@ -165,7 +200,14 @@ class TelegramNotifier:
                 raise TelegramError("Telegram istegi basarisiz") from None
         raise TelegramRejected("Telegram istegi reddedildi")
 
-    def deliver_once(self, *, signal_id: str, text: str, state_dir: Path) -> TelegramDelivery:
+    def deliver_once(
+        self,
+        *,
+        signal_id: str,
+        text: str,
+        state_dir: Path,
+        reply_markup: dict[str, object] | None = None,
+    ) -> TelegramDelivery:
         if not _SIGNAL_PATTERN.fullmatch(signal_id):
             raise ValueError("Gecersiz sinyal kimligi")
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -197,7 +239,7 @@ class TelegramNotifier:
                 status="UNCERTAIN", message_id=None, detail="es zamanli gonderim denemesi"
             )
         try:
-            message_id = self.send_message(text)
+            message_id = self.send_message(text, reply_markup=reply_markup)
         except TelegramRejected as error:
             # Telegram refused, so nothing reached the channel.  Drop the intent
             # so this signal is retried once the cause -- usually a missing
@@ -281,6 +323,7 @@ __all__ = [
     "OWNER_ID_ENV",
     "ROLE_ENV",
     "TOKEN_ENV",
+    "telegram_menu_keyboard",
     "is_primary",
     "TelegramDelivery",
     "TelegramError",
