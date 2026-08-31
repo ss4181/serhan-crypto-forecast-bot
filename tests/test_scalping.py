@@ -21,6 +21,7 @@ from crypto_forecaster.scalping import (
     load_scalp_ledger,
     record_scalp_observations,
     scalp_cache_path,
+    scalp_forecast_stats,
     scalp_scorecard,
     scan_cached_scalp_universe,
     scan_scalp_frame,
@@ -330,6 +331,41 @@ class DigestTests(unittest.TestCase):
         self.assertNotIn("\n   perp ", text)
         self.assertLess(text.count("\n"), 10)
         self.assertLessEqual(len(text), 4096)
+
+    def test_digest_shows_settled_up_down_probability_and_expected_move(self) -> None:
+        manifest = load_trade1_universe()
+        item = observation()
+        rows = [
+            {
+                "family": "F1",
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": gross,
+                "net_bps": gross - 12.0,
+            }
+            for horizon, gross in (
+                (15, 20.0),
+                (15, -10.0),
+                (30, 30.0),
+                (30, -10.0),
+                (60, 50.0),
+                (60, -20.0),
+            )
+        ]
+        stats = scalp_forecast_stats(item, rows)
+        self.assertEqual(stats[30][0], 2)
+        self.assertAlmostEqual(stats[30][1], 0.5)
+        self.assertAlmostEqual(stats[30][2], 10.0)
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), (item,), START_MS)
+        text = format_scalp_observation_digest(
+            report, manifest=manifest, top_k=1, ledger=rows
+        )
+        self.assertIn("F1 BT 15/30/60dk", text)
+        self.assertIn("yukari %50/%50/%50", text)
+        self.assertIn("asagi %50/%50/%50", text)
+        self.assertIn("med hareket +5.0/+10.0/+15.0bps", text)
+        self.assertIn("net -7.0/-2.0/+3.0bps", text)
 
     def test_low_coverage_fails_closed_before_telegram(self) -> None:
         manifest = load_trade1_universe()

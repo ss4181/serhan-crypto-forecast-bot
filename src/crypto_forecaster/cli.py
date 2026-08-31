@@ -558,7 +558,10 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
     if report.observations:
         print(
             format_scalp_observation_digest(
-                report, manifest=manifest, top_k=settings.scalp_top_k
+                report,
+                manifest=manifest,
+                top_k=settings.scalp_top_k,
+                ledger=load_scalp_ledger(settings.scalp_state_dir),
             )
         )
     if not send:

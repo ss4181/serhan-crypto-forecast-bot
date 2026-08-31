@@ -337,7 +337,13 @@ def format_observation_digest(
         mark = "🟢" if item.eligible else "▫️"
         lines.append(
             f"{mark} {item.symbol} {INTERVAL_LABELS[item.interval]} — {item.direction} "
-            f"%{item.confidence * 100:.1f} | ${item.source_price:,.2f}"
+            f"yukari %{item.probability_up * 100:.1f} / asagi %{item.probability_down * 100:.1f} | "
+            f"${item.source_price:,.2f}"
+        )
+        median_move_pct = (item.close_range_median / item.source_price - 1.0) * 100.0
+        lines.append(
+            f"    medyan kapanis ${item.close_range_median:,.2f} "
+            f"({median_move_pct:+.2f}%) | ufuk {INTERVAL_LABELS[item.interval]}"
         )
         lines.append(
             f"    net beklenti {metrics.net_edge_bps:+.2f} bps "

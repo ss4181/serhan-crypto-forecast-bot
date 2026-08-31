@@ -39,6 +39,7 @@ SCALP_MINIMUM_BARS = 290
 SCALP_PENDING_SCHEMA = "scalp-observation-pending-v1"
 SCALP_LEDGER_SCHEMA = "scalp-observation-outcome-v1"
 SCALP_SETTLEMENT_GRACE_DAYS = 2
+SCALP_BACKTEST_HORIZONS = (15, 30, 60)
 FAMILY_LABELS = {
     "F1": "hacim momentumu",
     "F2": "kaskad tepki",
@@ -463,10 +464,12 @@ def format_scalp_observation_digest(
     *,
     manifest: UniverseManifest,
     top_k: int,
+    ledger: Iterable[dict[str, Any]] = (),
 ) -> str:
     shown = report.top(top_k)
     if not shown:
         raise ValueError("Scalp gozlem raporu icin kurulum yok")
+    ledger_rows = tuple(ledger)
     stamp = local_text(report.evaluated_at_ms, with_seconds=False)
     regime = report.regime or BullRegime("UNKNOWN", 0.0, 0.0, 0.0, False, 0)
     lines = [
@@ -501,9 +504,17 @@ def format_scalp_observation_digest(
         cost = item.estimated_cost_bps or manifest.scalp_round_trip_cost_bps
         detail = ", ".join(item.details)
         lines.append(
-            f"{index}. {tier} {item.spot_symbol} {mapping}↑ {families} • "
-            f"{item.score:.2f} • maliyet~{cost:.1f}bps/{spread} • {detail}"
+            f"{index}. {tier} {item.spot_symbol} {mapping}{families} • "
+            f"skor {item.score:.2f} • maliyet~{cost:.1f}bps/{spread} • {detail}"
         )
+        for family_item in items:
+            lines.append(
+                "    "
+                + _format_scalp_backtest(
+                    family_item,
+                    ledger_rows,
+                )
+            )
     lines.extend(
         [
             "",
@@ -531,6 +542,7 @@ def deliver_scalp_observations(
     shown = report.top(settings.scalp_top_k)
     if not shown:
         return None
+    ledger = load_scalp_ledger(settings.scalp_state_dir)
     newest_close = max(item.bar_close_time_ms for item in shown)
     bucket = newest_close // SCALP_STEP_MS
     signal_id = digest_signal_id(f"scalp-observation|{manifest.version}", bucket)
@@ -540,8 +552,130 @@ def deliver_scalp_observations(
             report,
             manifest=manifest,
             top_k=settings.scalp_top_k,
+            ledger=ledger,
         ),
         state_dir=settings.telegram_state_dir / "scalp",
+    )
+
+
+def scalp_forecast_stats(
+    item: ScalpObservation,
+    rows: Iterable[dict[str, Any]],
+) -> dict[int, tuple[int, float, float, float]]:
+    """Return empirical up probability and price movement by exit horizon.
+
+    The ledger contains only settled observations, so this is a forward-test
+    estimate rather than a model prediction.  Prefer the same symbol and
+    regime when at least ten observations exist; otherwise use the broader
+    family/regime sample and expose the sample count in the alert.
+
+    Each value is ``(count, probability_up, median_gross_bps, median_net_bps)``.
+    Missing or malformed rows are ignored rather than taking down Telegram.
+    """
+    all_rows = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("family", "")) == item.family
+        and _scalp_row_has_numbers(row)
+    ]
+    if not all_rows:
+        return {}
+
+    same_symbol_regime = [
+        row
+        for row in all_rows
+        if str(row.get("perpetual_symbol", "")) == item.perpetual_symbol
+        and str(row.get("regime_state", "UNKNOWN")) == item.regime_state
+    ]
+    same_regime = [
+        row
+        for row in all_rows
+        if str(row.get("regime_state", "UNKNOWN")) == item.regime_state
+    ]
+    if len(same_symbol_regime) >= 10:
+        candidates = same_symbol_regime
+    elif len(same_regime) >= 10:
+        candidates = same_regime
+    else:
+        candidates = all_rows
+
+    result: dict[int, tuple[int, float, float, float]] = {}
+    for horizon in SCALP_BACKTEST_HORIZONS:
+        selected = [
+            row
+            for row in candidates
+            if int(row.get("horizon_minutes", 0)) == horizon
+        ]
+        if not selected:
+            continue
+        gross = [float(row["gross_bps"]) for row in selected]
+        net: list[float] = []
+        for row, gross_value in zip(selected, gross):
+            try:
+                net_value = float(row.get("net_bps"))
+            except (TypeError, ValueError):
+                try:
+                    net_value = gross_value - float(
+                        row.get("round_trip_cost_bps", 0.0)
+                    )
+                except (TypeError, ValueError):
+                    net_value = gross_value
+            if not math.isfinite(net_value):
+                net_value = gross_value
+            net.append(net_value)
+        result[horizon] = (
+            len(gross),
+            sum(value > 0.0 for value in gross) / len(gross),
+            float(median(gross)),
+            float(median(net)),
+        )
+    return result
+
+
+def _scalp_row_has_numbers(row: dict[str, Any]) -> bool:
+    try:
+        gross = float(row["gross_bps"])
+        horizon = int(row["horizon_minutes"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return horizon in SCALP_BACKTEST_HORIZONS and math.isfinite(gross)
+
+
+def _format_scalp_backtest(
+    item: ScalpObservation,
+    rows: Iterable[dict[str, Any]],
+) -> str:
+    stats = scalp_forecast_stats(item, rows)
+    if not stats:
+        return f"{item.family} BT: henuz yerlesmis ileri-test sonucu yok"
+    up = "/".join(
+        f"%{stats[horizon][1] * 100:.0f}" if horizon in stats else "-"
+        for horizon in SCALP_BACKTEST_HORIZONS
+    )
+    down = "/".join(
+        f"%{(1.0 - stats[horizon][1]) * 100:.0f}" if horizon in stats else "-"
+        for horizon in SCALP_BACKTEST_HORIZONS
+    )
+    gross = "/".join(
+        f"{stats[horizon][2]:+.1f}" if horizon in stats else "-"
+        for horizon in SCALP_BACKTEST_HORIZONS
+    )
+    gross_pct = "/".join(
+        f"{stats[horizon][2] / 100.0:+.2f}%" if horizon in stats else "-"
+        for horizon in SCALP_BACKTEST_HORIZONS
+    )
+    net = "/".join(
+        f"{stats[horizon][3]:+.1f}" if horizon in stats else "-"
+        for horizon in SCALP_BACKTEST_HORIZONS
+    )
+    counts = "/".join(
+        str(stats[horizon][0]) if horizon in stats else "-"
+        for horizon in SCALP_BACKTEST_HORIZONS
+    )
+    return (
+        f"{item.family} BT 15/30/60dk: yukari {up} | asagi {down} • "
+        f"med hareket {gross}bps ({gross_pct}) • net {net}bps • n={counts}"
     )
 
 
@@ -1097,6 +1231,7 @@ __all__ = [
     "record_scalp_observations",
     "refresh_and_scan_scalp_universe",
     "scalp_cache_path",
+    "scalp_forecast_stats",
     "scalp_scorecard",
     "scan_cached_scalp_universe",
     "scan_scalp_frame",

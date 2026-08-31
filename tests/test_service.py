@@ -199,6 +199,8 @@ class MessageTests(unittest.TestCase):
         for symbol in ("BTCUSDT", "ETHUSDT"):
             for label in ("5 dakika", "15 dakika", "1 saat"):
                 self.assertIn(f"{symbol} {label}", text)
+        self.assertIn("yukari %64.0 / asagi %36.0", text)
+        self.assertIn("medyan kapanis $60,020.00 (+0.03%)", text)
         self.assertLessEqual(len(text), 4096)
 
 
