@@ -503,17 +503,22 @@ def format_scalp_observation_digest(
         spread = f"sp {item.spread_bps:.1f}" if item.spread_bps is not None else "sp ?"
         cost = item.estimated_cost_bps or manifest.scalp_round_trip_cost_bps
         detail = ", ".join(item.details)
-        lines.append(
-            f"{index}. {tier} {item.spot_symbol} {mapping}{families} • "
-            f"skor {item.score:.2f} • maliyet~{cost:.1f}bps/{spread} • {detail}"
+        lines.extend(
+            [
+                f"{index}. {tier} | {item.spot_symbol} {mapping}".rstrip(),
+                f"   Sinyal fiyati: {_format_signal_price(item.price)}",
+                f"   Aile: {families} | Skor: {item.score:.2f}",
+                f"   Maliyet: ~{cost:.1f} bps | Spread: {spread}",
+                f"   Tetikleyici: {detail}",
+            ]
         )
         for family_item in items:
-            lines.append(
-                "    "
-                + _format_scalp_backtest(
+            lines.extend(
+                "   " + line
+                for line in _format_scalp_backtest(
                     family_item,
                     ledger_rows,
-                )
+                ).splitlines()
             )
     lines.extend(
         [
@@ -673,10 +678,22 @@ def _format_scalp_backtest(
         str(stats[horizon][0]) if horizon in stats else "-"
         for horizon in SCALP_BACKTEST_HORIZONS
     )
-    return (
-        f"{item.family} BT 15/30/60dk: yukari {up} | asagi {down} • "
-        f"med hareket {gross}bps ({gross_pct}) • net {net}bps • n={counts}"
+    return "\n".join(
+        [
+            f"{item.family} BT 15/30/60dk (yerlesmis ileri-test):",
+            f"  Yukari olasiligi: {up}",
+            f"  Asagi olasiligi: {down}",
+            f"  Medyan hareket: {gross} bps ({gross_pct})",
+            f"  Medyan net hareket: {net} bps",
+            f"  Ornek sayisi n: {counts}",
+        ]
     )
+
+
+def _format_signal_price(price: float) -> str:
+    """Keep tiny altcoin prices readable without hiding precision."""
+    text = f"${price:,.8f}".rstrip("0").rstrip(".")
+    return text if text != "$" else "$0"
 
 
 def record_scalp_observations(

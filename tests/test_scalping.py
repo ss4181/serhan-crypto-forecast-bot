@@ -327,9 +327,10 @@ class DigestTests(unittest.TestCase):
         self.assertIn("F2", text)
         self.assertIn("F3", text)
         self.assertNotIn("F1 hacim", text)
+        self.assertIn("Sinyal fiyati: $100", text)
         self.assertIn("ISLEM ADAYI DEGILDIR", text)
         self.assertNotIn("\n   perp ", text)
-        self.assertLess(text.count("\n"), 10)
+        self.assertLess(text.count("\n"), 30)
         self.assertLessEqual(len(text), 4096)
 
     def test_digest_shows_settled_up_down_probability_and_expected_move(self) -> None:
@@ -362,10 +363,10 @@ class DigestTests(unittest.TestCase):
             report, manifest=manifest, top_k=1, ledger=rows
         )
         self.assertIn("F1 BT 15/30/60dk", text)
-        self.assertIn("yukari %50/%50/%50", text)
-        self.assertIn("asagi %50/%50/%50", text)
-        self.assertIn("med hareket +5.0/+10.0/+15.0bps", text)
-        self.assertIn("net -7.0/-2.0/+3.0bps", text)
+        self.assertIn("Yukari olasiligi: %50/%50/%50", text)
+        self.assertIn("Asagi olasiligi: %50/%50/%50", text)
+        self.assertIn("Medyan hareket: +5.0/+10.0/+15.0 bps", text)
+        self.assertIn("Medyan net hareket: -7.0/-2.0/+3.0 bps", text)
 
     def test_low_coverage_fails_closed_before_telegram(self) -> None:
         manifest = load_trade1_universe()

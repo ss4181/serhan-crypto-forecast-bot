@@ -284,9 +284,11 @@ USD-M uç noktasından en iyi alış/satış ile funding bilgisini alır. Her g�
 maliyeti yazar. Hesaba özel komisyon imzalı istek gerektirdiği için ortam
 değişkeniyle açıkça belirtilir; bot API anahtarı istemez ve emir veremez.
 
-Telegram scalp özetindeki `BT 15/30/60dk` satırı, yalnızca kapanmış ileri-test
-kaydından hesaplanır: her ufuk için yukarı/aşağı gerçekleşme oranı, medyan brüt
-hareket, medyan maliyet-sonrası hareket ve örnek sayısı (`n`) gösterilir. Yeterli
+Telegram scalp özeti her coin için dikey bir blok gösterir: **sinyal anındaki
+fiyat**, aile/skor, maliyet/spread ve tetikleyici ayrı satırlardadır. `BT
+15/30/60dk` bölümü yalnızca kapanmış ileri-test kaydından hesaplanır; her ufuk
+için yukarı/aşağı gerçekleşme oranı, medyan brüt hareket, medyan
+maliyet-sonrası hareket ve örnek sayısı (`n`) ayrı satırda gösterilir. Yeterli
 coin/rejim geçmişi varsa o kapsam tercih edilir; aksi halde aynı ailenin geniş
 evren geçmişine düşülür. Henüz sonuç yoksa `henuz yerlesmis ileri-test sonucu
 yok` yazılır; model veya olasılık uydurulmaz.
