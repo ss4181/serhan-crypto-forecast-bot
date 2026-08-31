@@ -151,7 +151,9 @@ def make_prediction(
     atr = float(row["atr"])
     target_multiple = float(bundle.scenarios["target_atr_multiple"])
     close_low = price * math.exp(float(scenario["close_return_atr_p10"]) * atr / price)
-    close_median = price * math.exp(float(scenario["close_return_atr_p50"]) * atr / price)
+    close_median = price * math.exp(
+        float(scenario["close_return_atr_p50"]) * atr / price
+    )
     close_high = price * math.exp(float(scenario["close_return_atr_p90"]) * atr / price)
     indicators = _indicator_contributions(bundle, vector, direction)
     latest_close_ms = int(row["close_time_ms"])
@@ -168,7 +170,9 @@ def make_prediction(
     if latest_close_ms - bundle.training_last_close_ms > maximum_model_age_ms:
         stable_reasons.append("model yeniden arastirilacak kadar eski")
     stable = tuple(stable_reasons)
-    reasons = stable + _timing_reasons(settings, target_close_ms, interval_ms, current_ms)
+    reasons = stable + _timing_reasons(
+        settings, target_close_ms, interval_ms, current_ms
+    )
     prediction = Prediction(
         symbol=symbol,
         interval=interval,
@@ -185,7 +189,9 @@ def make_prediction(
         target_up_price=price + target_multiple * atr,
         target_down_price=max(0.0, price - target_multiple * atr),
         target_up_touch_probability=float(scenario["touch_up_half_atr_probability"]),
-        target_down_touch_probability=float(scenario["touch_down_half_atr_probability"]),
+        target_down_touch_probability=float(
+            scenario["touch_down_half_atr_probability"]
+        ),
         touch_both_probability=float(scenario.get("touch_both_probability", 0.0)),
         touch_neither_probability=float(scenario.get("touch_neither_probability", 0.0)),
         close_range_low=close_low,
@@ -376,9 +382,11 @@ def dashboard_snapshot(predictions: list[Prediction]) -> dict[str, object]:
     if not predictions:
         raise ValueError("Panel ozeti icin tahmin yok")
     observed_ms = max(item.source_close_time_ms for item in predictions)
-    observed_at = datetime.fromtimestamp(observed_ms / 1000, tz=timezone.utc).isoformat(
-        timespec="seconds"
-    ).replace("+00:00", "Z")
+    observed_at = (
+        datetime.fromtimestamp(observed_ms / 1000, tz=timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
     prediction_rows: list[dict[str, object]] = []
     verified_rows: list[dict[str, object]] = []
     for item in predictions:
@@ -475,7 +483,9 @@ def deliver_eligible(
     *,
     notifier: TelegramNotifier | None = None,
 ) -> list[tuple[Prediction, TelegramDelivery]]:
-    eligible_predictions = [prediction for prediction in predictions if prediction.eligible]
+    eligible_predictions = [
+        prediction for prediction in predictions if prediction.eligible
+    ]
     if not eligible_predictions:
         return []
     client = notifier or TelegramNotifier()
@@ -597,8 +607,7 @@ def serve_forever(
         scalp_manifest = load_trade1_universe()
         scalp_entries = scalp_manifest.selected_entries()
         progress(
-            f"Deneysel scalp gozlemi acik: {len(scalp_entries)} piyasa, "
-            f"evren {scalp_manifest.version}"
+            f"Deneysel scalp gozlemi acik: {len(scalp_entries)} piyasa, evren {scalp_manifest.version}"
         )
     # Nothing to download for a series whose next candle has not closed yet.
     next_close_ms: dict[tuple[str, str], int] = {}
@@ -645,10 +654,17 @@ def serve_forever(
                         scalp_report.observations,
                         manifest=scalp_manifest,
                     )
+                    scalp_setup_symbols = {
+                        item.perpetual_symbol
+                        for item in scalp_report.observations
+                        if item.alert_tier == "KURULUM"
+                    }
                     progress(
                         f"Scalp gozlem: {scalp_report.fresh}/{scalp_report.attempted} taze, "
-                        f"{len(scalp_report.observations)} kurulum, "
-                        f"{scalp_recorded} yeni, {len(scalp_settled)} sonuc"
+                        f"rejim {scalp_report.regime.state if scalp_report.regime else 'UNKNOWN'}, "
+                        f"{len(scalp_report.observations)} radar, "
+                        f"{len(scalp_setup_symbols)} kurulum, {scalp_recorded} yeni, "
+                        f"{len(scalp_settled)} sonuc"
                     )
                     if is_primary():
                         scalp_delivery = deliver_scalp_observations(
@@ -659,8 +675,7 @@ def serve_forever(
                             and scalp_delivery.status != "DEDUPLICATED"
                         ):
                             progress(
-                                f"Scalp Telegram: {scalp_delivery.status}"
-                                f"{_detail_suffix(scalp_delivery)}"
+                                f"Scalp Telegram: {scalp_delivery.status}{_detail_suffix(scalp_delivery)}"
                             )
                 except (OSError, RuntimeError, TypeError, ValueError) as error:
                     # Experimental observation must never take the verified
@@ -691,10 +706,7 @@ def serve_forever(
                     progress(f"Gozlem raporu: {digest.status}{_detail_suffix(digest)}")
                 answers = answer_commands(settings, predictions, now=now)
                 if answers.received or answers.failed:
-                    line = (
-                        f"Komut: {answers.received} guncelleme, {answers.answered} yanit, "
-                        f"{answers.refused} yetkisiz"
-                    )
+                    line = f"Komut: {answers.received} guncelleme, {answers.answered} yanit, {answers.refused} yetkisiz"
                     if answers.failed:
                         line += f", {answers.failed} HATA ({answers.detail})"
                     progress(line)
@@ -708,7 +720,9 @@ def serve_forever(
         except Exception as error:  # a 24/7 loop must outlive a bad response
             consecutive_failures += 1
             backoff = min(poll_seconds * 2**consecutive_failures, 900)
-            progress(f"Dongu hatasi ({consecutive_failures}): {error}; {backoff} sn bekleniyor")
+            progress(
+                f"Dongu hatasi ({consecutive_failures}): {error}; {backoff} sn bekleniyor"
+            )
             time.sleep(backoff)
             continue
         time.sleep(poll_seconds)
@@ -797,9 +811,11 @@ def _utc_text(milliseconds: int) -> str:
 
 
 def _iso_utc(milliseconds: int) -> str:
-    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc).isoformat(
-        timespec="seconds"
-    ).replace("+00:00", "Z")
+    return (
+        datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
 
 
 __all__ = [

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import math
 from pathlib import Path
 import time
 from typing import Callable
@@ -19,7 +21,6 @@ from .config import (
     validate_market_symbol,
     validate_symbol,
 )
-
 
 # Both are public, read-only kline endpoints; neither takes an API key.
 MARKET_ENDPOINTS = {
@@ -48,6 +49,19 @@ class MarketDataError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class FuturesMarketSnapshot:
+    """Public, read-only execution context for one USD-M futures contract."""
+
+    symbol: str
+    bid: float
+    ask: float
+    spread_bps: float
+    mark_price: float | None = None
+    index_price: float | None = None
+    funding_rate_bps: float | None = None
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -72,7 +86,9 @@ class BinanceMarketDataClient:
         self.timeout_seconds = timeout_seconds
         self.request_pause_seconds = request_pause_seconds
         self._opener = opener or urlopen
-        selected_market = market() if market_name is None else market_name.strip().lower()
+        selected_market = (
+            market() if market_name is None else market_name.strip().lower()
+        )
         if selected_market not in MARKET_ENDPOINTS:
             raise ValueError("Piyasa yalnizca futures veya spot olabilir")
         self.market_name = selected_market
@@ -108,6 +124,64 @@ class BinanceMarketDataClient:
             start_ms=start_ms,
             end_ms=end_ms,
         )
+
+    def fetch_futures_market_snapshots(self) -> dict[str, FuturesMarketSnapshot]:
+        """Fetch all best quotes and funding marks in two public requests.
+
+        The endpoint is deliberately unauthenticated: this observer may measure
+        public execution conditions but cannot place an order or read an
+        account.  Invalid individual rows are ignored; a wholly invalid quote
+        response fails closed.
+        """
+        if self.market_name != "futures":
+            raise ValueError("Anlik futures piyasa ozeti yalniz futures icindir")
+        books = self._request_public_json("/fapi/v1/ticker/bookTicker")
+        premiums = self._request_public_json("/fapi/v1/premiumIndex")
+        if not isinstance(books, list) or not isinstance(premiums, list):
+            raise MarketDataError("Binance anlik futures yaniti liste degil")
+
+        premium_by_symbol: dict[str, tuple[float, float, float]] = {}
+        for row in premiums:
+            if not isinstance(row, dict):
+                continue
+            try:
+                symbol = validate_market_symbol(str(row["symbol"]))
+                mark = _positive_float(row["markPrice"], "mark price")
+                index = _positive_float(row["indexPrice"], "index price")
+                funding_bps = float(row["lastFundingRate"]) * 10_000.0
+            except (KeyError, TypeError, ValueError, MarketDataError):
+                continue
+            if math.isfinite(funding_bps):
+                premium_by_symbol[symbol] = (mark, index, funding_bps)
+
+        snapshots: dict[str, FuturesMarketSnapshot] = {}
+        for row in books:
+            if not isinstance(row, dict):
+                continue
+            try:
+                symbol = validate_market_symbol(str(row["symbol"]))
+                bid = _positive_float(row["bidPrice"], "bid")
+                ask = _positive_float(row["askPrice"], "ask")
+            except (KeyError, TypeError, ValueError, MarketDataError):
+                continue
+            if not (math.isfinite(bid) and math.isfinite(ask)):
+                continue
+            mid = (bid + ask) / 2.0
+            if ask < bid or mid <= 0:
+                continue
+            premium = premium_by_symbol.get(symbol)
+            snapshots[symbol] = FuturesMarketSnapshot(
+                symbol=symbol,
+                bid=bid,
+                ask=ask,
+                spread_bps=(ask - bid) / mid * 10_000.0,
+                mark_price=premium[0] if premium else None,
+                index_price=premium[1] if premium else None,
+                funding_rate_bps=premium[2] if premium else None,
+            )
+        if not snapshots:
+            raise MarketDataError("Binance anlik futures kotasyonu alinamadi")
+        return snapshots
 
     def _fetch_klines(
         self,
@@ -171,7 +245,10 @@ class BinanceMarketDataClient:
         )
         request = Request(
             f"{self.origin}{self.path}?{query}",
-            headers={"Accept": "application/json", "User-Agent": "btc-eth-probability-bot/0.1"},
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "btc-eth-probability-bot/0.1",
+            },
             method="GET",
         )
         try:
@@ -195,6 +272,31 @@ class BinanceMarketDataClient:
             if not isinstance(row, list) or len(row) < 11:
                 raise MarketDataError("Binance kline satiri gecersiz")
         return decoded
+
+    def _request_public_json(self, path: str) -> object:
+        request = Request(
+            f"{self.origin}{path}",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "btc-eth-probability-bot/0.1",
+            },
+            method="GET",
+        )
+        try:
+            response = self._opener(request, timeout=self.timeout_seconds)
+            with response:  # type: ignore[attr-defined]
+                status = response.getcode()  # type: ignore[attr-defined]
+                raw = response.read(MAX_RESPONSE_BYTES + 1)  # type: ignore[attr-defined]
+        except (HTTPError, URLError, TimeoutError, OSError):
+            raise MarketDataError("Binance anlik futures verisi alinamadi") from None
+        except Exception:
+            raise MarketDataError("Binance anlik futures verisi alinamadi") from None
+        if status != 200 or not raw or len(raw) > MAX_RESPONSE_BYTES:
+            raise MarketDataError("Binance anlik futures yaniti gecersiz")
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise MarketDataError("Binance anlik futures verisi JSON degil") from None
 
 
 def update_cache(
@@ -239,7 +341,9 @@ def update_cache(
     if combined.empty:
         raise MarketDataError(f"{symbol} {interval} icin kapali mum bulunamadi")
     combined = _validate_frame(combined)
-    combined = combined[combined["open_time_ms"] >= requested_start].reset_index(drop=True)
+    combined = combined[combined["open_time_ms"] >= requested_start].reset_index(
+        drop=True
+    )
     # An exchange halt leaves a hole in the series.  Rejecting the whole cache
     # would wedge the bot until someone deletes the file by hand, so keep the
     # newest contiguous run instead and say how much was dropped.
@@ -289,7 +393,9 @@ def update_market_cache(
             existing = load_cache(path)
         except MarketDataError:
             if warn is not None:
-                warn(f"{symbol} {interval}: scalp onbellegi okunamadi, bastan indiriliyor")
+                warn(
+                    f"{symbol} {interval}: scalp onbellegi okunamadi, bastan indiriliyor"
+                )
     start_ms = (
         requested_start
         if existing.empty
@@ -305,14 +411,15 @@ def update_market_cache(
     if combined.empty:
         raise MarketDataError(f"{symbol} {interval} icin kapali mum bulunamadi")
     combined = _validate_frame(combined)
-    combined = combined[combined["open_time_ms"] >= requested_start].reset_index(drop=True)
+    combined = combined[combined["open_time_ms"] >= requested_start].reset_index(
+        drop=True
+    )
     before = len(combined)
     combined = _trim_to_contiguous_tail(combined, INTERVAL_MILLISECONDS[interval])
     dropped = before - len(combined)
     if dropped and warn is not None:
         warn(
-            f"{symbol} {interval}: scalp mum araliginda kopukluk bulundu; "
-            f"en eski {dropped} mum atildi"
+            f"{symbol} {interval}: scalp mum araliginda kopukluk bulundu; en eski {dropped} mum atildi"
         )
     if combined.empty:
         raise MarketDataError(f"{symbol} {interval} icin kesintisiz mum dizisi yok")
@@ -361,9 +468,19 @@ def _validate_frame(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.loc[:, CSV_COLUMNS].copy()
     for column in ("open_time_ms", "close_time_ms", "trade_count"):
         result[column] = pd.to_numeric(result[column], errors="raise").astype("int64")
-    for column in ("open", "high", "low", "close", "volume", "quote_volume", "taker_buy_base"):
+    for column in (
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "taker_buy_base",
+    ):
         result[column] = pd.to_numeric(result[column], errors="raise").astype("float64")
-    result = result.sort_values("open_time_ms").drop_duplicates("open_time_ms", keep="last")
+    result = result.sort_values("open_time_ms").drop_duplicates(
+        "open_time_ms", keep="last"
+    )
     if result.empty:
         return _empty_frame()
     price_columns = ["open", "high", "low", "close"]

@@ -7,7 +7,6 @@ from pathlib import Path
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-
 SYMBOLS_ENV = "CRYPTO_SYMBOLS"
 SCALP_OBSERVATION_ENV = "CRYPTO_SCALP_OBSERVATION"
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
@@ -52,6 +51,8 @@ def market() -> str:
     if choice not in MARKETS:
         raise ValueError(f"{MARKET_ENV} yalnizca {', '.join(MARKETS)} olabilir")
     return choice
+
+
 # Messages are read by a person, so they carry that person's clock.  Reading
 # "14:19" on a phone showing 17:19 makes a current report look three hours old.
 DISPLAY_TIMEZONE_ENV = "CRYPTO_DISPLAY_TIMEZONE"
@@ -126,14 +127,36 @@ class Settings:
             "CRYPTO_SCALP_MINIMUM_COVERAGE", 0.90, 0.50, 1.0
         )
     )
+    # Account-specific commission data needs a signed Binance request.  Keep
+    # the public observer read-only and make the actual taker assumption
+    # explicit instead of pretending the historical 12 bps is always current.
+    scalp_taker_fee_bps: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_TAKER_FEE_BPS", 5.0, 0.0, 100.0
+        )
+    )
+    scalp_slippage_bps_per_side: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_SLIPPAGE_BPS_PER_SIDE", 1.0, 0.0, 100.0
+        )
+    )
+    scalp_maximum_spread_bps: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MAXIMUM_SPREAD_BPS", 8.0, 0.1, 100.0
+        )
+    )
+    scalp_bull_breadth_threshold: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_BULL_BREADTH", 0.60, 0.40, 0.90
+        )
+    )
 
 
 def validate_symbol(symbol: str) -> str:
     normalized = validate_market_symbol(symbol)
     if normalized not in SYMBOLS:
         raise ValueError(
-            f"Sembol yalnizca {', '.join(SYMBOLS)} olabilir; "
-            f"baskasi icin {SYMBOLS_ENV} degiskenini kullanin"
+            f"Sembol yalnizca {', '.join(SYMBOLS)} olabilir; baskasi icin {SYMBOLS_ENV} degiskenini kullanin"
         )
     return normalized
 

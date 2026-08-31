@@ -247,8 +247,10 @@ python -m unittest discover -s tests -t tests
 
 ## Deneysel 89-coin scalp gözlemi
 
-Trade1'in Temmuz 2026 Ek G araştırmasındaki statik evren bu projeye sürümlü
-bir manifest olarak eklenmiştir: **30 çekirdek + 59 genişletilmiş = 89 coin**.
+Trade1'in Temmuz 2026 Ek G araştırmasındaki statik evren bu **trade3** projesine
+salt-okunur bir kanıt anlık görüntüsü olarak eklenmiştir: **30 çekirdek + 59
+genişletilmiş = 89 coin**. Trade1 reposu, servisi ve strateji kodu bu akış
+tarafından değiştirilmez.
 Bu evren mevcut BTC/ETH modellerine bağlanmaz; dolayısıyla `89 × 3` model
 oluşturmaz ve 24 saatlik bariyer tahminini scalp diye yeniden adlandırmaz.
 
@@ -259,14 +261,28 @@ Scalp gözlem motoru yalnız kapanmış `5m` USD-M futures mumlarında, trade1'd
 - **F2:** hacimle doğrulanan 30 dakikalık kaskad düşüş;
 - **F3:** hacimle doğrulanan 12 saatlik zirve kırılımı.
 
+Boğa rejiminde ayrıca yalnız ileri test için üç yeni hipotez izlenir:
+
+- **B1:** hacim destekli 24 saatlik zirve kırılımı;
+- **B2:** 48 saatlik trend üzerindeki kontrollü geri çekilmeden dönüş;
+- **B3:** kesitsel 24 saatlik göreli güçte ilk %10'a yeni giriş.
+
+Rejim etiketi BTC/ETH'nin kalıcı dört haftalık yönü, 50 günlük EMA konumu/eğimi
+ve 89 piyasanın 48 saatlik trend genişliğinden üretilir. Bu etiket mevcut
+F1/F2/F3 kayıtlarını silmez; yalnız B1/B2/B3 hipotezlerini koşullandırır.
+
 Bu ailelerin üçü de tarihsel 30-coin testinde üretim kapısını geçemedi. Bu
-bu yüzden kodda otomatik terfi yolu yoktur: bütün mesajlar açıkça **SCALP GÖZLEM /
-İŞLEM ADAYI DEĞİL** yazar. Doğrulanmış 89 piyasanın tamamı taranır; en yüksek
-puanlı en fazla beş kurulum tek kompakt Telegram satır özetinde gösterilir, 89
-ayrı mesaj gönderilmez.
-Mesajdaki puan bir olasılık veya beklenen getiri değildir; yalnız aynı taramadaki
-eşik aşım şiddetini sıralar. Sabit `12 bps` araştırma maliyeti gerçek anlık
-spread, kayma ve manuel işlem gecikmesini ölçmez.
+bu yüzden kodda otomatik işlem terfisi yoktur: bütün mesajlar açıkça **İŞLEM
+ADAYI DEĞİL** yazar. Tek aile **RADAR**; aynı sembolde en az iki aile, aktif boğa
+rejimi ve uygun canlı spread birlikteyse **KURULUM** olarak gösterilir. Bu iki
+etiket de araştırmadır. En yüksek puanlı en fazla beş kayıt tek kompakt Telegram
+özetinde gösterilir, 89 ayrı mesaj gönderilmez.
+
+Mesajdaki puan bir olasılık veya beklenen getiri değildir. Bot iki açık Binance
+USD-M uç noktasından en iyi alış/satış ile funding bilgisini alır. Her gözleme
+`max(tarihsel 12 bps, 2 × taker komisyonu + canlı spread + 2 × tek-yön kayma)`
+maliyeti yazar. Hesaba özel komisyon imzalı istek gerektirdiği için ortam
+değişkeniyle açıkça belirtilir; bot API anahtarı istemez ve emir veremez.
 
 Evreni ve spot→vadeli kontrat eşlemelerini ağsız doğrulama:
 
@@ -289,9 +305,10 @@ python run.py scalp-observe --send
 ```
 
 Her gözlem, sonraki 5m barın açılışını giriş kabul ederek sabit `15/30/60`
-dakika zaman çıkışlarında ve `12 bps` gidiş-dönüş maliyetle ileriye dönük
-puanlanır. Sonuçlar stratejiyi otomatik olarak yetkilendirmez; yalnız sonraki
-araştırma için değiştirilemez bir canlı kayıt oluşturur:
+dakika zaman çıkışlarında gözlem anındaki tahmini gidiş-dönüş maliyetiyle ileriye
+dönük puanlanır. Karne sonuçları aileye ve piyasa rejimine göre ayrılır. Sonuçlar
+stratejiyi otomatik olarak yetkilendirmez; yalnız sonraki araştırma için
+değiştirilemez bir canlı kayıt oluşturur:
 
 ```powershell
 python run.py scalp-scorecard --days 30
@@ -304,6 +321,10 @@ CRYPTO_SCALP_OBSERVATION=true
 CRYPTO_SCALP_TOP_K=5
 CRYPTO_SCALP_CACHE_DAYS=3
 CRYPTO_SCALP_MINIMUM_COVERAGE=0.90
+CRYPTO_SCALP_TAKER_FEE_BPS=5.0
+CRYPTO_SCALP_SLIPPAGE_BPS_PER_SIDE=1.0
+CRYPTO_SCALP_MAXIMUM_SPREAD_BPS=8.0
+CRYPTO_SCALP_BULL_BREADTH=0.60
 ```
 
 Taze veri kapsamı eşik altındaysa Telegram gönderimi kapalı kalır; deneysel

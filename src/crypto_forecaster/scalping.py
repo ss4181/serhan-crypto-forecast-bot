@@ -1,31 +1,37 @@
-"""Research-only broad-universe 5m scalp observer.
+"""Research-only broad-universe 5m scalp observer for trade3.
 
-The detector intentionally mirrors the three preregistered F1/F2/F3 families
-that failed trade1's historical production gate.  Seeing one of these setups is
-therefore an observation, never a trade candidate.  Every observation is
-recorded and scored at fixed 15/30/60 minute time exits so future evidence can
-be evaluated without changing the question after seeing the answer.
+The original detector mirrors the preregistered F1/F2/F3 evidence imported as
+a read-only snapshot from trade1.  B1/B2/B3 are new trade3 hypotheses and only
+run under the causal market-wide bull label.  Every event remains an
+observation, never a trade candidate, and is scored at fixed 15/30/60 minute
+time exits without changing the question after seeing the answer.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from hashlib import sha256
 import json
 import math
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from statistics import median
-from typing import Any, Callable, Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from .config import Settings, local_text, validate_market_symbol
-from .data import BinanceMarketDataClient, MarketDataError, load_cache, update_market_cache
+from .data import (
+    BinanceMarketDataClient,
+    FuturesMarketSnapshot,
+    MarketDataError,
+    load_cache,
+    update_market_cache,
+)
 from .telegram import TelegramDelivery, TelegramNotifier, digest_signal_id
 from .universe import UniverseEntry, UniverseManifest, load_trade1_universe
-
 
 SCALP_INTERVAL = "5m"
 SCALP_STEP_MS = 5 * 60 * 1000
@@ -37,12 +43,34 @@ FAMILY_LABELS = {
     "F1": "hacim momentumu",
     "F2": "kaskad tepki",
     "F3": "kirilim devami",
+    "B1": "boga 24s kirilimi",
+    "B2": "boga geri-cekilme donusu",
+    "B3": "goreli guc gecisi",
 }
 FAMILY_EVIDENCE = {
     "F1": "30-coin tarihsel testte maliyet sonrasi kapiyi gecemedi",
     "F2": "30-coin tarihsel testte net ortalama negatifti",
     "F3": "30-coin tarihsel testte net medyan negatifti",
+    "B1": "yalniz boga rejiminde ileri test edilen yeni hipotez",
+    "B2": "yalniz boga rejiminde ileri test edilen yeni hipotez",
+    "B3": "yalniz boga rejiminde ileri test edilen yeni hipotez",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class BullRegime:
+    state: str
+    score: float
+    breadth: float
+    trend_fraction: float
+    persistent_up: bool
+    eligible_markets: int
+
+    @property
+    def label(self) -> str:
+        return {"BULL": "BOGA", "TRANSITION": "GECIS", "OFF": "KAPALI"}.get(
+            self.state, "BILINMIYOR"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,13 +85,18 @@ class ScalpObservation:
     bar_open_time_ms: int
     bar_close_time_ms: int
     details: tuple[str, ...]
+    regime_state: str = "UNKNOWN"
+    regime_score: float = 0.0
+    breadth: float = 0.0
+    spread_bps: float | None = None
+    funding_rate_bps: float | None = None
+    estimated_cost_bps: float = 12.0
+    execution_eligible: bool = False
+    alert_tier: str = "RADAR"
 
     @property
     def signal_id(self) -> str:
-        material = (
-            f"{self.universe_version}|{self.perpetual_symbol}|{self.family}|"
-            f"{self.bar_close_time_ms}"
-        )
+        material = f"{self.universe_version}|{self.perpetual_symbol}|{self.family}|{self.bar_close_time_ms}"
         return sha256(material.encode("ascii")).hexdigest()
 
 
@@ -76,6 +109,8 @@ class ScalpScanReport:
     errors: tuple[str, ...]
     observations: tuple[ScalpObservation, ...]
     evaluated_at_ms: int
+    regime: BullRegime | None = None
+    quoted: int = 0
 
     @property
     def coverage(self) -> float:
@@ -87,7 +122,13 @@ class ScalpScanReport:
         return tuple(
             sorted(
                 self.observations,
-                key=lambda item: (-item.score, item.spot_symbol, item.family),
+                key=lambda item: (
+                    item.alert_tier != "KURULUM",
+                    not item.execution_eligible,
+                    -item.score,
+                    item.spot_symbol,
+                    item.family,
+                ),
             )[:limit]
         )
 
@@ -102,6 +143,10 @@ def scan_scalp_frame(
     frame: pd.DataFrame,
     *,
     universe_version: str,
+    regime: BullRegime | None = None,
+    snapshot: FuturesMarketSnapshot | None = None,
+    settings: Settings | None = None,
+    historical_cost_bps: float = 12.0,
 ) -> tuple[ScalpObservation, ...]:
     """Evaluate only the latest closed 5m bar, with no future values."""
     if len(frame) < SCALP_MINIMUM_BARS:
@@ -118,6 +163,8 @@ def scan_scalp_frame(
     volume_z = (log_volume - volume_mean) / volume_std.replace(0.0, np.nan)
     return_30m = np.log(close / close.shift(6))
     high_12h = high.rolling(144, min_periods=144).max().shift(1)
+    high_24h = high.rolling(288, min_periods=288).max().shift(1)
+    ema_48h = close.ewm(span=576, min_periods=288, adjust=False).mean()
 
     latest = len(frame) - 1
     price = float(close.iloc[latest])
@@ -139,6 +186,10 @@ def scan_scalp_frame(
                 bar_open_ms=bar_open_ms,
                 bar_close_ms=bar_close_ms,
                 details=(f"log-hacim z={z_now:+.2f}", "yukari kapanan bar"),
+                regime=regime,
+                snapshot=snapshot,
+                settings=settings,
+                historical_cost_bps=historical_cost_bps,
             )
         )
 
@@ -146,9 +197,7 @@ def scan_scalp_frame(
     sigma30_now = float(sigma5.iloc[latest]) * math.sqrt(6.0)
     sigma30 = sigma5 * math.sqrt(6.0)
     f2_condition = (
-        return_30m.le(-3.0 * sigma30)
-        & sigma30.gt(0.0)
-        & volume_z.ge(2.0)
+        return_30m.le(-3.0 * sigma30) & sigma30.gt(0.0) & volume_z.ge(2.0)
     ).fillna(False)
     if (
         _edge_is_new(f2_condition, latest)
@@ -170,6 +219,10 @@ def scan_scalp_frame(
                     f"30dk getiri %{ret_now * 100:+.2f} ({shock_ratio:.1f} sigma)",
                     f"log-hacim z={z_now:+.2f}",
                 ),
+                regime=regime,
+                snapshot=snapshot,
+                settings=settings,
+                historical_cost_bps=historical_cost_bps,
             )
         )
 
@@ -191,8 +244,73 @@ def scan_scalp_frame(
                     f"12s zirvesinin {breakout_bps:+.1f} bps ustu",
                     f"log-hacim z={z_now:+.2f}",
                 ),
+                regime=regime,
+                snapshot=snapshot,
+                settings=settings,
+                historical_cost_bps=historical_cost_bps,
             )
         )
+
+    if regime is not None and regime.state == "BULL":
+        high_24h_now = float(high_24h.iloc[latest])
+        b1_condition = (close.gt(high_24h) & volume_z.ge(1.0)).fillna(False)
+        if _edge_is_new(b1_condition, latest) and math.isfinite(high_24h_now):
+            breakout_bps = math.log(price / high_24h_now) * 10_000.0
+            observations.append(
+                _observation(
+                    entry,
+                    universe_version,
+                    family="B1",
+                    score=1.0 + max(z_now, 0.0) / 3.0 + min(breakout_bps / 25.0, 1.0),
+                    price=price,
+                    bar_open_ms=bar_open_ms,
+                    bar_close_ms=bar_close_ms,
+                    details=(
+                        f"24s zirvesinin {breakout_bps:+.1f} bps ustu",
+                        f"hacim z={z_now:+.2f}",
+                    ),
+                    regime=regime,
+                    snapshot=snapshot,
+                    settings=settings,
+                    historical_cost_bps=historical_cost_bps,
+                )
+            )
+
+        previous_pullback = (
+            return_30m.shift(1).le(-0.75 * sigma30.shift(1))
+            & return_30m.shift(1).ge(-6.0 * sigma30.shift(1))
+            & sigma30.shift(1).gt(0.0)
+        )
+        b2_condition = (
+            previous_pullback
+            & close.gt(open_)
+            & close.gt(high.shift(1))
+            & close.gt(ema_48h)
+            & volume_z.ge(0.5)
+        ).fillna(False)
+        if _edge_is_new(b2_condition, latest):
+            recovery_bps = math.log(price / float(close.iloc[latest - 1])) * 10_000.0
+            observations.append(
+                _observation(
+                    entry,
+                    universe_version,
+                    family="B2",
+                    score=1.0
+                    + min(max(recovery_bps, 0.0) / 25.0, 1.0)
+                    + max(z_now, 0.0) / 4.0,
+                    price=price,
+                    bar_open_ms=bar_open_ms,
+                    bar_close_ms=bar_close_ms,
+                    details=(
+                        f"geri donus {recovery_bps:+.1f} bps",
+                        "48s trend ustunde",
+                    ),
+                    regime=regime,
+                    snapshot=snapshot,
+                    settings=settings,
+                    historical_cost_bps=historical_cost_bps,
+                )
+            )
     return tuple(observations)
 
 
@@ -224,7 +342,20 @@ def refresh_and_scan_scalp_universe(
             )
         except (MarketDataError, OSError, TypeError, ValueError) as error:
             errors.append(f"{entry.spot_symbol}: {error}")
-    return _scan_frames(settings, manifest, selected, frames, errors=errors, now=now)
+    snapshots: dict[str, FuturesMarketSnapshot] = {}
+    try:
+        snapshots = market_client.fetch_futures_market_snapshots()
+    except (MarketDataError, OSError, TypeError, ValueError) as error:
+        errors.append(f"anlik kotasyon: {error}")
+    return _scan_frames(
+        settings,
+        manifest,
+        selected,
+        frames,
+        errors=errors,
+        now=now,
+        snapshots=snapshots,
+    )
 
 
 def scan_cached_scalp_universe(
@@ -245,7 +376,86 @@ def scan_cached_scalp_universe(
             )
         except (MarketDataError, OSError) as error:
             errors.append(f"{entry.spot_symbol}: {error}")
-    return _scan_frames(settings, manifest, selected, frames, errors=errors, now=now)
+    return _scan_frames(
+        settings,
+        manifest,
+        selected,
+        frames,
+        errors=errors,
+        now=now,
+        snapshots={},
+    )
+
+
+def evaluate_bull_regime(
+    frames: dict[str, pd.DataFrame],
+    major_frames: dict[str, pd.DataFrame],
+    *,
+    breadth_threshold: float = 0.60,
+) -> BullRegime:
+    """Causal market-wide bull label for research stratification.
+
+    It combines a 48-hour broad-universe breadth reading with persistent
+    four-week BTC/ETH direction and a slow 50-day trend.  It never suppresses
+    the original F1/F2/F3 observations; only new B-family hypotheses depend on
+    it.
+    """
+    breadth_votes: list[bool] = []
+    for frame in frames.values():
+        if len(frame) < 288:
+            continue
+        close = frame["close"].astype("float64")
+        ema = close.ewm(span=576, min_periods=288, adjust=False).mean()
+        if math.isfinite(float(ema.iloc[-1])):
+            breadth_votes.append(float(close.iloc[-1]) > float(ema.iloc[-1]))
+    breadth = sum(breadth_votes) / len(breadth_votes) if breadth_votes else 0.0
+
+    trend_votes: list[bool] = []
+    current_4w: list[float] = []
+    prior_4w: list[float] = []
+    for symbol in ("BTCUSDT", "ETHUSDT"):
+        frame = major_frames.get(symbol)
+        if frame is None or len(frame) < 1369:
+            continue
+        close = frame["close"].astype("float64")
+        ema50d = close.ewm(span=1200, min_periods=1200, adjust=False).mean()
+        latest_ema = float(ema50d.iloc[-1])
+        week_ago_ema = float(ema50d.iloc[-169])
+        if not (math.isfinite(latest_ema) and math.isfinite(week_ago_ema)):
+            continue
+        trend_votes.extend(
+            (
+                float(close.iloc[-1]) > latest_ema,
+                latest_ema > week_ago_ema,
+            )
+        )
+        current_4w.append(math.log(float(close.iloc[-1]) / float(close.iloc[-673])))
+        prior_4w.append(math.log(float(close.iloc[-169]) / float(close.iloc[-841])))
+
+    if len(trend_votes) < 4 or not breadth_votes:
+        return BullRegime("UNKNOWN", 0.0, breadth, 0.0, False, len(breadth_votes))
+    trend_fraction = sum(trend_votes) / len(trend_votes)
+    persistent_up = (
+        sum(current_4w) / len(current_4w) > 0.0 and sum(prior_4w) / len(prior_4w) > 0.0
+    )
+    breadth_component = min(breadth / breadth_threshold, 1.0)
+    score = (
+        0.40 * float(persistent_up) + 0.30 * trend_fraction + 0.30 * breadth_component
+    )
+    if persistent_up and trend_fraction >= 0.75 and breadth >= breadth_threshold:
+        state = "BULL"
+    elif score >= 0.55:
+        state = "TRANSITION"
+    else:
+        state = "OFF"
+    return BullRegime(
+        state,
+        float(score),
+        float(breadth),
+        float(trend_fraction),
+        persistent_up,
+        len(breadth_votes),
+    )
 
 
 def format_scalp_observation_digest(
@@ -258,28 +468,46 @@ def format_scalp_observation_digest(
     if not shown:
         raise ValueError("Scalp gozlem raporu icin kurulum yok")
     stamp = local_text(report.evaluated_at_ms, with_seconds=False)
+    regime = report.regime or BullRegime("UNKNOWN", 0.0, 0.0, 0.0, False, 0)
     lines = [
         f"🧪 SCALP | 5m | {stamp}",
-        f"{report.fresh}/{report.attempted} taze • {len(report.observations)} kurulum "
-        f"• ilk {len(shown)} • maliyet {manifest.scalp_round_trip_cost_bps:g} bps",
+        (
+            f"Rejim {regime.label} {regime.score:.2f} • "
+            f"genislik %{regime.breadth * 100:.0f} • "
+            f"kotasyon {report.quoted}/{report.attempted}"
+        ),
+        (
+            f"{report.fresh}/{report.attempted} taze • {len(report.observations)} radar • ilk {len(shown)}"
+        ),
         "",
     ]
-    for index, item in enumerate(shown, start=1):
+    grouped: dict[str, list[ScalpObservation]] = {}
+    for item in shown:
+        grouped.setdefault(item.spot_symbol, []).append(item)
+    for index, items in enumerate(grouped.values(), start=1):
+        item = items[0]
         mapping = (
             f"→{item.perpetual_symbol} "
             if item.perpetual_symbol != item.spot_symbol
             else ""
         )
+        families = "+".join(value.family for value in items)
+        tier = (
+            "KURULUM"
+            if any(value.alert_tier == "KURULUM" for value in items)
+            else "RADAR"
+        )
+        spread = f"sp {item.spread_bps:.1f}" if item.spread_bps is not None else "sp ?"
+        cost = item.estimated_cost_bps or manifest.scalp_round_trip_cost_bps
         detail = ", ".join(item.details)
         lines.append(
-            f"{index}. {item.spot_symbol} {mapping}↑ {item.family} "
-            f"({FAMILY_LABELS[item.family]}) • {item.score:.2f} • "
-            f"${item.price:,.8g} • {detail}"
+            f"{index}. {tier} {item.spot_symbol} {mapping}↑ {families} • "
+            f"{item.score:.2f} • maliyet~{cost:.1f}bps/{spread} • {detail}"
         )
     lines.extend(
         [
             "",
-            "ISLEM ADAYI DEGILDIR • puan olasılık/getiri değildir • ileri test: 15/30/60 dk",
+            "ISLEM ADAYI DEGILDIR • RADAR tek aile, KURULUM coklu teyit • ileri test 15/30/60dk",
         ]
     )
     message = "\n".join(lines)
@@ -341,12 +569,23 @@ def record_scalp_observations(
             "bar_open_time_ms": item.bar_open_time_ms,
             "bar_close_time_ms": item.bar_close_time_ms,
             "horizons_minutes": list(manifest.scalp_horizons_minutes),
-            "round_trip_cost_bps": manifest.scalp_round_trip_cost_bps,
+            "round_trip_cost_bps": max(
+                manifest.scalp_round_trip_cost_bps, item.estimated_cost_bps
+            ),
+            "regime_state": item.regime_state,
+            "regime_score": item.regime_score,
+            "breadth": item.breadth,
+            "spread_bps": item.spread_bps,
+            "funding_rate_bps": item.funding_rate_bps,
+            "execution_eligible": item.execution_eligible,
+            "alert_tier": item.alert_tier,
         }
         try:
             with path.open("x", encoding="utf-8", newline="\n") as handle:
                 handle.write(
-                    json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                    json.dumps(
+                        payload, ensure_ascii=False, sort_keys=True, allow_nan=False
+                    )
                     + "\n"
                 )
             added += 1
@@ -364,7 +603,7 @@ def settle_scalp_observations(
     directory = _pending_dir(state_dir)
     if not directory.exists():
         return []
-    current_ms = int((now or datetime.now(timezone.utc)).timestamp() * 1000)
+    current_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
     grace_ms = SCALP_SETTLEMENT_GRACE_DAYS * 24 * 60 * 60 * 1000
     frames: dict[str, pd.DataFrame] = {}
     settled: list[dict[str, Any]] = []
@@ -422,7 +661,7 @@ def scalp_scorecard(
 ) -> dict[str, Any]:
     if days < 1:
         raise ValueError("Scalp karne gun sayisi pozitif olmali")
-    current_ms = int((now or datetime.now(timezone.utc)).timestamp() * 1000)
+    current_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
     cutoff = current_ms - days * 86_400_000
     recent = [row for row in rows if int(row.get("exit_time_ms", 0)) >= cutoff]
     keys = sorted({(str(row["family"]), int(row["horizon_minutes"])) for row in recent})
@@ -441,6 +680,18 @@ def scalp_scorecard(
             )
             for family, horizon in keys
         },
+        "byRegime": {
+            regime: _aggregate_scalp(
+                [
+                    row
+                    for row in recent
+                    if str(row.get("regime_state", "UNKNOWN")) == regime
+                ]
+            )
+            for regime in sorted(
+                {str(row.get("regime_state", "UNKNOWN")) for row in recent}
+            )
+        },
     }
 
 
@@ -453,6 +704,12 @@ def format_scalp_scorecard(card: dict[str, Any]) -> str:
     if not card["outcomeCount"]:
         lines.append("Henuz 15/30/60 dakika sonucu olusan gozlem yok.")
     else:
+        for regime, stats in card.get("byRegime", {}).items():
+            lines.append(
+                f"• Rejim {regime}: n={stats['count']}, "
+                f"net ort {stats['meanNetBps']:+.2f} bps, "
+                f"kazanma %{stats['winRate'] * 100:.1f}"
+            )
         for key, stats in card["byFamilyHorizon"].items():
             family, horizon = key.split("_", 1)
             lines.append(
@@ -477,14 +734,30 @@ def _scan_frames(
     *,
     errors: list[str],
     now: datetime | None,
+    snapshots: dict[str, FuturesMarketSnapshot],
 ) -> ScalpScanReport:
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    current = (now or datetime.now(UTC)).astimezone(UTC)
     current_ms = int(current.timestamp() * 1000)
     maximum_age_ms = settings.scalp_maximum_bar_age_minutes * 60_000
     observations: list[ScalpObservation] = []
     fresh_close_times: list[int] = []
     fresh = 0
     stale = 0
+    eligible_frames: dict[str, pd.DataFrame] = {}
+    major_frames = _load_major_frames(settings)
+    provisional_fresh: dict[str, pd.DataFrame] = {}
+    for entry in entries:
+        frame = frames.get(entry.perpetual_symbol)
+        if frame is None or frame.empty:
+            continue
+        latest_close = int(frame["close_time_ms"].iloc[-1])
+        if current_ms - latest_close <= maximum_age_ms and latest_close <= current_ms:
+            provisional_fresh[entry.perpetual_symbol] = frame
+    regime = evaluate_bull_regime(
+        provisional_fresh,
+        major_frames,
+        breadth_threshold=settings.scalp_bull_breadth_threshold,
+    )
     for entry in entries:
         frame = frames.get(entry.perpetual_symbol)
         if frame is None or frame.empty:
@@ -494,10 +767,30 @@ def _scan_frames(
             stale += 1
             continue
         fresh += 1
+        eligible_frames[entry.perpetual_symbol] = frame
         fresh_close_times.append(latest_close)
         observations.extend(
-            scan_scalp_frame(entry, frame, universe_version=manifest.version)
+            scan_scalp_frame(
+                entry,
+                frame,
+                universe_version=manifest.version,
+                regime=regime,
+                snapshot=snapshots.get(entry.perpetual_symbol),
+                settings=settings,
+                historical_cost_bps=manifest.scalp_round_trip_cost_bps,
+            )
         )
+    observations.extend(
+        _relative_strength_observations(
+            entries,
+            eligible_frames,
+            regime=regime,
+            snapshots=snapshots,
+            settings=settings,
+            universe_version=manifest.version,
+            historical_cost_bps=manifest.scalp_round_trip_cost_bps,
+        )
+    )
     if fresh_close_times:
         newest_close = max(fresh_close_times)
         # A lagging API/cache may still be "fresh" by the age limit.  Do not
@@ -505,6 +798,7 @@ def _scan_frames(
         observations = [
             item for item in observations if item.bar_close_time_ms == newest_close
         ]
+    observations = _assign_alert_tiers(observations, regime)
     return ScalpScanReport(
         universe_version=manifest.version,
         attempted=len(entries),
@@ -513,7 +807,102 @@ def _scan_frames(
         errors=tuple(errors),
         observations=tuple(observations),
         evaluated_at_ms=current_ms,
+        regime=regime,
+        quoted=sum(entry.perpetual_symbol in snapshots for entry in entries),
     )
+
+
+def _assign_alert_tiers(
+    observations: Iterable[ScalpObservation], regime: BullRegime
+) -> list[ScalpObservation]:
+    items = list(observations)
+    families_by_symbol: dict[str, set[str]] = {}
+    for item in items:
+        families_by_symbol.setdefault(item.perpetual_symbol, set()).add(item.family)
+    return [
+        replace(item, alert_tier="KURULUM")
+        if (
+            regime.state == "BULL"
+            and item.execution_eligible
+            and len(families_by_symbol[item.perpetual_symbol]) >= 2
+        )
+        else item
+        for item in items
+    ]
+
+
+def _load_major_frames(settings: Settings) -> dict[str, pd.DataFrame]:
+    frames: dict[str, pd.DataFrame] = {}
+    for symbol in ("BTCUSDT", "ETHUSDT"):
+        path = settings.data_dir / f"{symbol}_1h_futures.csv"
+        try:
+            frames[symbol] = load_cache(path)
+        except (MarketDataError, OSError):
+            continue
+    return frames
+
+
+def _relative_strength_observations(
+    entries: tuple[UniverseEntry, ...],
+    frames: dict[str, pd.DataFrame],
+    *,
+    regime: BullRegime,
+    snapshots: dict[str, FuturesMarketSnapshot],
+    settings: Settings,
+    universe_version: str,
+    historical_cost_bps: float,
+) -> list[ScalpObservation]:
+    if regime.state != "BULL":
+        return []
+    current_returns: dict[str, float] = {}
+    prior_returns: dict[str, float] = {}
+    for symbol, frame in frames.items():
+        if len(frame) < 290:
+            continue
+        close = frame["close"].astype("float64")
+        current_returns[symbol] = math.log(
+            float(close.iloc[-1]) / float(close.iloc[-289])
+        )
+        prior_returns[symbol] = math.log(
+            float(close.iloc[-2]) / float(close.iloc[-290])
+        )
+    if len(current_returns) < 10:
+        return []
+    current_cut = float(np.quantile(list(current_returns.values()), 0.90))
+    prior_cut = float(np.quantile(list(prior_returns.values()), 0.90))
+    by_symbol = {entry.perpetual_symbol: entry for entry in entries}
+    observations: list[ScalpObservation] = []
+    for symbol, day_return in current_returns.items():
+        if day_return < current_cut or prior_returns[symbol] >= prior_cut:
+            continue
+        frame = frames[symbol]
+        close = frame["close"].astype("float64")
+        if math.log(float(close.iloc[-1]) / float(close.iloc[-7])) <= 0.0:
+            continue
+        entry = by_symbol.get(symbol)
+        if entry is None:
+            continue
+        excess_bps = (day_return - current_cut) * 10_000.0
+        observations.append(
+            _observation(
+                entry,
+                universe_version,
+                family="B3",
+                score=1.0 + min(max(excess_bps, 0.0) / 50.0, 2.0),
+                price=float(close.iloc[-1]),
+                bar_open_ms=int(frame["open_time_ms"].iloc[-1]),
+                bar_close_ms=int(frame["close_time_ms"].iloc[-1]),
+                details=(
+                    f"24s getiri %{day_return * 100:+.2f}",
+                    "ilk %10 goreli guce yeni giris",
+                ),
+                regime=regime,
+                snapshot=snapshots.get(symbol),
+                settings=settings,
+                historical_cost_bps=historical_cost_bps,
+            )
+        )
+    return observations
 
 
 def _observation(
@@ -526,7 +915,24 @@ def _observation(
     bar_open_ms: int,
     bar_close_ms: int,
     details: tuple[str, ...],
+    regime: BullRegime | None = None,
+    snapshot: FuturesMarketSnapshot | None = None,
+    settings: Settings | None = None,
+    historical_cost_bps: float = 12.0,
 ) -> ScalpObservation:
+    active_regime = regime or BullRegime("UNKNOWN", 0.0, 0.0, 0.0, False, 0)
+    spread_bps = snapshot.spread_bps if snapshot is not None else None
+    if snapshot is None or settings is None:
+        estimated_cost_bps = historical_cost_bps
+        execution_eligible = False
+    else:
+        estimated_cost_bps = max(
+            historical_cost_bps,
+            2.0 * settings.scalp_taker_fee_bps
+            + snapshot.spread_bps
+            + 2.0 * settings.scalp_slippage_bps_per_side,
+        )
+        execution_eligible = snapshot.spread_bps <= settings.scalp_maximum_spread_bps
     return ScalpObservation(
         universe_version=universe_version,
         spot_symbol=entry.spot_symbol,
@@ -538,12 +944,23 @@ def _observation(
         bar_open_time_ms=bar_open_ms,
         bar_close_time_ms=bar_close_ms,
         details=details,
+        regime_state=active_regime.state,
+        regime_score=active_regime.score,
+        breadth=active_regime.breadth,
+        spread_bps=spread_bps,
+        funding_rate_bps=(snapshot.funding_rate_bps if snapshot is not None else None),
+        estimated_cost_bps=estimated_cost_bps,
+        execution_eligible=execution_eligible,
     )
 
 
 def _edge_is_new(condition: pd.Series, latest: int, *, cooldown_bars: int = 12) -> bool:
     """Match trade1's rising-edge plus one-hour greedy cooldown on 5m bars."""
-    if latest < 1 or not bool(condition.iloc[latest]) or bool(condition.iloc[latest - 1]):
+    if (
+        latest < 1
+        or not bool(condition.iloc[latest])
+        or bool(condition.iloc[latest - 1])
+    ):
         return False
     rising = condition & ~condition.shift(1, fill_value=False)
     start = max(0, latest - cooldown_bars + 1)
@@ -555,7 +972,9 @@ def _time_exit_outcomes(
 ) -> list[dict[str, Any]] | None:
     if frame.empty:
         return None
-    matches = frame.index[frame["open_time_ms"] == int(record["bar_open_time_ms"])].tolist()
+    matches = frame.index[
+        frame["open_time_ms"] == int(record["bar_open_time_ms"])
+    ].tolist()
     if not matches:
         return None
     event_index = int(matches[-1])
@@ -588,6 +1007,13 @@ def _time_exit_outcomes(
                 "gross_bps": gross_bps,
                 "net_bps": gross_bps - cost,
                 "round_trip_cost_bps": cost,
+                "regime_state": str(record.get("regime_state", "UNKNOWN")),
+                "regime_score": float(record.get("regime_score", 0.0)),
+                "breadth": float(record.get("breadth", 0.0)),
+                "spread_bps": record.get("spread_bps"),
+                "funding_rate_bps": record.get("funding_rate_bps"),
+                "execution_eligible": bool(record.get("execution_eligible", False)),
+                "alert_tier": str(record.get("alert_tier", "RADAR")),
             }
         )
     return results
@@ -657,12 +1083,14 @@ def _aggregate_scalp(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 __all__ = [
+    "BullRegime",
     "FAMILY_EVIDENCE",
     "FAMILY_LABELS",
     "SCALP_INTERVAL",
     "ScalpObservation",
     "ScalpScanReport",
     "deliver_scalp_observations",
+    "evaluate_bull_regime",
     "format_scalp_observation_digest",
     "format_scalp_scorecard",
     "load_scalp_ledger",

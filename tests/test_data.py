@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,7 +9,12 @@ import unittest
 import pandas as pd
 
 from crypto_forecaster.config import cache_path
-from crypto_forecaster.data import MarketDataError, update_cache, update_market_cache
+from crypto_forecaster.data import (
+    BinanceMarketDataClient,
+    MarketDataError,
+    update_cache,
+    update_market_cache,
+)
 
 
 STEP_MS = 300_000
@@ -39,7 +45,8 @@ class StubClient:
 
     def fetch_klines(self, symbol, interval, *, start_ms, end_ms):  # type: ignore[no-untyped-def]
         selected = self.rows[
-            (self.rows["open_time_ms"] >= start_ms) & (self.rows["close_time_ms"] < end_ms)
+            (self.rows["open_time_ms"] >= start_ms)
+            & (self.rows["close_time_ms"] < end_ms)
         ]
         return selected.reset_index(drop=True)
 
@@ -52,12 +59,56 @@ class StubMarketClient:
 
     def fetch_market_klines(self, symbol, interval, *, start_ms, end_ms):  # type: ignore[no-untyped-def]
         selected = self.rows[
-            (self.rows["open_time_ms"] >= start_ms) & (self.rows["close_time_ms"] < end_ms)
+            (self.rows["open_time_ms"] >= start_ms)
+            & (self.rows["close_time_ms"] < end_ms)
         ]
         return selected.reset_index(drop=True)
 
 
+class JsonResponse:
+    def __init__(self, payload: object) -> None:
+        self.payload = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, *_args):  # type: ignore[no-untyped-def]
+        return None
+
+    def getcode(self) -> int:
+        return 200
+
+    def read(self, _limit: int) -> bytes:
+        return self.payload
+
+
 class DataTests(unittest.TestCase):
+    def test_public_futures_snapshot_combines_spread_and_funding(self) -> None:
+        payloads = iter(
+            (
+                [{"symbol": "BTCUSDT", "bidPrice": "99.95", "askPrice": "100.05"}],
+                [
+                    {
+                        "symbol": "BTCUSDT",
+                        "markPrice": "100.01",
+                        "indexPrice": "100.00",
+                        "lastFundingRate": "0.0001",
+                    }
+                ],
+            )
+        )
+
+        def opener(_request, *, timeout):  # type: ignore[no-untyped-def]
+            self.assertEqual(timeout, 20.0)
+            return JsonResponse(next(payloads))
+
+        result = BinanceMarketDataClient(
+            market_name="futures", opener=opener
+        ).fetch_futures_market_snapshots()["BTCUSDT"]
+        self.assertAlmostEqual(result.spread_bps, 10.0)
+        self.assertAlmostEqual(result.funding_rate_bps or 0.0, 1.0)
+        self.assertEqual(result.mark_price, 100.01)
+
     def test_halt_in_the_series_keeps_the_newest_contiguous_run(self) -> None:
         # Binance maintenance leaves a hole.  Rejecting the file outright wedged
         # the bot until someone deleted the cache by hand.

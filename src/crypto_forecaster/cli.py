@@ -61,7 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="BTC/ETH 5m, 15m ve 1h kalibre olasilik arastirma botu",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    download = subparsers.add_parser("download", help="Kapali Binance Spot mumlarini indir/guncelle")
+    download = subparsers.add_parser(
+        "download", help="Kapali Binance Spot mumlarini indir/guncelle"
+    )
     download.add_argument("--days", type=_positive_days, default=365)
     download.add_argument("--symbol", choices=SYMBOLS)
     download.add_argument("--interval", choices=INTERVALS)
@@ -71,20 +73,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     research.add_argument("--days", type=_positive_days, default=365)
     research.add_argument(
-        "--offline", action="store_true", help="Ag cagirmadan mevcut CSV onbellegini kullan"
+        "--offline",
+        action="store_true",
+        help="Ag cagirmadan mevcut CSV onbellegini kullan",
     )
 
-    predict = subparsers.add_parser("predict", help="Son kapali mum icin tum tahminleri yaz")
-    predict.add_argument("--refresh", action="store_true", help="Once veri onbellegini guncelle")
+    predict = subparsers.add_parser(
+        "predict", help="Son kapali mum icin tum tahminleri yaz"
+    )
+    predict.add_argument(
+        "--refresh", action="store_true", help="Once veri onbellegini guncelle"
+    )
     predict.add_argument("--days", type=_positive_days, default=365)
-    predict.add_argument("--send", action="store_true", help="Uygun sinyalleri Telegram'a gonder")
+    predict.add_argument(
+        "--send", action="store_true", help="Uygun sinyalleri Telegram'a gonder"
+    )
 
-    serve = subparsers.add_parser("serve", help="Surekli veri yenile, gunluk arastir ve bildir")
+    serve = subparsers.add_parser(
+        "serve", help="Surekli veri yenile, gunluk arastir ve bildir"
+    )
     serve.add_argument("--days", type=_positive_days, default=365)
     serve.add_argument("--poll-seconds", type=int, default=60)
 
     cloud = subparsers.add_parser(
-        "cloud-run", help="Bulutta veriyi yenile, gerekirse modeli arastir, bildir ve paneli guncelle"
+        "cloud-run",
+        help="Bulutta veriyi yenile, gerekirse modeli arastir, bildir ve paneli guncelle",
     )
     cloud.add_argument("--days", type=_positive_days, default=365)
     cloud.add_argument("--force-research", action="store_true")
@@ -94,34 +107,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Trade1 89-coin evreninde research-only 5m kurulumlarini gozle",
     )
     scalp.add_argument(
-        "--offline", action="store_true", help="Ag cagirmadan mevcut scalp CSV'lerini kullan"
+        "--offline",
+        action="store_true",
+        help="Ag cagirmadan mevcut scalp CSV'lerini kullan",
     )
     scalp.add_argument("--days", type=_scalp_days, default=None)
     scalp.add_argument("--top-k", type=_scalp_top_k, default=None)
-    scalp.add_argument("--send", action="store_true", help="Top-K gozlem ozetini Telegram'a gonder")
+    scalp.add_argument(
+        "--send", action="store_true", help="Top-K gozlem ozetini Telegram'a gonder"
+    )
 
     scalp_card = subparsers.add_parser(
-        "scalp-scorecard", help="15/30/60dk deneysel scalp ileri-test sonuclarini ozetle"
+        "scalp-scorecard",
+        help="15/30/60dk deneysel scalp ileri-test sonuclarini ozetle",
     )
     scalp_card.add_argument("--days", type=int, default=30)
 
     subparsers.add_parser(
-        "scalp-universe", help="Surumlu trade1 scalp evrenini ve yetki gruplarini listele"
+        "scalp-universe",
+        help="Surumlu trade1 scalp evrenini ve yetki gruplarini listele",
     )
 
-    subparsers.add_parser("telegram-test", help="Ucuncu Telegram kanalina sabit test mesaji gonder")
+    subparsers.add_parser(
+        "telegram-test", help="Ucuncu Telegram kanalina sabit test mesaji gonder"
+    )
 
     verify = subparsers.add_parser(
         "verify-models",
         help="Alti modelin de Telegram mesaji uretebildigini dogrula",
     )
-    verify.add_argument("--refresh", action="store_true", help="Once veri onbellegini guncelle")
+    verify.add_argument(
+        "--refresh", action="store_true", help="Once veri onbellegini guncelle"
+    )
     verify.add_argument("--days", type=_positive_days, default=365)
     verify.add_argument(
-        "--send", action="store_true", help="Her model icin kanala bir dogrulama mesaji gonder"
+        "--send",
+        action="store_true",
+        help="Her model icin kanala bir dogrulama mesaji gonder",
     )
 
-    card = subparsers.add_parser("scorecard", help="Gonderilen sinyallerin gercek sonucunu ozetle")
+    card = subparsers.add_parser(
+        "scorecard", help="Gonderilen sinyallerin gercek sonucunu ozetle"
+    )
     card.add_argument("--days", type=int, default=30)
     card.add_argument("--send", action="store_true", help="Karneyi Telegram'a gonder")
 
@@ -129,7 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
         "commands", help="Telegram'dan gelen /durum, /performans gibi sorulari yanitla"
     )
 
-    members = subparsers.add_parser("members", help="Sorgulama yetkisi olan kisileri listele")
+    members = subparsers.add_parser(
+        "members", help="Sorgulama yetkisi olan kisileri listele"
+    )
     members.add_argument("--add", metavar="KIMLIK", type=int)
     members.add_argument("--name", default="")
     members.add_argument("--remove", metavar="KIMLIK", type=int)
@@ -162,9 +191,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.send:
                 deliveries = deliver_eligible(settings, predictions)
                 if not deliveries:
-                    print("Arastirma kapisini ve olasilik esigini gecen sinyal yok; mesaj gonderilmedi.")
+                    print(
+                        "Arastirma kapisini ve olasilik esigini gecen sinyal yok; mesaj gonderilmedi."
+                    )
                 for prediction, delivery in deliveries:
-                    print(f"{prediction.symbol} {prediction.interval}: {delivery.status}")
+                    print(
+                        f"{prediction.symbol} {prediction.interval}: {delivery.status}"
+                    )
             return 0
         if args.command == "serve":
             serve_forever(
@@ -200,11 +233,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             snapshot = dashboard_snapshot(predictions)
             write_snapshot(settings.report_dir, snapshot)
             posted = post_snapshot(snapshot)
-            print("Panel guncellendi." if posted else "Panel baglantisi tanimli degil; yerel ozet yazildi.")
+            print(
+                "Panel guncellendi."
+                if posted
+                else "Panel baglantisi tanimli degil; yerel ozet yazildi."
+            )
             if settings.scalp_observation_enabled:
                 try:
                     _run_scalp_once(settings, refresh=True, send=True)
-                except (MarketDataError, OSError, RuntimeError, TypeError, ValueError) as error:
+                except (
+                    MarketDataError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                ) as error:
                     print(
                         f"Scalp gozlem hatasi (ana bulut kosusu tamamlandi): {error}",
                         file=sys.stderr,
@@ -268,11 +311,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print("Telegram kanali tanimli degil; karne gonderilmedi.")
                     return 0
                 delivery = deliver_scorecard(settings, days=args.days)
-                print(f"Telegram karnesi: {delivery.status if delivery else 'GONDERILMEDI'}")
+                print(
+                    f"Telegram karnesi: {delivery.status if delivery else 'GONDERILMEDI'}"
+                )
             return 0
         if args.command == "commands":
             if owner_id() is None:
-                print(f"{OWNER_ID_ENV} tanimli degil; komut yanitlama kapali.", file=sys.stderr)
+                print(
+                    f"{OWNER_ID_ENV} tanimli degil; komut yanitlama kapali.",
+                    file=sys.stderr,
+                )
                 return 2
             outcome = answer_commands(settings, evaluate_all(settings))
             print(
@@ -281,12 +329,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.command == "members":
-            return _manage_members(settings, add=args.add, name=args.name, remove=args.remove)
+            return _manage_members(
+                settings, add=args.add, name=args.name, remove=args.remove
+            )
         raise RuntimeError("Bilinmeyen komut")
     except KeyboardInterrupt:
         print("Kullanici tarafindan durduruldu.", file=sys.stderr)
         return 130
-    except (MarketDataError, TelegramError, OSError, RuntimeError, TypeError, ValueError) as error:
+    except (
+        MarketDataError,
+        TelegramError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as error:
         print(f"Hata: {error}", file=sys.stderr)
         return 2
 
@@ -330,7 +387,13 @@ def _verify_models(settings: Settings, *, send: bool) -> int:
             try:
                 prediction = make_prediction(settings, symbol, interval)
                 text = format_prediction(prediction)
-            except (MarketDataError, OSError, RuntimeError, TypeError, ValueError) as error:
+            except (
+                MarketDataError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as error:
                 failures += 1
                 print(f"{key:<16}{'HATA':>8}{'-':>9}{'-':>10}  {error}")
                 continue
@@ -341,12 +404,13 @@ def _verify_models(settings: Settings, *, send: bool) -> int:
                     text=text,
                     state_dir=settings.telegram_state_dir,
                 )
-                status = delivery.status + (f" ({delivery.detail})" if delivery.detail else "")
+                status = delivery.status + (
+                    f" ({delivery.detail})" if delivery.detail else ""
+                )
                 if delivery.status == "UNCERTAIN":
                     failures += 1
             print(
-                f"{key:<16}{len(text):>8}{prediction.tier:>9}"
-                f"{prediction.backtest.net_edge_bps:>10.2f}  {status}"
+                f"{key:<16}{len(text):>8}{prediction.tier:>9}{prediction.backtest.net_edge_bps:>10.2f}  {status}"
             )
     if failures:
         print(f"\n{failures} model icin dogrulama basarisiz.", file=sys.stderr)
@@ -366,7 +430,9 @@ def _deliver_cloud_digest(settings: Settings, predictions) -> None:  # type: ign
         print(f"Gozlem raporu: {delivery.status}{detail}")
 
 
-def _manage_members(settings: Settings, *, add: int | None, name: str, remove: int | None) -> int:
+def _manage_members(
+    settings: Settings, *, add: int | None, name: str, remove: int | None
+) -> int:
     state_dir = settings.telegram_state_dir
     members = load_members(state_dir)
     if add is not None and remove is not None:
@@ -399,10 +465,7 @@ def _answer_cloud_commands(settings: Settings, predictions) -> None:  # type: ig
         return
     outcome = answer_commands(settings, predictions)
     if outcome.received or outcome.failed:
-        line = (
-            f"Komut: {outcome.received} guncelleme, {outcome.answered} yanit, "
-            f"{outcome.refused} yetkisiz"
-        )
+        line = f"Komut: {outcome.received} guncelleme, {outcome.answered} yanit, {outcome.refused} yetkisiz"
         if outcome.failed:
             line += f", {outcome.failed} HATA ({outcome.detail})"
         print(line)
@@ -484,9 +547,16 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
     recorded = record_scalp_observations(
         settings.scalp_state_dir, report.observations, manifest=manifest
     )
+    setup_symbols = {
+        item.perpetual_symbol
+        for item in report.observations
+        if item.alert_tier == "KURULUM"
+    }
     print(
         f"Scalp gozlem: {report.fresh}/{report.attempted} taze, "
-        f"{len(report.observations)} kurulum, {recorded} yeni kayit, "
+        f"rejim {report.regime.state if report.regime else 'UNKNOWN'}, "
+        f"{len(report.observations)} radar, {len(setup_symbols)} kurulum, "
+        f"{recorded} yeni kayit, "
         f"{len(settled)} olgun sonuc."
     )
     if report.errors:
@@ -508,21 +578,25 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
         print(f"Scalp Telegram: {delivery.status}{detail}")
 
 
-
 def _deliver_cloud_eligible(settings: Settings, predictions):  # type: ignore[no-untyped-def]
     token_configured = bool(os.environ.get(TOKEN_ENV, "").strip())
     chat_configured = bool(os.environ.get(CHAT_ID_ENV, "").strip())
     if token_configured != chat_configured:
-        raise TelegramError("Telegram bulut ayarlari eksik; bot token ve kanal kimligi birlikte tanimlanmali")
+        raise TelegramError(
+            "Telegram bulut ayarlari eksik; bot token ve kanal kimligi birlikte tanimlanmali"
+        )
     if not token_configured:
         if any(prediction.eligible for prediction in predictions):
-            print("Telegram kanali henuz bagli degil; uygun sinyal panele yazildi ancak mesaj gonderilmedi.")
+            print(
+                "Telegram kanali henuz bagli degil; uygun sinyal panele yazildi ancak mesaj gonderilmedi."
+            )
         return []
     if not is_primary():
-        print("Bu kosu yedek (standby) rolde; arastirma ve panel guncellendi, mesaj gonderilmedi.")
+        print(
+            "Bu kosu yedek (standby) rolde; arastirma ve panel guncellendi, mesaj gonderilmedi."
+        )
         return []
     return deliver_eligible(settings, predictions)
-
 
 
 def _configure_console_encoding() -> None:
