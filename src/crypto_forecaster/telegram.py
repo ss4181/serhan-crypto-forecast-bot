@@ -27,11 +27,15 @@ def telegram_menu_keyboard() -> dict[str, object]:
     """Return the fixed, read-only menu attached to bot messages."""
     return {
         "inline_keyboard": [
-            [{"text": "📖 Açıklamalar", "callback_data": "explanations"}],
+            [
+                {"text": "🏠 Başlangıç / Yardım", "callback_data": "start"},
+                {"text": "📖 Açıklamalar", "callback_data": "explanations"},
+            ],
             [
                 {"text": "📊 Güncel durum", "callback_data": "status"},
                 {"text": "📈 Performans 30g", "callback_data": "performance:30"},
             ],
+            [{"text": "👥 Yetkililer", "callback_data": "members"}],
         ]
     }
 

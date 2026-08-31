@@ -148,6 +148,9 @@ def poll_and_answer(
             try:
                 reply = _answer_callback(
                     data,
+                    sender_id=int(sender_id),
+                    owner=owner,
+                    members=members,
                     status_text=status_text,
                     performance_text=performance_text,
                     explanation_text=explanation_text or format_explanations,
@@ -268,14 +271,21 @@ def _answer(
 def _answer_callback(
     data: str,
     *,
+    sender_id: int,
+    owner: int,
+    members: dict[int, str],
     status_text: Callable[[], str],
     performance_text: Callable[[int], str],
     explanation_text: Callable[[], str],
 ) -> str | None:
+    if data in ("start", "help"):
+        return _help_text(is_owner=sender_id == owner)
     if data == "explanations":
         return explanation_text()
     if data == "status":
         return status_text()
+    if data == "members":
+        return _member_list(owner, members)
     if data.startswith("performance:"):
         return performance_text(_days_argument(data.partition(":")[2]))
     return "Bilinmeyen dugme. /yardim yazin."

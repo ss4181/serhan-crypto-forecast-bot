@@ -366,10 +366,11 @@ Yeni bir terminal açıp bağlantıyı sınayın:
 python run.py telegram-test
 ```
 
-Gönderilen bildirimlere sabit bir Telegram menüsü eklenir: **Açıklamalar**
-terimleri ve F1–F3/B1–B3 mantığını, **Güncel durum** altı modelin son
-olasılıklarını, **Performans 30g** ise gönderilmiş sinyallerin gerçekleşen
-sonuçlarını açar. Aynı açıklama kişisel komut olarak `/aciklamalar` ile de
+Gönderilen bildirimlere sabit bir Telegram menüsü eklenir: **Başlangıç / Yardım**
+mevcut komut listesini, **Açıklamalar** terimleri ve F1–F3/B1–B3 mantığını,
+**Güncel durum** altı modelin son olasılıklarını, **Performans 30g** ise
+gönderilmiş sinyallerin gerçekleşen sonuçlarını, **Yetkililer** de erişim
+listesini açar. Aynı açıklama kişisel komut olarak `/aciklamalar` ile de
 istenebilir. Düğme yanıtları yalnızca `CRYPTO_TELEGRAM_OWNER_ID` veya
 `members.json` içindeki yetkili kimliklere gönderilir; tanımsız kullanıcılar
 sessizce yok sayılır.

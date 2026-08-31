@@ -113,6 +113,16 @@ class CommandTests(unittest.TestCase):
         self.assertIn("ACIKLAMALAR", notifier.sent[0][1])
         self.assertIn("SCALP AILELERI", notifier.sent[0][1])
 
+    def test_start_and_members_inline_buttons_match_existing_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            outcome, notifier, _ = run(
+                Path(directory),
+                [callback_update(1, OWNER, "start"), callback_update(2, OWNER, "members")],
+            )
+        self.assertEqual(outcome.answered, 2)
+        self.assertIn("/durum", notifier.sent[0][1])
+        self.assertIn(f"Sahip: {OWNER}", notifier.sent[1][1])
+
     def test_unauthorized_inline_button_is_silent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             outcome, notifier, _ = run(
