@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       force_research:
-        description: "365 günlük walk-forward araştırmayı zorla"
+        description: "Haftalık aralığı beklemeden 365 günlük walk-forward araştırmayı zorla"
         required: false
         default: false
         type: boolean

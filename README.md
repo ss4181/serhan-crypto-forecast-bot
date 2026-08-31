@@ -467,14 +467,21 @@ Bulut çalışması bu özeti UTC gününde bir kez kanala da yollar.
 python run.py predict --refresh --send
 ```
 
-Sürekli çalışma; veriyi dakikada bir yeniler, modelleri UTC gününde bir kez yeniden
-araştırır ve aynı mum/sinyali ikinci kez göndermez:
+Sürekli çalışma; yeni mumları ve açık sonuçları sürekli yeniler, modelleri
+başarılı son araştırmadan 168 saat sonra yeniden walk-forward araştırır ve aynı
+mum/sinyali ikinci kez göndermez. İlk kurulumda model eksik olduğu için araştırma
+hemen başlar:
 
 ```powershell
 python run.py serve --days 365 --poll-seconds 60
 ```
 
 `serve` ağ hatasında ölmez; artan bekleme ile yeniden dener.
+
+Araştırma aralığı ortamdan değiştirilebilir (`CRYPTO_MODEL_RESEARCH_INTERVAL_HOURS`,
+24–720 saat; varsayılan 168 = haftalık). Model dosyalarının değişiklik zamanı
+program yeniden başlasa bile son başarılı araştırmayı korur. Acil bir yeniden
+araştırma için `python run.py research --days 365` kullanılabilir.
 
 ## Dakika hassasiyeti: sürekli açık sunucu
 
@@ -490,7 +497,7 @@ GitHub Actions dakika hassasiyeti için uygun değildir. İki ayrı duvar var:
 
 Bu yüzden dakika hassasiyeti sürekli açık bir makinede `serve` ile sağlanır.
 `serve` artık `cloud-run` ile aynı işleri yapar: veri yenileme, sonuç
-sonuçlandırma, günlük araştırma, bildirim, gözlem raporu, komut yanıtlama ve
+sonuçlandırma, haftalık araştırma, bildirim, gözlem raporu, komut yanıtlama ve
 panel güncelleme.
 
 ### Rol: tek gönderici

@@ -27,6 +27,7 @@ from crypto_forecaster.service import (
     _next_scalp_scan_ms,
     make_prediction,
     PredictionCache,
+    research_due,
 )
 
 
@@ -202,6 +203,27 @@ class MessageTests(unittest.TestCase):
 
 
 class ServiceTests(unittest.TestCase):
+    @patch("crypto_forecaster.service.models_need_research", return_value=False)
+    def test_research_schedule_is_weekly_and_survives_restart(
+        self, _models_are_valid
+    ) -> None:  # type: ignore[no-untyped-def]
+        with tempfile.TemporaryDirectory() as directory:
+            model_dir = Path(directory) / "models"
+            settings = Settings(model_dir=model_dir)
+            now = datetime(2026, 8, 31, tzinfo=timezone.utc)
+            old = now.timestamp() - 168 * 60 * 60 - 1
+            for symbol in ("BTCUSDT", "ETHUSDT"):
+                for interval in ("5m", "15m", "1h"):
+                    path = model_path(model_dir, symbol, interval)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("{}", encoding="utf-8")
+                    os.utime(path, (old, old))
+            self.assertTrue(research_due(settings, now=now))
+            fresh = now.timestamp() - 60 * 60
+            for path in model_dir.glob("*.json"):
+                os.utime(path, (fresh, fresh))
+            self.assertFalse(research_due(settings, now=now))
+
     @patch.dict(os.environ, {}, clear=True)
     def test_no_signal_does_not_require_telegram_credentials(self) -> None:
         self.assertEqual(deliver_eligible(Settings(), []), [])

@@ -597,7 +597,6 @@ def serve_forever(
     if poll_seconds < 20:
         raise ValueError("Tarama araligi en az 20 saniye olmali")
     client = BinanceMarketDataClient()
-    last_research_day: str | None = None
     consecutive_failures = 0
     cache = PredictionCache()
     scalp_manifest: UniverseManifest | None = None
@@ -683,11 +682,9 @@ def serve_forever(
                     progress(f"Scalp gozlem hatasi: {error}")
                 finally:
                     next_scalp_scan_ms = _next_scalp_scan_ms(now_ms)
-            today = now.date().isoformat()
-            if models_need_research(settings) or last_research_day != today:
-                progress("Gunluk walk-forward arastirma ve model yenileme basladi")
+            if research_due(settings, now=now):
+                progress("Haftalik walk-forward arastirma ve model yenileme basladi")
                 research_all(settings, progress=progress)
-                last_research_day = today
                 cache = PredictionCache()  # fresh models invalidate every answer
             predictions = evaluate_all(settings, now=now, cache=cache)
             for prediction in predictions:
@@ -755,6 +752,26 @@ def models_need_research(settings: Settings) -> bool:
             try:
                 load_bundle(path)
             except ValueError:
+                return True
+    return False
+
+
+def research_due(settings: Settings, *, now: datetime | None = None) -> bool:
+    """Use successful model file mtimes as a restart-safe research schedule."""
+    if models_need_research(settings):
+        return True
+    current_ms = int((now or datetime.now(timezone.utc)).timestamp() * 1000)
+    age_ms = settings.model_research_interval_hours * 60 * 60 * 1000
+    for symbol in SYMBOLS:
+        for interval in INTERVALS:
+            try:
+                modified_ms = int(
+                    model_path(settings.model_dir, symbol, interval).stat().st_mtime
+                    * 1000
+                )
+            except OSError:
+                return True
+            if current_ms - modified_ms >= age_ms:
                 return True
     return False
 
@@ -831,6 +848,7 @@ __all__ = [
     "format_prediction",
     "make_prediction",
     "models_need_research",
+    "research_due",
     "record_open_interest",
     "serve_forever",
 ]

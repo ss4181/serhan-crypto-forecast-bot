@@ -90,6 +90,13 @@ class Settings:
     minimum_remaining_fraction: float = 0.60
     # Every model reports to Telegram this often even when it cannot trade.
     observation_digest_hours: int = 24
+    # Full walk-forward research is deliberately slower than candle refresh;
+    # model files carry the last successful run across service restarts.
+    model_research_interval_hours: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_MODEL_RESEARCH_INTERVAL_HOURS", 168, 24, 720
+        )
+    )
     # Triple barrier.  The take-profit and stop sit this far from entry, in
     # basis points: the size of trade actually intended, not a number fitted to
     # the data.  A symmetric barrier needs a hit rate of

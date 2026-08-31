@@ -34,8 +34,8 @@ from .service import (
     evaluate_all,
     format_prediction,
     make_prediction,
-    models_need_research,
     record_open_interest,
+    research_due,
     serve_forever,
 )
 from .telegram import (
@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     serve = subparsers.add_parser(
-        "serve", help="Surekli veri yenile, gunluk arastir ve bildir"
+        "serve", help="Surekli veri yenile, haftalik arastir ve bildir"
     )
     serve.add_argument("--days", type=_positive_days, default=365)
     serve.add_argument("--poll-seconds", type=int, default=60)
@@ -221,7 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if added:
                 print(f"Acik pozisyon kaydi: {added} yeni satir.")
             if args.force_research or _research_is_due(settings):
-                print("Gunluk walk-forward arastirma yenileniyor...")
+                print("Haftalik walk-forward arastirma yenileniyor...")
                 research_all(settings, progress=print)
             predictions = evaluate_all(settings)
             deliveries = _deliver_cloud_eligible(settings, predictions)
@@ -522,13 +522,7 @@ def _scalp_top_k(value: str) -> int:
 
 
 def _research_is_due(settings: Settings) -> bool:
-    if models_need_research(settings):
-        return True
-    report = settings.report_dir / "latest_backtest.json"
-    if not report.exists():
-        return True
-    age_seconds = datetime.now(timezone.utc).timestamp() - report.stat().st_mtime
-    return age_seconds >= 20 * 60 * 60
+    return research_due(settings)
 
 
 def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
