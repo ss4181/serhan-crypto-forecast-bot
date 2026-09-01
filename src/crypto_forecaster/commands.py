@@ -92,6 +92,7 @@ def poll_and_answer(
     *,
     status_text: Callable[[], str],
     performance_text: Callable[[int], str],
+    scalp_performance_text: Callable[[int], str] | None = None,
     explanation_text: Callable[[], str] | None = None,
     reply_markup: dict[str, object] | None = None,
     notifier: TelegramNotifier | None = None,
@@ -153,12 +154,13 @@ def poll_and_answer(
                     members=members,
                     status_text=status_text,
                     performance_text=performance_text,
+                    scalp_performance_text=scalp_performance_text,
                     explanation_text=explanation_text or format_explanations,
                 )
             except Exception as error:  # a bad answer must not kill the cycle
                 failed += 1
                 detail = f"dugme yaniti uretilemedi: {error}"
-                reply = "Bilgi su an uretilemedi. Sunucu gunlugunde ayrinti var."
+                reply = "⚠️ Bilgi su an uretilemedi. Sunucu gunlugunde ayrinti var."
             if reply is None:
                 continue
             try:
@@ -194,13 +196,14 @@ def poll_and_answer(
                 state_dir=state_dir,
                 status_text=status_text,
                 performance_text=performance_text,
+                scalp_performance_text=scalp_performance_text,
                 explanation_text=explanation_text or format_explanations,
                 now=now or datetime.now(timezone.utc),
             )
         except Exception as error:  # a bad answer must not kill the cycle
             failed += 1
             detail = f"yanit uretilemedi: {error}"
-            reply = "Durum raporu su an uretilemedi. Sunucu gunlugunde ayrinti var."
+            reply = "⚠️ Durum raporu su an uretilemedi. Sunucu gunlugunde ayrinti var."
         if reply is None:
             continue
         try:
@@ -243,6 +246,7 @@ def _answer(
     state_dir: Path,
     status_text: Callable[[], str],
     performance_text: Callable[[int], str],
+    scalp_performance_text: Callable[[int], str] | None,
     explanation_text: Callable[[], str],
     now: datetime,
 ) -> str | None:
@@ -259,13 +263,17 @@ def _answer(
         return status_text()
     if command in ("performans", "karne"):
         return performance_text(_days_argument(argument))
+    if command in ("scalpkarne", "scalp_performance"):
+        if scalp_performance_text is None:
+            return "ℹ️ Scalp karnesi henuz etkin degil."
+        return scalp_performance_text(_days_argument(argument))
     if command in ("kisiler", "members"):
         return _member_list(owner, members)
     if command in ("ekle", "sil"):
         if sender_id != owner:
-            return "Bu komutu yalnizca kanal sahibi kullanabilir."
+            return "🔒 Bu komutu yalnizca kanal sahibi kullanabilir."
         return _change_members(command, argument, members=members, state_dir=state_dir)
-    return "Bilinmeyen komut. /yardim yazin."
+    return "❓ Bilinmeyen komut. /yardim yazin."
 
 
 def _answer_callback(
@@ -276,6 +284,7 @@ def _answer_callback(
     members: dict[int, str],
     status_text: Callable[[], str],
     performance_text: Callable[[int], str],
+    scalp_performance_text: Callable[[int], str] | None,
     explanation_text: Callable[[], str],
 ) -> str | None:
     if data in ("start", "help"):
@@ -288,7 +297,11 @@ def _answer_callback(
         return _member_list(owner, members)
     if data.startswith("performance:"):
         return performance_text(_days_argument(data.partition(":")[2]))
-    return "Bilinmeyen dugme. /yardim yazin."
+    if data.startswith("scalp_performance:"):
+        if scalp_performance_text is None:
+            return "ℹ️ Scalp karnesi henuz etkin degil."
+        return scalp_performance_text(_days_argument(data.partition(":")[2]))
+    return "❓ Bilinmeyen dugme. /yardim yazin."
 
 
 def _change_members(
@@ -297,32 +310,35 @@ def _change_members(
     parts = argument.split(maxsplit=1)
     if not parts or not parts[0].isdigit():
         return (
-            "Kullanim: /ekle 123456789 Ad Soyad\n"
+            "❗ Kullanim: /ekle 123456789 Ad Soyad\n"
             "Kisinin sayisal Telegram kimligi gerekir; kullanici adi yeterli degildir."
         )
     identifier = int(parts[0])
     if identifier <= 0 or identifier > 10**19:
-        return "Gecersiz Telegram kimligi."
+        return "❗ Gecersiz Telegram kimligi."
     if command == "sil":
         if members.pop(identifier, None) is None:
-            return f"{identifier} zaten yetkili listesinde degil."
+            return f"ℹ️ {identifier} zaten yetkili listesinde degil."
         save_members(state_dir, members)
-        return f"{identifier} listeden cikarildi. Kalan yetkili: {len(members)}."
+        return f"✅ {identifier} listeden cikarildi. Kalan yetkili: {len(members)}."
     name = safe_name(parts[1]) if len(parts) > 1 else "isimsiz"
     members[identifier] = name
     save_members(state_dir, members)
     return (
-        f"{name} ({identifier}) eklendi. Artik bota /durum ve /performans sorabilir.\n"
-        f"Toplam yetkili: {len(members)}.\n\n"
-        "Not: bu yetki yalnizca sorgulama icindir; bot emir vermez."
+        f"✅ {name} ({identifier}) eklendi. Artik bota /durum ve /performans sorabilir.\n"
+        f"📋 Toplam yetkili: {len(members)}.\n\n"
+        "⚠️ Not: bu yetki yalnizca sorgulama icindir; bot emir vermez."
     )
 
 
 def _member_list(owner: int, members: dict[int, str]) -> str:
-    lines = ["👥 YETKILI KISILER", "", f"Sahip: {owner}"]
+    lines = ["👥 YETKILI KISILER", "", f"👑 Sahip: {owner}"]
     if not members:
-        lines.append("Baska yetkili kisi yok. Eklemek icin: /ekle <kimlik> <ad>")
+        lines.append("ℹ️ Baska yetkili kisi yok.")
+        lines.append("Eklemek icin: /ekle <kimlik> <ad>")
     else:
+        lines.append("")
+        lines.append("📋 Sorgulama yetkilileri")
         for identifier in sorted(members):
             lines.append(f"• {members[identifier]} — {identifier}")
     return "\n".join(lines)
@@ -330,27 +346,29 @@ def _member_list(owner: int, members: dict[int, str]) -> str:
 
 def _help_text(*, is_owner: bool) -> str:
     lines = [
-        "🤖 BTC/ETH olasilik botu — komutlar",
+        "🤖 TRADE3 ARAŞTIRMA BOTU",
         "",
-        "/durum — alti modelin su anki durumu",
-        "/performans [gun] — gonderilen sinyallerin gercek sonucu (varsayilan 30 gun)",
-        "/aciklamalar — bildirim alanlari ve strateji mantigi",
-        "/kisiler — yetkili kisiler",
-        "/yardim — bu liste",
+        "📌 KOMUTLAR",
+        "📊 /durum — alti modelin su anki durumu",
+        "📈 /performans [gun] — gonderilen sinyallerin gercek sonucu (varsayilan 30 gun)",
+        "🧪 /scalpkarne [gun] — scalp ileri-test sonuclari (varsayilan 30 gun)",
+        "📖 /aciklamalar — bildirim alanlari ve strateji mantigi",
+        "👥 /kisiler — yetkili kisiler",
+        "🏠 /yardim — bu liste",
     ]
     if is_owner:
         lines.extend(
             [
                 "",
-                "Sahip komutlari:",
-                "/ekle <kimlik> <ad> — sorgulama yetkisi ver",
-                "/sil <kimlik> — yetkiyi kaldir",
+                "🔐 SAHIP KOMUTLARI",
+                "➕ /ekle <kimlik> <ad> — sorgulama yetkisi ver",
+                "➖ /sil <kimlik> — yetkiyi kaldir",
             ]
         )
     lines.extend(
         [
             "",
-            "Bot emir vermez, borsa hesabina baglanmaz ve yatirim tavsiyesi vermez.",
+            "⚠️ Bot emir vermez, borsa hesabina baglanmaz ve yatirim tavsiyesi vermez.",
         ]
     )
     return "\n".join(lines)
@@ -362,7 +380,7 @@ def format_explanations() -> str:
         [
             "📖 ACIKLAMALAR — bildirimleri nasil okumali?",
             "",
-            "SINYAL ALANLARI",
+            "🧩 SINYAL ALANLARI",
             "• Sinyal fiyati: kosulun olustugu kapanmis 5m mum fiyati; guncel fiyat degildir.",
             "• Guncel mark: bildirim anindaki vadeli referans fiyati; sinyal fiyatindan farkli olabilir.",
             "• Aile: sinyali ureten teknik gozlem turu.",
@@ -376,8 +394,10 @@ def format_explanations() -> str:
             "• Spread: en iyi alis-satis farki; dusuk olmasi daha sagliklidir.",
             "• Maliyet: komisyon + spread + tahmini kayma dahil gidis-donus maliyeti.",
             "  1 bps = %0,01; maliyet sonrasi hareket pozitif degilse avantaj yoktur.",
+            "• %2/%3 hedef bildirimi: sinyal fiyatindan, YUKARI icin +; ASAGI icin - yonunde hesaplanir.",
+            "  Her kademe sinyal basina bir kez bildirilir; hedefe ulasmak garanti veya emir degildir.",
             "",
-            "SCALP AILELERI (ARASTIRMA)",
+            "🧪 SCALP AILELERI (ARASTIRMA)",
             "• F1 hacim momentumu: yukari mum + log-hacim z en az 3.",
             "• F2 kaskad dusus: 30dk getiri en az 3 sigma asagi + hacim z en az 2.",
             "• F3 kirilim devami: onceki 12s zirve ustu kapanis + hacim z en az 2.",
@@ -385,26 +405,26 @@ def format_explanations() -> str:
             "• B2 geri cekilme donusu: trend icinde kontrollu dusus sonrasi toparlanma.",
             "• B3 goreli guc gecisi: 24s getiride ilk %10'a yeni giris + kisa donem yukari.",
             "",
-            "REJIM VE ETIKET",
+            "🧭 REJIM VE ETIKET",
             "• BOGA: BTC/ETH trendi ve piyasalarin genis bolumu yukari.",
             "• GECIS: kosullar karisik; KAPALI: boga kosulu yok.",
             "• Genislik: 89 piyasanin 48 saatlik trend filtresinin ustunde olan orani.",
             "• RADAR: tek aile goruldu; KURULUM: ayni coinde coklu aile + boga rejimi + uygun spread.",
             "  Ikisi de islem emri veya yatirim tavsiyesi degildir.",
             "",
-            "BT 15/30/60dk",
+            "📊 BT 15/30/60dk",
             "• Yalnizca kapanmis ileri-test sonuclaridir; her ufuk ayri hesaplanir.",
             "• Yukari/asagi olasiligi: gecmiste fiyat hangi yonde hareket etti.",
             "• Medyan hareket: tipik brut hareket (bps ve %).",
             "• Medyan net hareket: tahmini maliyet cikarildiktan sonraki tipik hareket.",
             "• n: hesaba giren sonuc sayisi; n dusukse belirsizlik yuksektir.",
             "",
-            "BTC/ETH MODEL MESAJLARI",
+            "🤖 BTC/ETH MODEL MESAJLARI",
             "• Yukari/asagi yuzdeleri: kalibre edilmis model olasiligi.",
             "• Medyan kapanis: benzer gecmis durumlarin tahmini kapanis seviyesi.",
             "• Net beklenti ve isabet: tamamen dis-ornek walk-forward backtest metrikleri.",
             "",
-            "Bot emir vermez; tum scalp bildirimleri gozlem ve arastirma amaclidir.",
+            "⚠️ Bot emir vermez; tum scalp bildirimleri gozlem ve arastirma amaclidir.",
         ]
     )
 

@@ -28,10 +28,17 @@ from .data import load_cache
 PENDING_SCHEMA = "signal-outcome-pending-v2"
 LEDGER_SCHEMA = "signal-outcome-v2"
 SETTLEMENT_GRACE_DAYS = 7
+TARGET_PENDING_SCHEMA = "signal-target-pending-v1"
+TARGET_TOUCH_PERCENTS = (2.0, 3.0)
 
 
 def pending_dir(state_dir: Path) -> Path:
     return state_dir / "pending"
+
+
+def target_pending_dir(state_dir: Path) -> Path:
+    """Signals still being watched for the larger informational targets."""
+    return state_dir / "target_pending"
 
 
 def ledger_path(state_dir: Path) -> Path:
@@ -80,7 +87,87 @@ def record_delivery(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n",
             encoding="utf-8",
         )
+    _record_target_delivery(state_dir, payload)
     return path
+
+
+def pending_target_touches(
+    state_dir: Path,
+    data_dir: Path,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Find newly touched +/-2% and +/-3% levels without changing their state.
+
+    The normal triple-barrier record may settle much earlier than these larger
+    informational levels.  A separate, tiny tracker therefore survives that
+    settlement and watches the signal's configured horizon.
+    """
+    # A deployment may find a signal that was parked by the previous version.
+    # Copy still-open records into the independent target tracker so the update
+    # does not create a blind spot at the rollout boundary.
+    for pending_path in pending_dir(state_dir).glob("*.json"):
+        pending_record = _read_record(pending_path)
+        if pending_record is not None:
+            _record_target_delivery(state_dir, pending_record)
+    directory = target_pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    current_ms = int((now or datetime.now(timezone.utc)).timestamp() * 1000)
+    grace_ms = SETTLEMENT_GRACE_DAYS * 24 * 60 * 60 * 1000
+    frames: dict[tuple[str, str], pd.DataFrame] = {}
+    events: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        record = _read_target_record(path)
+        if record is None:
+            path.unlink(missing_ok=True)
+            continue
+        source_ms = int(record["source_close_time_ms"])
+        deadline_ms = source_ms + int(record["horizon_ms"])
+        if current_ms - deadline_ms > grace_ms:
+            path.unlink(missing_ok=True)
+            continue
+        key = (str(record["symbol"]), str(record["interval"]))
+        if key not in frames:
+            frames[key] = _candles(data_dir, *key)
+        until_ms = min(current_ms, deadline_ms)
+        window = _window(frames[key], source_ms, until_ms)
+        touched = _target_touches(record, window)
+        delivered = {float(value) for value in record.get("delivered_percents", [])}
+        for percent in TARGET_TOUCH_PERCENTS:
+            if percent in delivered or percent not in touched:
+                continue
+            event = dict(record)
+            event.update(touched[percent])
+            event["target_percent"] = percent
+            events.append(event)
+    return events
+
+
+def mark_target_touch_delivered(
+    state_dir: Path, signal_id: str, target_percent: float
+) -> None:
+    """Persist one successful target notification, idempotently."""
+    try:
+        percent = float(target_percent)
+    except (TypeError, ValueError):
+        return
+    if percent not in TARGET_TOUCH_PERCENTS:
+        return
+    path = target_pending_dir(state_dir) / f"{signal_id}.json"
+    record = _read_target_record(path)
+    if record is None:
+        return
+    delivered = {float(value) for value in record.get("delivered_percents", [])}
+    delivered.add(percent)
+    record["delivered_percents"] = sorted(delivered)
+    if all(percent in delivered for percent in TARGET_TOUCH_PERCENTS):
+        path.unlink(missing_ok=True)
+        return
+    path.write_text(
+        json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 def settle_pending(
@@ -176,22 +263,22 @@ def format_scorecard(card: dict[str, Any]) -> str:
     lines = [
         f"📊 CANLI KARNE — son {card['days']} gun",
         "",
-        "Gonderilen sinyallerin gercek sonucu. Backtest degil, botun kendi kaydi.",
+        "📌 Gonderilen sinyallerin gercek sonucu; backtest degil, botun kendi kaydi.",
         "",
-        f"Toplam kapanan sinyal: {overall['count']}",
+        f"📍 Toplam kapanan sinyal: {overall['count']}",
     ]
     if not overall["count"]:
-        lines.append("Henuz kapanmis sinyal yok.")
+        lines.append("ℹ️ Henuz kapanmis sinyal yok.")
         lines.append("")
-        lines.append("Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir.")
+        lines.append("⚠️ Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir.")
         return "\n".join(lines)
     lines.extend(
         [
-            f"Yon isabeti: %{overall['hitRate'] * 100:.1f}",
-            f"Maliyet sonrasi ortalama: {overall['netBps']:+.2f} bps/sinyal",
-            f"Maliyet sonrasi toplam: {overall['netBpsTotal']:+.1f} bps",
+            f"🎯 Yon isabeti: %{overall['hitRate'] * 100:.1f}",
+            f"💹 Maliyet sonrasi ortalama: {overall['netBps']:+.2f} bps/sinyal",
+            f"💰 Maliyet sonrasi toplam: {overall['netBpsTotal']:+.1f} bps",
             "",
-            "MODEL BAZINDA",
+            "🧩 MODEL BAZINDA",
         ]
     )
     for key, stats in card["byModel"].items():
@@ -206,7 +293,7 @@ def format_scorecard(card: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir.",
+            "⚠️ Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir.",
         ]
     )
     return "\n".join(lines)
@@ -354,6 +441,105 @@ def _read_record(path: Path) -> dict[str, Any] | None:
     return payload
 
 
+def _record_target_delivery(state_dir: Path, payload: dict[str, Any]) -> None:
+    directory = target_pending_dir(state_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{payload['signal_id']}.json"
+    if path.exists():
+        return
+    target_payload = {
+        "schema": TARGET_PENDING_SCHEMA,
+        "signal_id": payload["signal_id"],
+        "symbol": payload["symbol"],
+        "interval": payload["interval"],
+        "tier": payload.get("tier", "GOZLEM"),
+        "direction": payload["direction"],
+        "probability": float(payload["probability"]),
+        "source_price": float(payload["source_price"]),
+        "source_close_time_ms": int(payload["source_close_time_ms"]),
+        "horizon_ms": int(payload["horizon_ms"]),
+        "delivered_percents": [],
+    }
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(
+                json.dumps(target_payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                + "\n"
+            )
+    except FileExistsError:
+        pass
+
+
+def _read_target_record(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    required = (
+        "signal_id",
+        "symbol",
+        "interval",
+        "direction",
+        "source_price",
+        "source_close_time_ms",
+        "horizon_ms",
+    )
+    if not isinstance(payload, dict) or payload.get("schema") != TARGET_PENDING_SCHEMA:
+        return None
+    if any(key not in payload for key in required):
+        return None
+    try:
+        source_price = float(payload["source_price"])
+        source_ms = int(payload["source_close_time_ms"])
+        horizon_ms = int(payload["horizon_ms"])
+    except (TypeError, ValueError):
+        return None
+    if (
+        not math.isfinite(source_price)
+        or source_price <= 0.0
+        or source_ms < 0
+        or horizon_ms <= 0
+        or str(payload["direction"]) not in {"YUKARI", "ASAGI"}
+    ):
+        return None
+    delivered = payload.get("delivered_percents", [])
+    if not isinstance(delivered, list):
+        return None
+    try:
+        payload["delivered_percents"] = sorted(
+            {float(value) for value in delivered if float(value) in TARGET_TOUCH_PERCENTS}
+        )
+    except (TypeError, ValueError):
+        return None
+    return payload
+
+
+def _target_touches(
+    record: dict[str, Any], window: pd.DataFrame
+) -> dict[float, dict[str, Any]]:
+    if window.empty:
+        return {}
+    source_price = float(record["source_price"])
+    long_side = str(record["direction"]) == "YUKARI"
+    result: dict[float, dict[str, Any]] = {}
+    for close_time, high, low, close in window.itertuples(index=False):
+        extreme = float(high) if long_side else float(low)
+        for percent in TARGET_TOUCH_PERCENTS:
+            if percent in result:
+                continue
+            multiplier = 1.0 + percent / 100.0 if long_side else 1.0 - percent / 100.0
+            target_price = source_price * multiplier
+            reached = extreme >= target_price if long_side else extreme <= target_price
+            if reached:
+                result[percent] = {
+                    "target_price": target_price,
+                    "touch_price": extreme,
+                    "touch_close_time_ms": int(close_time),
+                    "touch_close": float(close),
+                }
+    return result
+
+
 def _append_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     with ledger_path(state_dir).open("a", encoding="utf-8", newline="\n") as handle:
@@ -364,9 +550,13 @@ def _append_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
 
 
 __all__ = [
+    "TARGET_TOUCH_PERCENTS",
     "format_scorecard",
     "load_ledger",
+    "mark_target_touch_delivered",
+    "pending_target_touches",
     "record_delivery",
     "scorecard",
     "settle_pending",
+    "target_pending_dir",
 ]

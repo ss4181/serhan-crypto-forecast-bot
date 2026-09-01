@@ -66,6 +66,18 @@ class TelegramTests(unittest.TestCase):
         )
         self.assertEqual(requests[0]["reply_markup"], keyboard)
 
+    def test_menu_exposes_core_and_scalp_reports(self) -> None:
+        buttons = [
+            button
+            for row in telegram_menu_keyboard()["inline_keyboard"]
+            for button in row
+        ]
+        callbacks = {button["callback_data"] for button in buttons}
+        self.assertEqual(
+            callbacks,
+            {"start", "explanations", "status", "performance:30", "scalp_performance:30", "members"},
+        )
+
     @patch.dict(os.environ, CREDENTIALS, clear=False)
     def test_rate_limited_send_is_retried(self) -> None:
         attempts = 0

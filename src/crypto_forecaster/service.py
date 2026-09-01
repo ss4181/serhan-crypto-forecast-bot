@@ -28,6 +28,8 @@ from .openinterest import OpenInterestError, update_open_interest
 from .outcomes import (
     format_scorecard,
     load_ledger,
+    mark_target_touch_delivered,
+    pending_target_touches,
     record_delivery,
     scorecard,
     settle_pending,
@@ -36,8 +38,11 @@ from .research import research_all
 from .scalping import (
     SCALP_STEP_MS,
     deliver_scalp_observations,
+    format_scalp_scorecard,
+    load_scalp_ledger,
     record_scalp_observations,
     refresh_and_scan_scalp_universe,
+    scalp_scorecard,
     settle_scalp_observations,
 )
 from .telegram import (
@@ -249,48 +254,62 @@ def _retimed(settings: Settings, cached: Prediction, current_ms: int) -> Predict
 
 def format_prediction(prediction: Prediction) -> str:
     icon = "🟢" if prediction.direction == "YUKARI" else "🔴"
+    direction_icon = "📈" if prediction.direction == "YUKARI" else "📉"
     source_close = _utc_text(prediction.source_close_time_ms)
     target_close = _utc_text(prediction.target_close_time_ms)
     remaining_minutes = max(
         0.0, (prediction.target_close_time_ms - prediction.evaluated_at_ms) / 60000
     )
     metrics = prediction.backtest
+    target_sign = "+" if prediction.direction == "YUKARI" else "-"
+    target_2_price = prediction.source_price * (
+        1.02 if prediction.direction == "YUKARI" else 0.98
+    )
+    target_3_price = prediction.source_price * (
+        1.03 if prediction.direction == "YUKARI" else 0.97
+    )
     indicator_lines = [
         f"• {item.name}: {item.display_value} — {item.direction_effect}"
         for item in prediction.indicators
     ]
     if prediction.eligible:
-        header = f"{icon} ISLEM ADAYI"
+        header = "ISLEM ADAYI"
         status = "Maliyet sonrasi olculmus pozitif beklentisi olan tek tier."
     else:
-        header = "🔎 GOZLEM"
+        header = "GOZLEM"
         status = "ISLEM ADAYI DEGIL: " + "; ".join(prediction.ineligible_reasons)
     message = "\n".join(
         [
-            f"{header} | {prediction.symbol} | {INTERVAL_LABELS[prediction.interval]} | {prediction.direction}",
+            f"{icon} {header} | {prediction.symbol} | {INTERVAL_LABELS[prediction.interval]} | {prediction.direction}",
             "",
-            f"Sinyal zamani: {source_close}",
-            f"Tahmin edilen kapanis: {target_close} ({remaining_minutes:.1f} dk kaldi)",
-            f"Referans fiyat (son kapali mum): ${prediction.source_price:,.2f}",
-            f"Yon olasiligi: YUKARI %{prediction.probability_up * 100:.1f} | ASAGI %{prediction.probability_down * 100:.1f}",
-            f"Durum: {status}",
+            "📌 DURUM",
+            f"• Durum: {status}",
+            f"• Güven yönü: {direction_icon} {prediction.direction} | %{prediction.confidence * 100:.1f}",
             "",
-            "HEDEF TANIMI (uclu bariyer)",
+            "⏱ ZAMAN VE FİYAT",
+            f"• Sinyal zamani: {source_close}",
+            f"• Tahmin edilen kapanis: {target_close} ({remaining_minutes:.1f} dk kaldi)",
+            f"• Referans fiyat (son kapali mum): ${prediction.source_price:,.2f}",
+            f"• Yon olasiligi: YUKARI %{prediction.probability_up * 100:.1f} | ASAGI %{prediction.probability_down * 100:.1f}",
+            "",
+            "🎯 HEDEF TANIMI (uclu bariyer)",
             f"• Yon = fiyatin once hangi tarafa ±{metrics.barrier_bps_median:.0f} bps "
             f"hareket ettigi; en fazla {metrics.barrier_horizon_candles} mum beklenir",
             f"• Bu hedef {metrics.round_trip_cost_bps:.1f} bps gidis-donus maliyetinin "
             "en az iki kati secilir, yani kazanan islem masrafini fazlasiyla karsilar",
             f"• Gecmiste sinyallerin %{metrics.resolved_fraction * 100:.0f}'i bariyere ulasti; "
             f"kalani sure dolunca piyasadan kapandi",
+            f"• Genis hedef izleme: {target_sign}2% ${target_2_price:,.2f} | "
+            f"{target_sign}3% ${target_3_price:,.2f}; dokununca ayri bildirim gelir",
             "",
-            "MALIYET SONRASI BEKLENTI (bu tahminin tek gecerli olcusu)",
+            "💹 MALIYET SONRASI BEKLENTI (bu tahminin tek gecerli olcusu)",
             f"• Olculen net beklenti: {metrics.net_edge_bps:+.2f} bps/sinyal "
             f"({metrics.round_trip_cost_bps:.1f} bps gidis-donus maliyeti dusulmus)",
             f"• Gun bloklu %95 aralik: {metrics.net_edge_ci95_low:+.2f} – {metrics.net_edge_ci95_high:+.2f} bps",
             f"• Ortalama kazanc {metrics.average_win_bps:+.1f} bps / ortalama kayip "
             f"{metrics.average_loss_bps:+.1f} bps",
             "",
-            "FIYAT SENARYOLARI (benzer kalibre edilmis gecmis durumlar)",
+            "📍 FIYAT SENARYOLARI (benzer kalibre edilmis gecmis durumlar)",
             f"• ${prediction.target_up_price:,.2f} (+0.5 ATR) gorulme: %{prediction.target_up_touch_probability * 100:.1f}",
             f"• ${prediction.target_down_price:,.2f} (-0.5 ATR) gorulme: %{prediction.target_down_touch_probability * 100:.1f}",
             f"• Ikisi de ayni mumda gorulur: %{prediction.touch_both_probability * 100:.1f} — "
@@ -298,17 +317,17 @@ def format_prediction(prediction: Prediction) -> str:
             f"• Kapanis icin %80 aralik: ${prediction.close_range_low:,.2f} – ${prediction.close_range_high:,.2f}",
             f"• Senaryo medyan kapanisi: ${prediction.close_range_median:,.2f} (benzer n={prediction.scenario_count})",
             "",
-            "WALK-FORWARD BACKTEST (tamamen OOS)",
+            "📊 WALK-FORWARD BACKTEST (tamamen OOS)",
             f"• Yuksek guven yon isabeti: %{metrics.signal_accuracy * 100:.1f} "
             f"(n={metrics.signal_count}, {metrics.signal_days} ayri gun)",
             f"• 6 model icin aile-duzeltilmis %95 GA: %{metrics.signal_familywise_ci95_low * 100:.1f}–%{metrics.signal_familywise_ci95_high * 100:.1f}",
             f"• Tum mum yon dogrulugu: %{metrics.accuracy * 100:.1f} | taban: %{metrics.baseline_accuracy * 100:.1f}",
             f"• Sinyal kapsami: %{metrics.signal_coverage * 100:.1f} | Brier: {metrics.brier_score:.4f} | ECE: %{metrics.expected_calibration_error * 100:.1f}",
             "",
-            "SINYALI EN COK ETKILEYEN BELIRTECLER",
+            "🧩 SINYALI EN COK ETKILEYEN BELIRTECLER",
             *indicator_lines,
             "",
-            "Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir. Olasiliklar garanti degildir.",
+            "⚠️ Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir. Olasiliklar garanti degildir.",
         ]
     )
     if len(message) > 4096:
@@ -332,10 +351,10 @@ def format_observation_digest(
     lines = [
         f"🔎 GOZLEM RAPORU | {len(predictions)} model | {stamp}",
         "",
-        "Her modelin o anki durumu. ISLEM ADAYI olmayanlar da burada gorunur ki",
-        "hicbir modelin sessiz kalmadigi dogrulanabilsin.",
+        "📌 OZET",
+        "Her modelin o anki durumu; ISLEM ADAYI olmayanlar da burada gorunur.",
         "",
-        f"Islem adayi: {len(tradeable)} / {len(predictions)}",
+        f"📍 Islem adayi: {len(tradeable)} / {len(predictions)}",
         "",
     ]
     for item in predictions:
@@ -343,25 +362,28 @@ def format_observation_digest(
         mark = "🟢" if item.eligible else "▫️"
         lines.append(
             f"{mark} {item.symbol} {INTERVAL_LABELS[item.interval]} — {item.direction} "
-            f"yukari %{item.probability_up * 100:.1f} / asagi %{item.probability_down * 100:.1f} | "
-            f"${item.source_price:,.2f}"
+            f"| ${item.source_price:,.2f}"
+        )
+        lines.append(
+            f"    📊 Yon olasiligi: yukari %{item.probability_up * 100:.1f} / "
+            f"asagi %{item.probability_down * 100:.1f}"
         )
         median_move_pct = (item.close_range_median / item.source_price - 1.0) * 100.0
         lines.append(
-            f"    medyan kapanis ${item.close_range_median:,.2f} "
+            f"    🎯 medyan kapanis ${item.close_range_median:,.2f} "
             f"({median_move_pct:+.2f}%) | ufuk {INTERVAL_LABELS[item.interval]}"
         )
         lines.append(
-            f"    net beklenti {metrics.net_edge_bps:+.2f} bps "
-            f"({metrics.net_edge_ci95_low:+.1f} / {metrics.net_edge_ci95_high:+.1f}), "
+            f"    💹 net beklenti {metrics.net_edge_bps:+.2f} bps "
+            f"({metrics.net_edge_ci95_low:+.1f} / {metrics.net_edge_ci95_high:+.1f}) | "
             f"isabet %{metrics.signal_accuracy * 100:.1f} (n={metrics.signal_count})"
         )
         if not item.eligible:
-            lines.append(f"    engel: {_first_reason(item.ineligible_reasons)}")
+            lines.append(f"    ⛔ engel: {_first_reason(item.ineligible_reasons)}")
     lines.extend(
         [
             "",
-            "Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir.",
+            "⚠️ Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir.",
         ]
     )
     message = "\n".join(lines)
@@ -564,6 +586,73 @@ def deliver_scorecard(
     )
 
 
+def format_target_touch(event: dict[str, object]) -> str:
+    """Explain a larger target touch in the same compact, stacked style."""
+    symbol = str(event.get("symbol", "?"))
+    interval = INTERVAL_LABELS.get(
+        str(event.get("interval", "")), str(event.get("interval", "?"))
+    )
+    direction = str(event.get("direction", "?"))
+    direction_icon = "📈" if direction == "YUKARI" else "📉"
+    target_percent = float(event.get("target_percent", 0.0))
+    signed_percent = (
+        f"+{target_percent:g}%" if direction == "YUKARI" else f"-{target_percent:g}%"
+    )
+    tier = str(event.get("tier", "GOZLEM"))
+    message = "\n".join(
+        [
+            f"🎯 HEDEF FIYATA ULASILDI | {symbol} | {interval}",
+            "",
+            f"{direction_icon} Yon: {direction} ({tier})",
+            f"📍 Sinyal fiyati: ${float(event['source_price']):,.2f}",
+            f"🕒 Sinyal zamani: {_utc_text(int(event['source_close_time_ms']))}",
+            f"✅ Hedef kademe: {signed_percent}",
+            f"🎯 Hedef fiyat: ${float(event['target_price']):,.2f}",
+            f"💹 Dokunulan fiyat: ${float(event['touch_price']):,.2f}",
+            f"🕒 Dokunma zamani: {_utc_text(int(event['touch_close_time_ms']))}",
+            "",
+            "ℹ️ Bu, sinyalin yonunde fiyat hedefinin goruldugunu bildirir; emir veya garanti degildir.",
+        ]
+    )
+    if len(message) > 4096:
+        raise ValueError("Telegram hedef mesaji 4096 karakteri asti")
+    return message
+
+
+def deliver_target_touches(
+    settings: Settings,
+    *,
+    notifier: TelegramNotifier | None = None,
+    now: datetime | None = None,
+) -> list[tuple[dict[str, object], TelegramDelivery]]:
+    """Send each signal's +/−2% and +/−3% touch at most once."""
+    events = pending_target_touches(
+        settings.outcome_state_dir, settings.data_dir, now=now
+    )
+    if not events:
+        return []
+    client = notifier or TelegramNotifier()
+    deliveries: list[tuple[dict[str, object], TelegramDelivery]] = []
+    for event in events:
+        percent = float(event["target_percent"])
+        level = f"{percent:g}"
+        target_signal_id = digest_signal_id(
+            f"target-touch|{event['signal_id']}|{level}", 0
+        )
+        delivery = client.deliver_once(
+            signal_id=target_signal_id,
+            text=format_target_touch(event),
+            state_dir=settings.telegram_state_dir / "targets",
+            reply_markup=telegram_menu_keyboard(),
+        )
+        if delivery.status in {"SENT", "DEDUPLICATED"}:
+            mark_target_touch_delivered(
+                settings.outcome_state_dir, str(event["signal_id"]), percent
+            )
+        deliveries.append((event, delivery))
+    return deliveries
+
+
 def answer_commands(
     settings: Settings,
     predictions: list[Prediction],
@@ -578,6 +667,11 @@ def answer_commands(
         status_text=lambda: format_observation_digest(predictions, now=current),
         performance_text=lambda days: format_scorecard(
             scorecard(load_ledger(settings.outcome_state_dir), days=days, now=current)
+        ),
+        scalp_performance_text=lambda days: format_scalp_scorecard(
+            scalp_scorecard(
+                load_scalp_ledger(settings.scalp_state_dir), days=days, now=current
+            )
         ),
         explanation_text=format_explanations,
         reply_markup=telegram_menu_keyboard(),
@@ -650,6 +744,13 @@ def serve_forever(
                 round_trip_cost_bps=settings.round_trip_cost_bps,
                 now=now,
             )
+            if is_primary():
+                target_deliveries = deliver_target_touches(settings, now=now)
+                for event, delivery in target_deliveries:
+                    progress(
+                        f"{event['symbol']} {event['interval']} hedef %{float(event['target_percent']):g}: "
+                        f"{delivery.status}{_detail_suffix(delivery)}"
+                    )
             record_open_interest(settings, now=now)
             if scalp_manifest is not None and now_ms >= next_scalp_scan_ms:
                 try:
@@ -860,9 +961,11 @@ __all__ = [
     "deliver_eligible",
     "deliver_observation_digest",
     "deliver_scorecard",
+    "deliver_target_touches",
     "evaluate_all",
     "format_observation_digest",
     "format_prediction",
+    "format_target_touch",
     "make_prediction",
     "models_need_research",
     "research_due",

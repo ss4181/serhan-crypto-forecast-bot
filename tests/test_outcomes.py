@@ -9,8 +9,11 @@ import numpy as np
 
 from crypto_forecaster.config import cache_path
 from crypto_forecaster.outcomes import (
+    TARGET_TOUCH_PERCENTS,
     format_scorecard,
     load_ledger,
+    mark_target_touch_delivered,
+    pending_target_touches,
     record_delivery,
     scorecard,
     settle_pending,
@@ -180,6 +183,57 @@ class ScorecardTests(unittest.TestCase):
         card = scorecard([], days=30)
         self.assertEqual(card["overall"]["count"], 0)
         self.assertIn("Henuz kapanmis sinyal yok", format_scorecard(card))
+
+
+class TargetTouchTests(unittest.TestCase):
+    def test_long_targets_are_reported_once_even_after_barrier_settlement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            closes = [ENTRY] * 3 + [ENTRY * 1.02, ENTRY * 1.03] + [ENTRY] * 8
+            write_candles(root / "data", closes, highs=closes)
+            park_signal(root / "outcomes", "YUKARI")
+            # The ordinary 1% barrier has already settled, but the larger
+            # informational targets still have their own tracking record.
+            settle(root, after_ms=STEP_MS * 12)
+            events = pending_target_touches(
+                root / "outcomes",
+                root / "data",
+                now=datetime.fromtimestamp(
+                    (SOURCE_CLOSE_MS + STEP_MS * 6) / 1000, tz=timezone.utc
+                ),
+            )
+            self.assertEqual(
+                [event["target_percent"] for event in events], list(TARGET_TOUCH_PERCENTS)
+            )
+            mark_target_touch_delivered(root / "outcomes", "a" * 64, 2.0)
+            remaining = pending_target_touches(
+                root / "outcomes",
+                root / "data",
+                now=datetime.fromtimestamp(
+                    (SOURCE_CLOSE_MS + STEP_MS * 6) / 1000, tz=timezone.utc
+                ),
+            )
+            self.assertEqual([event["target_percent"] for event in remaining], [3.0])
+            mark_target_touch_delivered(root / "outcomes", "a" * 64, 3.0)
+            self.assertEqual(
+                pending_target_touches(root / "outcomes", root / "data"), []
+            )
+
+    def test_short_targets_use_the_downside_touch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            closes = [ENTRY] * 3 + [ENTRY * 0.98, ENTRY * 0.97] + [ENTRY] * 8
+            write_candles(root / "data", closes, lows=closes)
+            park_signal(root / "outcomes", "ASAGI")
+            events = pending_target_touches(
+                root / "outcomes",
+                root / "data",
+                now=datetime.fromtimestamp(
+                    (SOURCE_CLOSE_MS + STEP_MS * 6) / 1000, tz=timezone.utc
+                ),
+            )
+            self.assertEqual([event["target_percent"] for event in events], [2.0, 3.0])
+            self.assertLess(float(events[0]["target_price"]), ENTRY)
 
 
 if __name__ == "__main__":

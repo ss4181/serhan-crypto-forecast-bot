@@ -28,14 +28,17 @@ def telegram_menu_keyboard() -> dict[str, object]:
     return {
         "inline_keyboard": [
             [
-                {"text": "🏠 Başlangıç / Yardım", "callback_data": "start"},
+                {"text": "🏠 Başlangıç", "callback_data": "start"},
                 {"text": "📖 Açıklamalar", "callback_data": "explanations"},
             ],
             [
-                {"text": "📊 Güncel durum", "callback_data": "status"},
-                {"text": "📈 Performans 30g", "callback_data": "performance:30"},
+                {"text": "📊 Güncel Durum", "callback_data": "status"},
+                {"text": "📈 Performans (30g)", "callback_data": "performance:30"},
             ],
-            [{"text": "👥 Yetkililer", "callback_data": "members"}],
+            [
+                {"text": "🧪 Scalp Karne (30g)", "callback_data": "scalp_performance:30"},
+                {"text": "👥 Yetkililer", "callback_data": "members"},
+            ],
         ]
     }
 

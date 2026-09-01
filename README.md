@@ -370,12 +370,13 @@ Yeni bir terminal açıp bağlantıyı sınayın:
 python run.py telegram-test
 ```
 
-Gönderilen bildirimlere sabit bir Telegram menüsü eklenir: **Başlangıç / Yardım**
-mevcut komut listesini, **Açıklamalar** terimleri ve F1–F3/B1–B3 mantığını,
-**Güncel durum** altı modelin son olasılıklarını, **Performans 30g** ise
-gönderilmiş sinyallerin gerçekleşen sonuçlarını, **Yetkililer** de erişim
-listesini açar. Aynı açıklama kişisel komut olarak `/aciklamalar` ile de
-istenebilir. Düğme yanıtları yalnızca `CRYPTO_TELEGRAM_OWNER_ID` veya
+Gönderilen bildirimlere sabit bir Telegram menüsü eklenir: **Başlangıç** mevcut
+komut listesini, **Açıklamalar** terimleri ve F1–F3/B1–B3 mantığını, **Güncel
+Durum** altı modelin son olasılıklarını, **Performans (30g)** gönderilmiş
+sinyallerin gerçekleşen sonuçlarını, **Scalp Karne (30g)** ise 89 coinlik scalp
+ileri-test sonuçlarını, **Yetkililer** de erişim listesini açar. Aynı açıklama
+kişisel komut olarak `/aciklamalar` ile de istenebilir. Düğme yanıtları yalnızca
+`CRYPTO_TELEGRAM_OWNER_ID` veya
 `members.json` içindeki yetkili kimliklere gönderilir; tanımsız kullanıcılar
 sessizce yok sayılır.
 
@@ -415,6 +416,7 @@ Sonra bota **özel mesaj** olarak:
 |---|---|
 | `/durum` | Altı modelin o anki durumu — beklemeden anlık cevap |
 | `/performans [gün]` | Gönderilen sinyallerin gerçek sonucu (varsayılan 30 gün) |
+| `/scalpkarne [gün]` | Scalp ileri-test sonuçları (varsayılan 30 gün) |
 | `/kisiler` | Yetkili kişiler |
 | `/yardim` | Komut listesi |
 | `/ekle <kimlik> <ad>` | **Yalnız sahip** — birine sorgulama yetkisi verir |
@@ -482,6 +484,16 @@ python run.py scorecard --days 30
 ```
 
 Bulut çalışması bu özeti UTC gününde bir kez kanala da yollar.
+
+### Geniş hedef dokunuş bildirimleri
+
+Gönderilmiş her sinyal, normal üçlü bariyer sonucu erken kapanmış olsa bile kendi
+ufku boyunca iki büyük fiyat seviyesinde ayrıca izlenir. YUKARI sinyalde sinyal
+fiyatının `+%2` ve `+%3` seviyeleri, AŞAĞI sinyalde `-%2` ve `-%3` seviyeleri
+mumun yüksek/düşük değerine dokunduğunda Telegram'a tekil bir bildirim gelir.
+Her kademe sinyal başına yalnızca bir kez gönderilir; bu ölçüm bir emir veya
+garanti değildir. Bildirimde sinyal fiyatı, hedef fiyatı, dokunulan mum fiyatı,
+yön, zaman dilimi ve dokunma zamanı bulunur.
 
 ### Tek seferlik gerçek değerlendirme
 

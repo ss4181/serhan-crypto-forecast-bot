@@ -16,14 +16,18 @@ from crypto_forecaster.data import MarketDataError
 from crypto_forecaster.features import build_supervised_dataset
 from market_fixtures import ohlcv, with_flow
 from crypto_forecaster.model import BacktestMetrics, fit_final_bundle, save_bundle, walk_forward_backtest
+from crypto_forecaster.outcomes import pending_target_touches, record_delivery
+from crypto_forecaster.telegram import TelegramDelivery
 from crypto_forecaster.service import (
     IndicatorContribution,
     Prediction,
     dashboard_snapshot,
     deliver_eligible,
+    deliver_target_touches,
     evaluate_all,
     format_observation_digest,
     format_prediction,
+    format_target_touch,
     _next_scalp_scan_ms,
     make_prediction,
     PredictionCache,
@@ -203,6 +207,26 @@ class MessageTests(unittest.TestCase):
         self.assertIn("medyan kapanis $60,020.00 (+0.03%)", text)
         self.assertLessEqual(len(text), 4096)
 
+    def test_target_touch_message_shows_direction_and_price_levels(self) -> None:
+        text = format_target_touch(
+            {
+                "symbol": "BTCUSDT",
+                "interval": "5m",
+                "direction": "YUKARI",
+                "tier": "ISLEM",
+                "source_price": 60_000.0,
+                "source_close_time_ms": 1_700_000_000_000,
+                "target_percent": 2.0,
+                "target_price": 61_200.0,
+                "touch_price": 61_250.0,
+                "touch_close_time_ms": 1_700_000_000_000,
+            }
+        )
+        self.assertIn("HEDEF FIYATA ULASILDI", text)
+        self.assertIn("+2%", text)
+        self.assertIn("$61,200.00", text)
+        self.assertIn("$61,250.00", text)
+
 
 class ServiceTests(unittest.TestCase):
     @patch("crypto_forecaster.service.models_need_research", return_value=False)
@@ -229,6 +253,64 @@ class ServiceTests(unittest.TestCase):
     @patch.dict(os.environ, {}, clear=True)
     def test_no_signal_does_not_require_telegram_credentials(self) -> None:
         self.assertEqual(deliver_eligible(Settings(), []), [])
+
+    def test_target_touch_delivery_deduplicates_each_level(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = Settings(
+                data_dir=root / "data",
+                outcome_state_dir=root / "outcomes",
+                telegram_state_dir=root / "telegram",
+            )
+            source_close = 1_700_000_299_999
+            bars = with_flow(
+                ohlcv(
+                    close=np.asarray([60_000.0, 60_000.0, 61_200.0, 61_800.0]),
+                    high=np.asarray([60_000.0, 60_000.0, 61_200.0, 61_800.0]),
+                    low=np.asarray([60_000.0] * 4),
+                    volume=np.asarray([10.0] * 4),
+                    open_price=np.asarray([60_000.0] * 4),
+                    start_ms=source_close + 1,
+                    step_ms=STEP_MS,
+                )
+            )
+            settings.data_dir.mkdir(parents=True, exist_ok=True)
+            bars.to_csv(cache_path(settings.data_dir, "BTCUSDT", "5m"), index=False)
+            record_delivery(
+                settings.outcome_state_dir,
+                signal_id="b" * 64,
+                symbol="BTCUSDT",
+                interval="5m",
+                tier="ISLEM",
+                direction="YUKARI",
+                probability=.64,
+                source_price=60_000.0,
+                source_close_time_ms=source_close,
+                target_close_time_ms=source_close + STEP_MS,
+                delivered_at_ms=source_close + 500,
+                barrier_bps=100.0,
+                horizon_ms=24 * 60 * 60 * 1000,
+            )
+
+            class Notifier:
+                def __init__(self) -> None:
+                    self.calls: list[dict[str, object]] = []
+
+                def deliver_once(self, **kwargs):  # type: ignore[no-untyped-def]
+                    self.calls.append(kwargs)
+                    return TelegramDelivery("SENT", len(self.calls))
+
+            notifier = Notifier()
+            deliveries = deliver_target_touches(
+                settings,
+                notifier=notifier,
+                now=moment(source_close + STEP_MS * 5),
+            )
+            self.assertEqual(len(deliveries), 2)
+            self.assertEqual(len(notifier.calls), 2)
+            self.assertEqual(
+                pending_target_touches(settings.outcome_state_dir, settings.data_dir), []
+            )
 
     def test_dashboard_snapshot_explains_probability_price_and_evidence(self) -> None:
         snapshot = dashboard_snapshot([sample_prediction()])

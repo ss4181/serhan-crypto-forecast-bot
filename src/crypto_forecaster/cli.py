@@ -31,6 +31,7 @@ from .service import (
     deliver_eligible,
     deliver_observation_digest,
     deliver_scorecard,
+    deliver_target_touches,
     evaluate_all,
     format_prediction,
     make_prediction,
@@ -218,6 +219,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if settled:
                 hits = sum(1 for row in settled if row["correct"])
                 print(f"{len(settled)} sinyal sonuclandi ({hits} yon dogru).")
+            if _telegram_configured() and is_primary():
+                for event, delivery in deliver_target_touches(settings):
+                    detail = f" ({delivery.detail})" if delivery.detail else ""
+                    print(
+                        f"{event['symbol']} {event['interval']} hedef "
+                        f"%{float(event['target_percent']):g}: {delivery.status}{detail}"
+                    )
             added = record_open_interest(settings)
             if added:
                 print(f"Acik pozisyon kaydi: {added} yeni satir.")
@@ -295,8 +303,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "telegram-test":
             message_id = TelegramNotifier().send_message(
-                "BTC/ETH olasilik botu — ucuncu kanal baglanti testi.\n\n"
-                "Yalnizca arastirma altyapisidir; yatirim tavsiyesi veya emir degildir.",
+                "✅ TELEGRAM BAGLANTI TESTI — ucuncu kanal baglanti testi.\n\n"
+                "🤖 BTC/ETH olasilik botu\n"
+                "📡 Kanal baglantisi ve menü yaniti hazir.\n\n"
+                "⚠️ Yalnizca arastirma altyapisidir; yatirim tavsiyesi veya emir degildir.",
                 reply_markup=telegram_menu_keyboard(),
             )
             print(f"Telegram test mesaji gonderildi (message_id={message_id}).")

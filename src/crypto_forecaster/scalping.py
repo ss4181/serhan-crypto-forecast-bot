@@ -909,17 +909,23 @@ def format_scalp_scorecard(card: dict[str, Any]) -> str:
     lines = [
         f"🧪 SCALP ILERI TEST KARNESI — son {card['days']} gun",
         "",
+        "📌 OZET",
         f"Olgun gozlem: {card['observationCount']}",
+        f"Sonuc sayisi: {card['outcomeCount']}",
     ]
     if not card["outcomeCount"]:
-        lines.append("Henuz 15/30/60 dakika sonucu olusan gozlem yok.")
+        lines.append("ℹ️ Henuz 15/30/60 dakika sonucu olusan gozlem yok.")
     else:
+        lines.append("")
+        lines.append("🧭 REJIM BAZINDA")
         for regime, stats in card.get("byRegime", {}).items():
             lines.append(
                 f"• Rejim {regime}: n={stats['count']}, "
                 f"net ort {stats['meanNetBps']:+.2f} bps, "
                 f"kazanma %{stats['winRate'] * 100:.1f}"
             )
+        lines.append("")
+        lines.append("🧩 AILE + UFUK BAZINDA")
         for key, stats in card["byFamilyHorizon"].items():
             family, horizon = key.split("_", 1)
             lines.append(
@@ -930,7 +936,7 @@ def format_scalp_scorecard(card: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Bu ileri test otomatik terfi kapisi degildir; gozlemler halen islem adayi degildir.",
+            "⚠️ Bu ileri test otomatik terfi kapisi degildir; gozlemler halen islem adayi degildir.",
         ]
     )
     return "\n".join(lines)

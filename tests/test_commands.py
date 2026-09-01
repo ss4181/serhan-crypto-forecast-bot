@@ -66,7 +66,12 @@ def callback_update(
     }
 
 
-def run(directory: Path, updates: list[dict], members: dict[int, str] | None = None):
+def run(
+    directory: Path,
+    updates: list[dict],
+    members: dict[int, str] | None = None,
+    scalp_performance_text=None,
+):
     settings = Settings(telegram_state_dir=directory, outcome_state_dir=directory / "outcomes")
     if members:
         save_members(directory, members)
@@ -75,6 +80,7 @@ def run(directory: Path, updates: list[dict], members: dict[int, str] | None = N
         settings,
         status_text=lambda: "DURUM METNI",
         performance_text=lambda days: f"KARNE {days} GUN",
+        scalp_performance_text=scalp_performance_text,
         notifier=notifier,
         reply_markup=telegram_menu_keyboard(),
     )
@@ -139,6 +145,15 @@ class CommandTests(unittest.TestCase):
                 Path(directory), [update(1, OWNER, "/performans")], members={}
             )
         self.assertEqual(notifier.sent[0][1], "KARNE 30 GUN")
+
+    def test_scalp_scorecard_button_uses_the_requested_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, notifier, _ = run(
+                Path(directory),
+                [callback_update(1, OWNER, "scalp_performance:7")],
+                scalp_performance_text=lambda days: f"SCALP KARNE {days} GUN",
+            )
+        self.assertEqual(notifier.sent[0][1], "SCALP KARNE 7 GUN")
 
     def test_only_the_owner_may_add_people(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
