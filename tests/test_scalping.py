@@ -22,6 +22,7 @@ from crypto_forecaster.scalping import (
     record_scalp_observations,
     scalp_cache_path,
     scalp_forecast_stats,
+    scalp_setup_direction,
     scalp_scorecard,
     scan_cached_scalp_universe,
     scan_scalp_frame,
@@ -406,8 +407,28 @@ class DigestTests(unittest.TestCase):
         self.assertIn("F1 BT 15/30/60dk", text)
         self.assertIn("Yukari olasiligi: %50/%50/%50", text)
         self.assertIn("Asagi olasiligi: %50/%50/%50", text)
+        self.assertIn("Yön özeti (yerleşmiş BT): KARIŞIK", text)
         self.assertIn("Medyan hareket: +5.0/+10.0/+15.0 bps", text)
         self.assertIn("Medyan net hareket: -7.0/-2.0/+3.0 bps", text)
+
+    def test_setup_direction_is_explicitly_bearish_when_families_agree(self) -> None:
+        items = (observation(family="B1"), observation(family="F3"))
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -20.0,
+                "net_bps": -32.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        self.assertEqual(
+            scalp_setup_direction(items, rows),
+            ("AŞAĞI", ("AŞAĞI", "AŞAĞI", "AŞAĞI")),
+        )
 
     def test_low_coverage_fails_closed_before_telegram(self) -> None:
         manifest = load_trade1_universe()

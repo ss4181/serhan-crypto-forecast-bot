@@ -295,7 +295,10 @@ için yukarı/aşağı gerçekleşme oranı, medyan brüt hareket, medyan
 maliyet-sonrası hareket ve örnek sayısı (`n`) ayrı satırda gösterilir. Yeterli
 coin/rejim geçmişi varsa o kapsam tercih edilir; aksi halde aynı ailenin geniş
 evren geçmişine düşülür. Henüz sonuç yoksa `henuz yerlesmis ileri-test sonucu
-yok` yazılır; model veya olasılık uydurulmaz.
+yok` yazılır; model veya olasılık uydurulmaz. Her coin için ayrıca ailelerin
+örneklem-ağırlıklı **Yön özeti** yazılır: 15/30/60 dakika ufuklarında `YUKARI`,
+`AŞAĞI` veya `KARIŞIK`. Bu, geçmiş ileri-test sentezidir; long/short önerisi
+değildir.
 
 Evreni ve spot→vadeli kontrat eşlemelerini ağsız doğrulama:
 

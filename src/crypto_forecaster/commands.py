@@ -417,6 +417,8 @@ def format_explanations() -> str:
             "• Yukari/asagi olasiligi: gecmiste fiyat hangi yonde hareket etti.",
             "• Medyan hareket: tipik brut hareket (bps ve %).",
             "• Medyan net hareket: tahmini maliyet cikarildiktan sonraki tipik hareket.",
+            "• Yon ozeti: o coindeki ailelerin yerlesmis BT sonuclarinin n agirlikli sentezi.",
+            "  15/30/60dk ayri okunur; KARIŞIK, gecmis verinin net bir yon vermedigini anlatir.",
             "• n: hesaba giren sonuc sayisi; n dusukse belirsizlik yuksektir.",
             "",
             "🤖 BTC/ETH MODEL MESAJLARI",

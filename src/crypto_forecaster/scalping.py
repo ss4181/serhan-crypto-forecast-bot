@@ -544,9 +544,14 @@ def format_scalp_observation_digest(
                 f"   💡 Tetikleyici: {detail}",
             ]
         )
+        direction, horizon_directions = scalp_setup_direction(items, ledger_rows)
+        lines.append(
+            f"   🧭 Yön özeti (yerleşmiş BT): {direction} | "
+            f"15/30/60dk: {'/'.join(horizon_directions)}"
+        )
         if item.mark_price is not None:
             lines.insert(
-                len(lines) - 5,
+                3,
                 f"   📍 Güncel mark: {_format_signal_price(item.mark_price)}",
             )
         if item.return_24h_pct is not None:
@@ -576,7 +581,7 @@ def format_scalp_observation_digest(
     lines.extend(
         [
             "",
-            "ISLEM ADAYI DEGILDIR • RADAR tek aile, KURULUM coklu teyit • ileri test 15/30/60dk",
+            "ISLEM ADAYI DEGILDIR • Yön özeti geçmiş BT sentezidir; short/long önerisi değildir.",
         ]
     )
     message = "\n".join(lines)
@@ -690,6 +695,64 @@ def scalp_forecast_stats(
             float(median(net)),
         )
     return result
+
+
+def scalp_setup_direction(
+    items: Iterable[ScalpObservation],
+    rows: Iterable[dict[str, Any]],
+) -> tuple[str, tuple[str, ...]]:
+    """Summarise a setup's empirical direction without inventing a model.
+
+    Family forward-test samples are weighted by their settled count.  A horizon
+    is called directional only when its weighted up probability and weighted
+    median net move agree; otherwise it remains explicitly mixed.
+    """
+    item_rows = tuple(rows)
+    family_stats = [scalp_forecast_stats(item, item_rows) for item in items]
+    horizon_labels: list[str] = []
+    family_disagreement = False
+    for horizon in SCALP_BACKTEST_HORIZONS:
+        selected = [stats[horizon] for stats in family_stats if horizon in stats]
+        if not selected:
+            horizon_labels.append("VERI YOK")
+            continue
+        family_labels = [_classify_bt_direction(stats) for stats in selected]
+        family_disagreement = family_disagreement or len(set(family_labels)) > 1
+        total = sum(max(int(stats[0]), 0) for stats in selected)
+        if total <= 0:
+            horizon_labels.append("VERI YOK")
+            continue
+        weighted_up = sum(int(stats[0]) * float(stats[1]) for stats in selected) / total
+        weighted_net = sum(int(stats[0]) * float(stats[3]) for stats in selected) / total
+        if weighted_up >= 0.55 and weighted_net > 0.0:
+            horizon_labels.append("YUKARI")
+        elif weighted_up <= 0.45 and weighted_net < 0.0:
+            horizon_labels.append("AŞAĞI")
+        else:
+            horizon_labels.append("KARIŞIK")
+    valid = [label for label in horizon_labels if label != "VERI YOK"]
+    if not valid:
+        return "VERI YOK", tuple(horizon_labels)
+    if all(label == valid[0] for label in valid):
+        overall = f"{valid[0]} AĞIRLIKLI" if family_disagreement else valid[0]
+        return overall, tuple(horizon_labels)
+    up = valid.count("YUKARI")
+    down = valid.count("AŞAĞI")
+    if down > up and down >= 2:
+        return "AŞAĞI AĞIRLIKLI", tuple(horizon_labels)
+    if up > down and up >= 2:
+        return "YUKARI AĞIRLIKLI", tuple(horizon_labels)
+    return "KARIŞIK", tuple(horizon_labels)
+
+
+def _classify_bt_direction(stats: tuple[int, float, float, float]) -> str:
+    probability_up = float(stats[1])
+    median_net = float(stats[3])
+    if probability_up >= 0.55 and median_net > 0.0:
+        return "YUKARI"
+    if probability_up <= 0.45 and median_net < 0.0:
+        return "AŞAĞI"
+    return "KARIŞIK"
 
 
 def _scalp_row_has_numbers(row: dict[str, Any]) -> bool:
@@ -1386,6 +1449,7 @@ __all__ = [
     "refresh_and_scan_scalp_universe",
     "scalp_cache_path",
     "scalp_forecast_stats",
+    "scalp_setup_direction",
     "scalp_scorecard",
     "scan_cached_scalp_universe",
     "scan_scalp_frame",
