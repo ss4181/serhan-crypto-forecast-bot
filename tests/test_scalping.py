@@ -27,6 +27,8 @@ from crypto_forecaster.scalping import (
     scan_scalp_frame,
     settle_scalp_observations,
     _assign_alert_tiers,
+    _closed_market_context,
+    _rank_market_contexts,
     _relative_strength_observations,
 )
 from crypto_forecaster.telegram import TelegramDelivery
@@ -316,6 +318,45 @@ class DetectorTests(unittest.TestCase):
 
 
 class DigestTests(unittest.TestCase):
+    def test_closed_context_exposes_causal_return_rank_and_volume_ratio(self) -> None:
+        frame = market_frame(320)
+        context = _closed_market_context(frame)
+        self.assertIsNotNone(context.return_24h_pct)
+        self.assertIsNotNone(context.volume_1h_ratio)
+        ranked = _rank_market_contexts({"BTCUSDT": frame, "ETHUSDT": rising_frame(320)})
+        self.assertEqual(ranked["BTCUSDT"].universe_size, 2)
+        self.assertIn(ranked["BTCUSDT"].rank_24h, (1, 2))
+
+    def test_digest_shows_readable_market_context_when_available(self) -> None:
+        manifest = load_trade1_universe()
+        item = ScalpObservation(
+            universe_version="2026-07-ek-g",
+            spot_symbol="BTCUSDT",
+            perpetual_symbol="BTCUSDT",
+            universe_group="core30",
+            family="B1",
+            score=2.1,
+            price=100.0,
+            bar_open_time_ms=START_MS,
+            bar_close_time_ms=START_MS,
+            details=("24s zirvesinin +12.0 bps ustu",),
+            return_24h_pct=11.138,
+            rank_24h=1,
+            universe_size=89,
+            volume_1h_ratio=5.808,
+            funding_rate_bps=0.9928,
+            mark_price=100.12,
+        )
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), (item,), START_MS)
+        text = format_scalp_observation_digest(report, manifest=manifest, top_k=1)
+        self.assertIn("Beklenen ufuk: 15/30/60 dk", text)
+        self.assertIn("Piyasa: Binance USD-M perp", text)
+        self.assertIn("Güncel mark: $100.12", text)
+        self.assertIn("24s kapalı mum getirisi: +11.14%", text)
+        self.assertIn("Yükselen sırası: 1/89", text)
+        self.assertIn("1s hacim / önceki 24s medyanı: 5.81x", text)
+        self.assertIn("Funding: +0.99 bps", text)
+
     def test_digest_is_top_k_and_explicitly_non_actionable(self) -> None:
         manifest = load_trade1_universe()
         items = tuple(

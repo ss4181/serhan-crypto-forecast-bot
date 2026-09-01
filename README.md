@@ -284,8 +284,12 @@ USD-M uç noktasından en iyi alış/satış ile funding bilgisini alır. Her g�
 maliyeti yazar. Hesaba özel komisyon imzalı istek gerektirdiği için ortam
 değişkeniyle açıkça belirtilir; bot API anahtarı istemez ve emir veremez.
 
-Telegram scalp özeti her coin için dikey bir blok gösterir: **sinyal anındaki
-fiyat**, aile/skor, maliyet/spread ve tetikleyici ayrı satırlardadır. `BT
+Telegram scalp özeti her coin için dikey ve emoji destekli bir blok gösterir:
+**sinyal anındaki fiyat** ve varsa bildirim anındaki mark fiyatı, beklenen ufuk,
+Binance USD-M perp piyasası,
+24 saatlik kapalı mum getirisi ve evren sırası, son 1 saat hacminin önceki 24
+saat medyanına oranı, aile/skor, maliyet/spread, funding ve tetikleyici ayrı
+satırlardadır. `BT
 15/30/60dk` bölümü yalnızca kapanmış ileri-test kaydından hesaplanır; her ufuk
 için yukarı/aşağı gerçekleşme oranı, medyan brüt hareket, medyan
 maliyet-sonrası hareket ve örnek sayısı (`n`) ayrı satırda gösterilir. Yeterli

@@ -80,6 +80,16 @@ class BullRegime:
 
 
 @dataclass(frozen=True, slots=True)
+class _ScalpMarketContext:
+    """Closed-candle context shown alongside a scalp observation."""
+
+    return_24h_pct: float | None = None
+    rank_24h: int | None = None
+    universe_size: int | None = None
+    volume_1h_ratio: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ScalpObservation:
     universe_version: str
     spot_symbol: str
@@ -99,6 +109,11 @@ class ScalpObservation:
     estimated_cost_bps: float = 12.0
     execution_eligible: bool = False
     alert_tier: str = "RADAR"
+    return_24h_pct: float | None = None
+    rank_24h: int | None = None
+    universe_size: int | None = None
+    volume_1h_ratio: float | None = None
+    mark_price: float | None = None
 
     @property
     def signal_id(self) -> str:
@@ -153,6 +168,7 @@ def scan_scalp_frame(
     snapshot: FuturesMarketSnapshot | None = None,
     settings: Settings | None = None,
     historical_cost_bps: float = 12.0,
+    context: _ScalpMarketContext | None = None,
 ) -> tuple[ScalpObservation, ...]:
     """Evaluate only the latest closed 5m bar, with no future values."""
     if len(frame) < SCALP_MINIMUM_BARS:
@@ -196,6 +212,7 @@ def scan_scalp_frame(
                 snapshot=snapshot,
                 settings=settings,
                 historical_cost_bps=historical_cost_bps,
+                context=context,
             )
         )
 
@@ -229,6 +246,7 @@ def scan_scalp_frame(
                 snapshot=snapshot,
                 settings=settings,
                 historical_cost_bps=historical_cost_bps,
+                context=context,
             )
         )
 
@@ -254,6 +272,7 @@ def scan_scalp_frame(
                 snapshot=snapshot,
                 settings=settings,
                 historical_cost_bps=historical_cost_bps,
+                context=context,
             )
         )
 
@@ -279,6 +298,7 @@ def scan_scalp_frame(
                     snapshot=snapshot,
                     settings=settings,
                     historical_cost_bps=historical_cost_bps,
+                    context=context,
                 )
             )
 
@@ -315,6 +335,7 @@ def scan_scalp_frame(
                     snapshot=snapshot,
                     settings=settings,
                     historical_cost_bps=historical_cost_bps,
+                    context=context,
                 )
             )
     return tuple(observations)
@@ -477,15 +498,17 @@ def format_scalp_observation_digest(
     ledger_rows = tuple(ledger)
     stamp = local_text(report.evaluated_at_ms, with_seconds=False)
     regime = report.regime or BullRegime("UNKNOWN", 0.0, 0.0, 0.0, False, 0)
+    horizon_label = "/".join(str(value) for value in SCALP_BACKTEST_HORIZONS)
     lines = [
-        f"🧪 SCALP | 5m | {stamp}",
+        f"🧪 SCALP GÖZLEMİ | 5m | {stamp}",
         (
-            f"Rejim {regime.label} {regime.score:.2f} • "
-            f"genislik %{regime.breadth * 100:.0f} • "
-            f"kotasyon {report.quoted}/{report.attempted}"
+            f"🧭 Rejim: {regime.label} {regime.score:.2f} • "
+            f"Genişlik: %{regime.breadth * 100:.0f} • "
+            f"Kotasyon: {report.quoted}/{report.attempted}"
         ),
         (
-            f"{report.fresh}/{report.attempted} taze • {len(report.observations)} radar • ilk {len(shown)}"
+            f"📡 Taze: {report.fresh}/{report.attempted} • "
+            f"Gözlem: {len(report.observations)} • İlk: {len(shown)}"
         ),
         "",
     ]
@@ -505,18 +528,43 @@ def format_scalp_observation_digest(
             if any(value.alert_tier == "KURULUM" for value in items)
             else "RADAR"
         )
-        spread = f"sp {item.spread_bps:.1f}" if item.spread_bps is not None else "sp ?"
+        spread = f"{item.spread_bps:.1f} bps" if item.spread_bps is not None else "veri yok"
         cost = item.estimated_cost_bps or manifest.scalp_round_trip_cost_bps
         detail = ", ".join(item.details)
+        tier_icon = "✅" if tier == "KURULUM" else "🔔"
         lines.extend(
             [
-                f"{index}. {tier} | {item.spot_symbol} {mapping}".rstrip(),
-                f"   Sinyal fiyati: {_format_signal_price(item.price)}",
-                f"   Aile: {families} | Skor: {item.score:.2f}",
-                f"   Maliyet: ~{cost:.1f} bps | Spread: {spread}",
-                f"   Tetikleyici: {detail}",
+                f"{tier_icon} {index}. {tier} | {item.spot_symbol} {mapping}".rstrip(),
+                "   🧪 Araştırma • Güven: GÖZLEM",
+                f"   💰 Sinyal fiyati: {_format_signal_price(item.price)}",
+                f"   ⏱ Beklenen ufuk: {horizon_label} dk",
+                "   🏦 Piyasa: Binance USD-M perp",
+                f"   🧩 Aile: {families} | Skor: {item.score:.2f}",
+                f"   💸 Maliyet: ~{cost:.1f} bps | Spread: {spread}",
+                f"   💡 Tetikleyici: {detail}",
             ]
         )
+        if item.mark_price is not None:
+            lines.insert(
+                len(lines) - 5,
+                f"   📍 Güncel mark: {_format_signal_price(item.mark_price)}",
+            )
+        if item.return_24h_pct is not None:
+            rank = (
+                f"{item.rank_24h}/{item.universe_size}"
+                if item.rank_24h is not None and item.universe_size
+                else "veri yok"
+            )
+            lines.append(
+                f"   📈 24s kapalı mum getirisi: {item.return_24h_pct:+.2f}% | "
+                f"Yükselen sırası: {rank}"
+            )
+        if item.volume_1h_ratio is not None:
+            lines.append(
+                f"   📊 1s hacim / önceki 24s medyanı: {item.volume_1h_ratio:.2f}x"
+            )
+        if item.funding_rate_bps is not None:
+            lines.append(f"   🧾 Funding: {item.funding_rate_bps:+.2f} bps")
         for family_item in items:
             lines.extend(
                 "   " + line
@@ -734,6 +782,11 @@ def record_scalp_observations(
             "breadth": item.breadth,
             "spread_bps": item.spread_bps,
             "funding_rate_bps": item.funding_rate_bps,
+            "return_24h_pct": item.return_24h_pct,
+            "rank_24h": item.rank_24h,
+            "universe_size": item.universe_size,
+            "volume_1h_ratio": item.volume_1h_ratio,
+            "mark_price": item.mark_price,
             "execution_eligible": item.execution_eligible,
             "alert_tier": item.alert_tier,
         }
@@ -926,6 +979,12 @@ def _scan_frames(
         fresh += 1
         eligible_frames[entry.perpetual_symbol] = frame
         fresh_close_times.append(latest_close)
+
+    contexts = _rank_market_contexts(eligible_frames)
+    for entry in entries:
+        frame = eligible_frames.get(entry.perpetual_symbol)
+        if frame is None:
+            continue
         observations.extend(
             scan_scalp_frame(
                 entry,
@@ -935,6 +994,7 @@ def _scan_frames(
                 snapshot=snapshots.get(entry.perpetual_symbol),
                 settings=settings,
                 historical_cost_bps=manifest.scalp_round_trip_cost_bps,
+                context=contexts.get(entry.perpetual_symbol),
             )
         )
     observations.extend(
@@ -946,6 +1006,7 @@ def _scan_frames(
             settings=settings,
             universe_version=manifest.version,
             historical_cost_bps=manifest.scalp_round_trip_cost_bps,
+            contexts=contexts,
         )
     )
     if fresh_close_times:
@@ -999,6 +1060,57 @@ def _load_major_frames(settings: Settings) -> dict[str, pd.DataFrame]:
     return frames
 
 
+def _closed_market_context(frame: pd.DataFrame) -> _ScalpMarketContext:
+    """Calculate compact, causal market context from closed 5m candles."""
+    if len(frame) < 289:
+        return _ScalpMarketContext()
+    close = frame["close"].astype("float64")
+    volume = frame["volume"].astype("float64")
+    latest = len(frame) - 1
+    try:
+        price = float(close.iloc[latest])
+        prior = float(close.iloc[latest - 288])
+    except (IndexError, TypeError, ValueError):
+        return _ScalpMarketContext()
+    if not (math.isfinite(price) and math.isfinite(prior) and prior > 0.0):
+        return _ScalpMarketContext()
+    return_24h_pct = (price / prior - 1.0) * 100.0
+    volume_1h_ratio: float | None = None
+    # A complete current hour plus 24 preceding, non-overlapping hourly
+    # windows require 300 closed 5m bars.  If unavailable, omit the field.
+    if len(frame) >= 300:
+        current_1h = float(volume.iloc[-12:].sum())
+        prior_hours = []
+        for offset in range(1, 25):
+            end = len(frame) - 12 * offset
+            start = end - 12
+            prior_hours.append(float(volume.iloc[start:end].sum()))
+        baseline = float(median(prior_hours)) if prior_hours else 0.0
+        if math.isfinite(current_1h) and math.isfinite(baseline) and baseline > 0.0:
+            volume_1h_ratio = current_1h / baseline
+    return _ScalpMarketContext(return_24h_pct=return_24h_pct, volume_1h_ratio=volume_1h_ratio)
+
+
+def _rank_market_contexts(
+    frames: dict[str, pd.DataFrame],
+) -> dict[str, _ScalpMarketContext]:
+    contexts = {symbol: _closed_market_context(frame) for symbol, frame in frames.items()}
+    ranked = sorted(
+        (
+            (symbol, context.return_24h_pct)
+            for symbol, context in contexts.items()
+            if context.return_24h_pct is not None and math.isfinite(context.return_24h_pct)
+        ),
+        key=lambda item: (-float(item[1]), item[0]),
+    )
+    universe_size = len(ranked)
+    for rank, (symbol, _return) in enumerate(ranked, start=1):
+        contexts[symbol] = replace(
+            contexts[symbol], rank_24h=rank, universe_size=universe_size
+        )
+    return contexts
+
+
 def _relative_strength_observations(
     entries: tuple[UniverseEntry, ...],
     frames: dict[str, pd.DataFrame],
@@ -1008,6 +1120,7 @@ def _relative_strength_observations(
     settings: Settings,
     universe_version: str,
     historical_cost_bps: float,
+    contexts: dict[str, _ScalpMarketContext] | None = None,
 ) -> list[ScalpObservation]:
     if regime.state != "BULL":
         return []
@@ -1057,6 +1170,7 @@ def _relative_strength_observations(
                 snapshot=snapshots.get(symbol),
                 settings=settings,
                 historical_cost_bps=historical_cost_bps,
+                context=(contexts or {}).get(symbol),
             )
         )
     return observations
@@ -1076,6 +1190,7 @@ def _observation(
     snapshot: FuturesMarketSnapshot | None = None,
     settings: Settings | None = None,
     historical_cost_bps: float = 12.0,
+    context: _ScalpMarketContext | None = None,
 ) -> ScalpObservation:
     active_regime = regime or BullRegime("UNKNOWN", 0.0, 0.0, 0.0, False, 0)
     spread_bps = snapshot.spread_bps if snapshot is not None else None
@@ -1108,6 +1223,11 @@ def _observation(
         funding_rate_bps=(snapshot.funding_rate_bps if snapshot is not None else None),
         estimated_cost_bps=estimated_cost_bps,
         execution_eligible=execution_eligible,
+        return_24h_pct=(context.return_24h_pct if context is not None else None),
+        rank_24h=(context.rank_24h if context is not None else None),
+        universe_size=(context.universe_size if context is not None else None),
+        volume_1h_ratio=(context.volume_1h_ratio if context is not None else None),
+        mark_price=(snapshot.mark_price if snapshot is not None else None),
     )
 
 
@@ -1169,6 +1289,11 @@ def _time_exit_outcomes(
                 "breadth": float(record.get("breadth", 0.0)),
                 "spread_bps": record.get("spread_bps"),
                 "funding_rate_bps": record.get("funding_rate_bps"),
+                "return_24h_pct": record.get("return_24h_pct"),
+                "rank_24h": record.get("rank_24h"),
+                "universe_size": record.get("universe_size"),
+                "volume_1h_ratio": record.get("volume_1h_ratio"),
+                "mark_price": record.get("mark_price"),
                 "execution_eligible": bool(record.get("execution_eligible", False)),
                 "alert_tier": str(record.get("alert_tier", "RADAR")),
             }
