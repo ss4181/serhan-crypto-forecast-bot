@@ -121,6 +121,13 @@ class Settings:
     scalp_top_k: int = field(
         default_factory=lambda: _environment_int("CRYPTO_SCALP_TOP_K", 5, 1, 10)
     )
+    # Telegram only: keep every observation in the shadow ledger, but notify
+    # only high-scoring, multi-family setups whose settled BT direction is exact.
+    scalp_minimum_alert_score: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MIN_ALERT_SCORE", 2.5, 0.0, 10.0
+        )
+    )
     scalp_cache_days: int = field(
         default_factory=lambda: _environment_int("CRYPTO_SCALP_CACHE_DAYS", 3, 2, 30)
     )

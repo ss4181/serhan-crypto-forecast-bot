@@ -300,6 +300,25 @@ yok` yazılır; model veya olasılık uydurulmaz. Her coin için ayrıca aileler
 `AŞAĞI` veya `KARIŞIK`. Bu, geçmiş ileri-test sentezidir; long/short önerisi
 değildir.
 
+`KURULUM` seviyesine yükseltilmiş ve örneklem-ağırlıklı BT yön özeti net biçimde
+`YUKARI` veya `AŞAĞI` olan çoklu-aile kurulumları, digest Telegram'a başarıyla
+ulaştıktan sonra ayrı bir hedef izleyicisine alınır. Sinyal fiyatından itibaren
+`+%2/+%3` veya `-%2/-%3` seviyelerine kapanmış 5m mumun yüksek/düşük değeri
+dokunduğunda, hedef kademesi başına tek bildirim gönderilir. `RADAR`, `KARIŞIK`
+ve `YUKARI/AŞAĞI AĞIRLIKLI` özetler hedef bildirimi üretmez; tüm bildirimler
+araştırma amaçlıdır.
+
+Telegram filtresi ayrıca yalnızca net yönlü, çoklu-aile `KURULUM` ve varsayılan
+`2.5` üzeri skoru olan kurulumları gönderir (`CRYPTO_SCALP_MIN_ALERT_SCORE`).
+Diğer adaylar gölge ölçümde tutulur; bu sayede sessize alma kararının `%2`
+başarı oranını gerçekten artırıp artırmadığı tüm adaylarla karşılaştırılabilir.
+
+`python run.py dashboard-export` komutu, Telegram kimlik bilgileri içermeyen
+`docs/scalp-data.json` dosyasını üretir. `docs/scalp.html` GitHub Pages üzerinde
+normal model sonuçlarını ve scalp `%2/%3` hedef başarılarını filtrelenebilir
+tabloda gösterir; durumlar `HEDEF ULAŞTI`, `HEDEF ULAŞMADI`, `BEKLEMEDE` ve
+`Sessiz` olarak ayrılır.
+
 Evreni ve spot→vadeli kontrat eşlemelerini ağsız doğrulama:
 
 ```powershell
@@ -497,6 +516,11 @@ mumun yüksek/düşük değerine dokunduğunda Telegram'a tekil bir bildirim gel
 Her kademe sinyal başına yalnızca bir kez gönderilir; bu ölçüm bir emir veya
 garanti değildir. Bildirimde sinyal fiyatı, hedef fiyatı, dokunulan mum fiyatı,
 yön, zaman dilimi ve dokunma zamanı bulunur.
+
+Scalp tarafında aynı izleme yalnızca Telegram digest'inde gerçekten gönderilmiş,
+çoklu-aile `KURULUM` ve net BT yönü (`YUKARI`/`AŞAĞI`) için açılır. Hedef mesajı
+ayrıca 15/30/60 dakika için örneklem-ağırlıklı BT yukarı/aşağı olasılıklarını
+gösterir.
 
 ### Tek seferlik gerçek değerlendirme
 

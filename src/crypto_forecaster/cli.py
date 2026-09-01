@@ -4,6 +4,7 @@ import argparse
 from dataclasses import replace
 from datetime import datetime, timezone
 import os
+from pathlib import Path
 import sys
 from typing import Sequence
 from urllib.request import HTTPRedirectHandler
@@ -11,19 +12,24 @@ from urllib.request import HTTPRedirectHandler
 from .commands import load_members, owner_id, safe_name, save_members
 from .config import INTERVALS, SYMBOLS, Settings
 from .data import BinanceMarketDataClient, MarketDataError, update_cache
+from .dashboard import write_dashboard_payload
 from .hub import post_snapshot, write_snapshot
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .research import research_all
 from .scalping import (
+    deliver_scalp_target_touches,
     deliver_scalp_observations,
+    filter_scalp_notification_report,
     format_scalp_observation_digest,
     format_scalp_scorecard,
     load_scalp_ledger,
     record_scalp_observations,
+    record_scalp_target_setups,
     refresh_and_scan_scalp_universe,
     scalp_scorecard,
     scan_cached_scalp_universe,
     settle_scalp_observations,
+    settle_scalp_target_outcomes,
 )
 from .service import (
     answer_commands,
@@ -124,6 +130,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="15/30/60dk deneysel scalp ileri-test sonuclarini ozetle",
     )
     scalp_card.add_argument("--days", type=int, default=30)
+
+    dashboard = subparsers.add_parser(
+        "dashboard-export",
+        help="GitHub Pages icin kimlik bilgisi icermeyen sinyal verisi uret",
+    )
+    dashboard.add_argument("--output", type=Path, default=Path("docs/scalp-data.json"))
+    dashboard.add_argument("--limit", type=int, default=2_000)
 
     subparsers.add_parser(
         "scalp-universe",
@@ -261,6 +274,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"Scalp gozlem hatasi (ana bulut kosusu tamamlandi): {error}",
                         file=sys.stderr,
                     )
+            dashboard_path = write_dashboard_payload(
+                settings, Path("docs/scalp-data.json")
+            )
+            print(f"Sinyal dashboard verisi yazildi: {dashboard_path}")
             return 0
         if args.command == "scalp-observe":
             scalp_settings = settings
@@ -278,6 +295,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 )
             )
+            return 0
+        if args.command == "dashboard-export":
+            output = write_dashboard_payload(settings, args.output, limit=args.limit)
+            print(f"Dashboard verisi yazildi: {output}")
             return 0
         if args.command == "scalp-universe":
             manifest = load_trade1_universe()
@@ -554,6 +575,16 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
     recorded = record_scalp_observations(
         settings.scalp_state_dir, report.observations, manifest=manifest
     )
+    shadow_tracked = record_scalp_target_setups(
+        settings.scalp_state_dir,
+        report,
+        manifest=manifest,
+        top_k=len(report.observations) or settings.scalp_top_k,
+        ledger=load_scalp_ledger(settings.scalp_state_dir),
+    )
+    settled_targets = settle_scalp_target_outcomes(
+        settings.scalp_state_dir, settings.scalp_data_dir
+    )
     setup_symbols = {
         item.perpetual_symbol
         for item in report.observations
@@ -582,10 +613,40 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
     if not _telegram_configured():
         print("Telegram kanali tanimli/primary degil; scalp gozlemi gonderilmedi.")
         return
-    delivery = deliver_scalp_observations(settings, report, manifest=manifest)
+    target_deliveries = deliver_scalp_target_touches(settings)
+    for event, target_delivery in target_deliveries:
+        detail = f" ({target_delivery.detail})" if target_delivery.detail else ""
+        print(
+            f"Scalp {event['spot_symbol']} hedef "
+            f"{event['direction']} %{float(event['target_percent']):g}: "
+            f"{target_delivery.status}{detail}"
+        )
+    notification_report = filter_scalp_notification_report(
+        report,
+        minimum_score=settings.scalp_minimum_alert_score,
+        ledger=load_scalp_ledger(settings.scalp_state_dir),
+    )
+    delivery = deliver_scalp_observations(
+        settings, notification_report, manifest=manifest
+    )
     if delivery is not None:
         detail = f" ({delivery.detail})" if delivery.detail else ""
         print(f"Scalp Telegram: {delivery.status}{detail}")
+        if delivery.status in {"SENT", "DEDUPLICATED"}:
+            tracked = record_scalp_target_setups(
+                settings.scalp_state_dir,
+                notification_report,
+                manifest=manifest,
+                top_k=settings.scalp_top_k,
+                ledger=load_scalp_ledger(settings.scalp_state_dir),
+            )
+            if tracked:
+                print(f"Scalp hedef izleme: {tracked} yeni kurulum")
+    if shadow_tracked or settled_targets:
+        print(
+            f"Scalp hedef ölçümü: {shadow_tracked} yeni setup, "
+            f"{len(settled_targets)} kademe sonucu"
+        )
 
 
 def _deliver_cloud_eligible(settings: Settings, predictions):  # type: ignore[no-untyped-def]

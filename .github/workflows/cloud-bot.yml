@@ -30,11 +30,16 @@ concurrency:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 jobs:
   forecast:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     env:
       CRYPTO_TELEGRAM_BOT_TOKEN: ${{ secrets.CRYPTO_TELEGRAM_BOT_TOKEN }}
       CRYPTO_TELEGRAM_CHAT_ID: ${{ secrets.CRYPTO_TELEGRAM_CHAT_ID }}
@@ -100,3 +105,18 @@ jobs:
           extra=""
           if [[ "${{ inputs.force_research }}" == "true" ]]; then extra="--force-research"; fi
           python run.py cloud-run --days 365 $extra
+
+      - name: Prepare public signal dashboard
+        run: python run.py dashboard-export --output docs/scalp-data.json
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload dashboard artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Publish GitHub Pages dashboard
+        id: deployment
+        uses: actions/deploy-pages@v4

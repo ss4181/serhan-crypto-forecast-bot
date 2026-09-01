@@ -43,6 +43,9 @@ SCALP_STEP_MS = 5 * 60 * 1000
 SCALP_MINIMUM_BARS = 290
 SCALP_PENDING_SCHEMA = "scalp-observation-pending-v1"
 SCALP_LEDGER_SCHEMA = "scalp-observation-outcome-v1"
+SCALP_TARGET_PENDING_SCHEMA = "scalp-target-pending-v1"
+SCALP_TARGET_LEDGER_SCHEMA = "scalp-target-outcome-v1"
+SCALP_TARGET_TOUCH_PERCENTS = (2.0, 3.0)
 SCALP_SETTLEMENT_GRACE_DAYS = 2
 SCALP_BACKTEST_HORIZONS = (15, 30, 60)
 FAMILY_LABELS = {
@@ -590,6 +593,47 @@ def format_scalp_observation_digest(
     return message
 
 
+def filter_scalp_notification_report(
+    report: ScalpScanReport,
+    *,
+    minimum_score: float,
+    ledger: Iterable[dict[str, Any]] = (),
+) -> ScalpScanReport:
+    """Keep only exact-direction, high-score multi-family setups for Telegram.
+
+    The original report is deliberately left untouched for shadow scoring and
+    the GitHub dashboard.  This filtered copy controls only what is sent to the
+    channel, so muted candidates remain measurable.
+    """
+    try:
+        threshold = float(minimum_score)
+    except (TypeError, ValueError):
+        raise ValueError("Scalp bildirim skoru sayi olmali") from None
+    if not math.isfinite(threshold) or threshold < 0.0:
+        raise ValueError("Scalp bildirim skoru negatif veya sonsuz olamaz")
+    ledger_rows = tuple(ledger)
+    grouped: dict[str, list[ScalpObservation]] = {}
+    for item in report.observations:
+        grouped.setdefault(item.perpetual_symbol, []).append(item)
+    eligible_symbols: set[str] = set()
+    for symbol, items in grouped.items():
+        if (
+            len({item.family for item in items}) < 2
+            or not any(item.alert_tier == "KURULUM" for item in items)
+            or max(item.score for item in items) < threshold
+        ):
+            continue
+        direction, _ = scalp_setup_direction(items, ledger_rows)
+        if direction in {"YUKARI", "AŞAĞI"}:
+            eligible_symbols.add(symbol)
+    return replace(
+        report,
+        observations=tuple(
+            item for item in report.observations if item.perpetual_symbol in eligible_symbols
+        ),
+    )
+
+
 def deliver_scalp_observations(
     settings: Settings,
     report: ScalpScanReport,
@@ -602,17 +646,22 @@ def deliver_scalp_observations(
             f"Scalp evren kapsami %{report.coverage * 100:.1f}; "
             f"en az %{settings.scalp_minimum_coverage * 100:.1f} olmali"
         )
-    shown = report.top(settings.scalp_top_k)
+    ledger = load_scalp_ledger(settings.scalp_state_dir)
+    filtered_report = filter_scalp_notification_report(
+        report,
+        minimum_score=settings.scalp_minimum_alert_score,
+        ledger=ledger,
+    )
+    shown = filtered_report.top(settings.scalp_top_k) if filtered_report.observations else ()
     if not shown:
         return None
-    ledger = load_scalp_ledger(settings.scalp_state_dir)
     newest_close = max(item.bar_close_time_ms for item in shown)
     bucket = newest_close // SCALP_STEP_MS
     signal_id = digest_signal_id(f"scalp-observation|{manifest.version}", bucket)
     return (notifier or TelegramNotifier()).deliver_once(
         signal_id=signal_id,
         text=format_scalp_observation_digest(
-            report,
+            filtered_report,
             manifest=manifest,
             top_k=settings.scalp_top_k,
             ledger=ledger,
@@ -620,6 +669,347 @@ def deliver_scalp_observations(
         state_dir=settings.telegram_state_dir / "scalp",
         reply_markup=telegram_menu_keyboard(),
     )
+
+
+def record_scalp_target_setups(
+    state_dir: Path,
+    report: ScalpScanReport,
+    *,
+    manifest: UniverseManifest,
+    top_k: int,
+    ledger: Iterable[dict[str, Any]] = (),
+    notification_sent: bool = False,
+) -> int:
+    """Park directional setups for shadow +/−2% and +/−3% measurement.
+
+    A digest can contain several families for one market.  The target watcher is
+    therefore keyed by the displayed market setup, not by an individual family.
+    Only a multi-family ``KURULUM`` with an exact BT direction is watched; radar
+    and ``KARIŞIK``/``AĞIRLIKLI`` summaries remain research-only.  ``notification_sent``
+    marks whether the setup passed the Telegram filter; muted setups are still
+    settled into the shadow target ledger.
+    """
+    shown = report.top(top_k)
+    ledger_rows = tuple(ledger)
+    grouped: dict[str, list[ScalpObservation]] = {}
+    for item in shown:
+        grouped.setdefault(item.perpetual_symbol, []).append(item)
+    directory = _target_pending_dir(state_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    added = 0
+    for items in grouped.values():
+        if (
+            not any(item.alert_tier == "KURULUM" for item in items)
+            or len({item.family for item in items}) < 2
+        ):
+            continue
+        direction, horizon_directions = scalp_setup_direction(items, ledger_rows)
+        if direction not in {"YUKARI", "AŞAĞI"}:
+            continue
+        aggregate = scalp_setup_forecast_stats(items, ledger_rows)
+        source = items[0]
+        setup_id = _scalp_setup_id(source, manifest.version)
+        path = directory / f"{setup_id}.json"
+        payload = {
+            "schema": SCALP_TARGET_PENDING_SCHEMA,
+            "setup_id": setup_id,
+            "signal_id": setup_id,
+            "universe_version": manifest.version,
+            "spot_symbol": source.spot_symbol,
+            "perpetual_symbol": source.perpetual_symbol,
+            "universe_group": source.universe_group,
+            "families": [item.family for item in items],
+            "direction": direction,
+            "horizon_directions": list(horizon_directions),
+            "source_price": float(source.price),
+            "bar_close_time_ms": int(source.bar_close_time_ms),
+            "horizons_minutes": list(manifest.scalp_horizons_minutes),
+            "horizon_ms": max(manifest.scalp_horizons_minutes) * 60_000,
+            "tier": "KURULUM",
+            "score": float(max(item.score for item in items)),
+            "probability_up": {
+                str(horizon): float(aggregate[horizon][1])
+                for horizon in SCALP_BACKTEST_HORIZONS
+                if horizon in aggregate
+            },
+            "probability_down": {
+                str(horizon): float(1.0 - aggregate[horizon][1])
+                for horizon in SCALP_BACKTEST_HORIZONS
+                if horizon in aggregate
+            },
+            "sample_count": {
+                str(horizon): int(aggregate[horizon][0])
+                for horizon in SCALP_BACKTEST_HORIZONS
+                if horizon in aggregate
+            },
+            "delivered_percents": [],
+            "outcome_recorded_percents": [],
+            "notification_sent": bool(notification_sent),
+        }
+        try:
+            with path.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                    + "\n"
+                )
+            added += 1
+        except FileExistsError:
+            if notification_sent:
+                existing = _read_scalp_target_record(path)
+                if existing is not None and not bool(existing.get("notification_sent", False)):
+                    existing["notification_sent"] = True
+                    path.write_text(
+                        json.dumps(
+                            existing,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            allow_nan=False,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+            continue
+    return added
+
+
+def pending_scalp_target_touches(
+    state_dir: Path,
+    data_dir: Path,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Find newly touched directional scalp +/−2% and +/−3% levels."""
+    directory = _target_pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    current_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
+    grace_ms = SCALP_SETTLEMENT_GRACE_DAYS * 24 * 60 * 60 * 1000
+    frames: dict[str, pd.DataFrame] = {}
+    events: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        record = _read_scalp_target_record(path)
+        if record is None:
+            path.unlink(missing_ok=True)
+            continue
+        source_ms = int(record["bar_close_time_ms"])
+        deadline_ms = source_ms + int(record["horizon_ms"])
+        if current_ms - deadline_ms > grace_ms:
+            path.unlink(missing_ok=True)
+            continue
+        symbol = str(record["perpetual_symbol"])
+        if symbol not in frames:
+            try:
+                frames[symbol] = load_cache(scalp_cache_path(data_dir, symbol))
+            except (MarketDataError, OSError, ValueError):
+                frames[symbol] = pd.DataFrame()
+        until_ms = min(current_ms, deadline_ms)
+        window = _scalp_target_window(frames[symbol], source_ms, until_ms)
+        touched = _scalp_target_touches(record, window)
+        delivered = {float(value) for value in record.get("delivered_percents", [])}
+        if not bool(record.get("notification_sent", True)):
+            continue
+        for percent in SCALP_TARGET_TOUCH_PERCENTS:
+            if percent in delivered or percent not in touched:
+                continue
+            event = dict(record)
+            event.update(touched[percent])
+            event["target_percent"] = percent
+            events.append(event)
+    return events
+
+
+def settle_scalp_target_outcomes(
+    state_dir: Path,
+    data_dir: Path,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Persist target hits/misses for both notified and muted setups."""
+    directory = _target_pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    current_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
+    grace_ms = SCALP_SETTLEMENT_GRACE_DAYS * 24 * 60 * 60 * 1000
+    frames: dict[str, pd.DataFrame] = {}
+    settled: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        record = _read_scalp_target_record(path)
+        if record is None:
+            path.unlink(missing_ok=True)
+            continue
+        source_ms = int(record["bar_close_time_ms"])
+        deadline_ms = source_ms + int(record["horizon_ms"])
+        if current_ms < deadline_ms:
+            continue
+        symbol = str(record["perpetual_symbol"])
+        if symbol not in frames:
+            try:
+                frames[symbol] = load_cache(scalp_cache_path(data_dir, symbol))
+            except (MarketDataError, OSError, ValueError):
+                frames[symbol] = pd.DataFrame()
+        window = _scalp_target_window(frames[symbol], source_ms, deadline_ms)
+        if window.empty:
+            if current_ms - deadline_ms > grace_ms:
+                path.unlink(missing_ok=True)
+            continue
+        touched = _scalp_target_touches(record, window)
+        recorded = {float(value) for value in record.get("outcome_recorded_percents", [])}
+        hit_levels = set(touched)
+        for percent in SCALP_TARGET_TOUCH_PERCENTS:
+            if percent in recorded:
+                continue
+            target_price = float(record["source_price"]) * (
+                1.0 + percent / 100.0
+                if str(record["direction"]) == "YUKARI"
+                else 1.0 - percent / 100.0
+            )
+            hit = percent in touched
+            outcome = {
+                "schema": SCALP_TARGET_LEDGER_SCHEMA,
+                "setup_id": record["setup_id"],
+                "universe_version": record.get("universe_version", ""),
+                "spot_symbol": record["spot_symbol"],
+                "perpetual_symbol": record["perpetual_symbol"],
+                "direction": record["direction"],
+                "families": record.get("families", []),
+                "score": float(record.get("score", 0.0)),
+                "notification_sent": bool(record.get("notification_sent", True)),
+                "bar_close_time_ms": source_ms,
+                "source_price": float(record["source_price"]),
+                "horizon_ms": int(record["horizon_ms"]),
+                "target_percent": percent,
+                "target_price": target_price,
+                "hit": hit,
+                "touch_price": touched[percent]["touch_price"] if hit else None,
+                "touch_close_time_ms": touched[percent]["touch_close_time_ms"] if hit else None,
+                "settled_at_ms": current_ms,
+                "probability_up": record.get("probability_up", {}),
+                "probability_down": record.get("probability_down", {}),
+            }
+            settled.append(outcome)
+            recorded.add(percent)
+        record["outcome_recorded_percents"] = sorted(recorded)
+        delivered = {float(value) for value in record.get("delivered_percents", [])}
+        if all(level in recorded for level in SCALP_TARGET_TOUCH_PERCENTS) and (
+            not bool(record.get("notification_sent", True))
+            or hit_levels.issubset(delivered)
+        ):
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(
+                json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                + "\n",
+                encoding="utf-8",
+            )
+    if settled:
+        _append_scalp_target_ledger(state_dir, settled)
+    return settled
+
+
+def load_scalp_target_ledger(state_dir: Path, *, limit: int = 20_000) -> list[dict[str, Any]]:
+    path = _target_ledger_path(state_dir)
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in lines[-limit:]:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("schema") == SCALP_TARGET_LEDGER_SCHEMA:
+            rows.append(payload)
+    return rows
+
+
+def mark_scalp_target_touch_delivered(
+    state_dir: Path, setup_id: str, target_percent: float
+) -> None:
+    """Persist one successful scalp target notification, idempotently."""
+    try:
+        percent = float(target_percent)
+    except (TypeError, ValueError):
+        return
+    if percent not in SCALP_TARGET_TOUCH_PERCENTS:
+        return
+    path = _target_pending_dir(state_dir) / f"{setup_id}.json"
+    record = _read_scalp_target_record(path)
+    if record is None:
+        return
+    delivered = {float(value) for value in record.get("delivered_percents", [])}
+    delivered.add(percent)
+    record["delivered_percents"] = sorted(delivered)
+    if all(level in delivered for level in SCALP_TARGET_TOUCH_PERCENTS):
+        path.unlink(missing_ok=True)
+        return
+    path.write_text(
+        json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def format_scalp_target_touch(event: dict[str, Any]) -> str:
+    """Format one compact scalp target touch with its BT context."""
+    direction = str(event.get("direction", ""))
+    sign = "+" if direction == "YUKARI" else "-"
+    percent = float(event["target_percent"])
+    horizons = tuple(int(value) for value in event.get("horizons_minutes", SCALP_BACKTEST_HORIZONS))
+    up = _format_probability_map(event.get("probability_up", {}), horizons)
+    down = _format_probability_map(event.get("probability_down", {}), horizons)
+    horizon_directions = "/".join(str(value) for value in event.get("horizon_directions", []))
+    families = "+".join(str(value) for value in event.get("families", [])) or "-"
+    source_ms = int(event["bar_close_time_ms"])
+    touch_ms = int(event["touch_close_time_ms"])
+    return "\n".join(
+        [
+            f"🎯 SCALP HEDEFİ GÖRÜLDÜ | {event['spot_symbol']}",
+            f"🧭 Yön özeti: {direction} | 15/30/60dk: {horizon_directions or '-'}",
+            f"📍 Sinyal fiyatı: {_format_signal_price(float(event['source_price']))}",
+            f"✅ Hedef kademe: {sign}{percent:g}%",
+            f"🎯 Hedef fiyatı: {_format_signal_price(float(event['target_price']))}",
+            f"💹 Mumda görülen: {_format_signal_price(float(event['touch_price']))}",
+            f"📊 BT yukarı olasılığı (15/30/60dk): {up}",
+            f"📉 BT aşağı olasılığı (15/30/60dk): {down}",
+            f"🧩 Aile: {families} | örneklem ağırlıklı geçmiş sentez",
+            f"🕒 Sinyal zamanı: {local_text(source_ms, with_seconds=False)}",
+            f"🕒 Dokunma zamanı: {local_text(touch_ms, with_seconds=False)}",
+            "ℹ️ Araştırma bildirimi; emir veya kazanç garantisi değildir.",
+        ]
+    )
+
+
+def deliver_scalp_target_touches(
+    settings: Settings,
+    *,
+    notifier: TelegramNotifier | None = None,
+    now: datetime | None = None,
+) -> list[tuple[dict[str, Any], TelegramDelivery]]:
+    """Deliver each scalp setup's +/−2% and +/−3% touch once."""
+    events = pending_scalp_target_touches(settings.scalp_state_dir, settings.scalp_data_dir, now=now)
+    if not events:
+        return []
+    sender = notifier or TelegramNotifier()
+    deliveries: list[tuple[dict[str, Any], TelegramDelivery]] = []
+    for event in events:
+        percent = float(event["target_percent"])
+        signal_id = digest_signal_id(
+            f"scalp-target-touch|{event['setup_id']}|{percent:g}", 0
+        )
+        delivery = sender.deliver_once(
+            signal_id=signal_id,
+            text=format_scalp_target_touch(event),
+            state_dir=settings.telegram_state_dir / "scalp-targets",
+            reply_markup=telegram_menu_keyboard(),
+        )
+        deliveries.append((event, delivery))
+        if delivery.status in {"SENT", "DEDUPLICATED"}:
+            mark_scalp_target_touch_delivered(
+                settings.scalp_state_dir, str(event["setup_id"]), percent
+            )
+    return deliveries
 
 
 def scalp_forecast_stats(
@@ -708,7 +1098,8 @@ def scalp_setup_direction(
     median net move agree; otherwise it remains explicitly mixed.
     """
     item_rows = tuple(rows)
-    family_stats = [scalp_forecast_stats(item, item_rows) for item in items]
+    item_tuple = tuple(items)
+    family_stats = [scalp_forecast_stats(item, item_rows) for item in item_tuple]
     horizon_labels: list[str] = []
     family_disagreement = False
     for horizon in SCALP_BACKTEST_HORIZONS:
@@ -743,6 +1134,28 @@ def scalp_setup_direction(
     if up > down and up >= 2:
         return "YUKARI AĞIRLIKLI", tuple(horizon_labels)
     return "KARIŞIK", tuple(horizon_labels)
+
+
+def scalp_setup_forecast_stats(
+    items: Iterable[ScalpObservation],
+    rows: Iterable[dict[str, Any]],
+) -> dict[int, tuple[int, float, float, float]]:
+    """Return sample-weighted BT stats for a displayed multi-family setup."""
+    item_rows = tuple(rows)
+    family_stats = [scalp_forecast_stats(item, item_rows) for item in items]
+    result: dict[int, tuple[int, float, float, float]] = {}
+    for horizon in SCALP_BACKTEST_HORIZONS:
+        selected = [stats[horizon] for stats in family_stats if horizon in stats]
+        total = sum(max(int(stats[0]), 0) for stats in selected)
+        if total <= 0:
+            continue
+        result[horizon] = (
+            total,
+            sum(int(stats[0]) * float(stats[1]) for stats in selected) / total,
+            sum(int(stats[0]) * float(stats[2]) for stats in selected) / total,
+            sum(int(stats[0]) * float(stats[3]) for stats in selected) / total,
+        )
+    return result
 
 
 def _classify_bt_direction(stats: tuple[int, float, float, float]) -> str:
@@ -1410,13 +1823,146 @@ def _pending_dir(state_dir: Path) -> Path:
     return state_dir / "pending"
 
 
+def _target_pending_dir(state_dir: Path) -> Path:
+    return state_dir / "target_pending"
+
+
+def _scalp_setup_id(item: ScalpObservation, universe_version: str) -> str:
+    material = f"{universe_version}|{item.perpetual_symbol}|setup|{item.bar_close_time_ms}"
+    return sha256(material.encode("ascii")).hexdigest()
+
+
+def _scalp_target_window(
+    frame: pd.DataFrame, after_ms: int, until_ms: int
+) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    required = {"close_time_ms", "high", "low", "close"}
+    if not required.issubset(frame.columns):
+        return pd.DataFrame()
+    selected = frame[
+        (frame["close_time_ms"] > after_ms) & (frame["close_time_ms"] <= until_ms)
+    ]
+    return selected.loc[:, ["close_time_ms", "high", "low", "close"]]
+
+
+def _scalp_target_touches(
+    record: dict[str, Any], window: pd.DataFrame
+) -> dict[float, dict[str, Any]]:
+    if window.empty:
+        return {}
+    source_price = float(record["source_price"])
+    long_side = str(record["direction"]) == "YUKARI"
+    result: dict[float, dict[str, Any]] = {}
+    for close_time, high, low, close in window.itertuples(index=False):
+        extreme = float(high) if long_side else float(low)
+        for percent in SCALP_TARGET_TOUCH_PERCENTS:
+            if percent in result:
+                continue
+            multiplier = 1.0 + percent / 100.0 if long_side else 1.0 - percent / 100.0
+            target_price = source_price * multiplier
+            reached = extreme >= target_price if long_side else extreme <= target_price
+            if reached:
+                result[percent] = {
+                    "target_price": target_price,
+                    "touch_price": extreme,
+                    "touch_close_time_ms": int(close_time),
+                    "touch_close": float(close),
+                }
+    return result
+
+
+def _read_scalp_target_record(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    required = (
+        "setup_id",
+        "spot_symbol",
+        "perpetual_symbol",
+        "direction",
+        "source_price",
+        "bar_close_time_ms",
+        "horizon_ms",
+    )
+    if not isinstance(payload, dict) or payload.get("schema") != SCALP_TARGET_PENDING_SCHEMA:
+        return None
+    if any(key not in payload for key in required):
+        return None
+    try:
+        source_price = float(payload["source_price"])
+        source_ms = int(payload["bar_close_time_ms"])
+        horizon_ms = int(payload["horizon_ms"])
+    except (TypeError, ValueError):
+        return None
+    if (
+        not math.isfinite(source_price)
+        or source_price <= 0.0
+        or source_ms < 0
+        or horizon_ms <= 0
+        or str(payload["direction"]) not in {"YUKARI", "AŞAĞI"}
+    ):
+        return None
+    delivered = payload.get("delivered_percents", [])
+    if not isinstance(delivered, list):
+        return None
+    try:
+        payload["delivered_percents"] = sorted(
+            {
+                float(value)
+                for value in delivered
+                if float(value) in SCALP_TARGET_TOUCH_PERCENTS
+            }
+        )
+    except (TypeError, ValueError):
+        return None
+    recorded = payload.get("outcome_recorded_percents", [])
+    if not isinstance(recorded, list):
+        return None
+    try:
+        payload["outcome_recorded_percents"] = sorted(
+            {
+                float(value)
+                for value in recorded
+                if float(value) in SCALP_TARGET_TOUCH_PERCENTS
+            }
+        )
+    except (TypeError, ValueError):
+        return None
+    return payload
+
+
+def _format_probability_map(value: Any, horizons: tuple[int, ...]) -> str:
+    mapping = value if isinstance(value, dict) else {}
+    return "/".join(
+        f"%{float(mapping[str(horizon)]) * 100:.0f}"
+        if str(horizon) in mapping
+        else "-"
+        for horizon in horizons
+    )
+
+
 def _ledger_path(state_dir: Path) -> Path:
     return state_dir / "ledger.jsonl"
+
+
+def _target_ledger_path(state_dir: Path) -> Path:
+    return state_dir / "target_ledger.jsonl"
 
 
 def _append_scalp_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     with _ledger_path(state_dir).open("a", encoding="utf-8", newline="\n") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _append_scalp_target_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with _target_ledger_path(state_dir).open(
+        "a", encoding="utf-8", newline="\n"
+    ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
@@ -1434,24 +1980,35 @@ def _aggregate_scalp(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 __all__ = [
-    "BullRegime",
     "FAMILY_EVIDENCE",
     "FAMILY_LABELS",
     "SCALP_INTERVAL",
+    "SCALP_TARGET_LEDGER_SCHEMA",
+    "SCALP_TARGET_TOUCH_PERCENTS",
+    "BullRegime",
     "ScalpObservation",
     "ScalpScanReport",
     "deliver_scalp_observations",
+    "deliver_scalp_target_touches",
     "evaluate_bull_regime",
+    "filter_scalp_notification_report",
     "format_scalp_observation_digest",
     "format_scalp_scorecard",
+    "format_scalp_target_touch",
     "load_scalp_ledger",
+    "load_scalp_target_ledger",
+    "mark_scalp_target_touch_delivered",
+    "pending_scalp_target_touches",
     "record_scalp_observations",
+    "record_scalp_target_setups",
     "refresh_and_scan_scalp_universe",
     "scalp_cache_path",
     "scalp_forecast_stats",
-    "scalp_setup_direction",
     "scalp_scorecard",
+    "scalp_setup_direction",
+    "scalp_setup_forecast_stats",
     "scan_cached_scalp_universe",
     "scan_scalp_frame",
     "settle_scalp_observations",
+    "settle_scalp_target_outcomes",
 ]

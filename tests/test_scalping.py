@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,18 +17,25 @@ from crypto_forecaster.scalping import (
     ScalpObservation,
     ScalpScanReport,
     deliver_scalp_observations,
+    deliver_scalp_target_touches,
     evaluate_bull_regime,
     format_scalp_observation_digest,
     format_scalp_scorecard,
+    format_scalp_target_touch,
+    filter_scalp_notification_report,
     load_scalp_ledger,
+    load_scalp_target_ledger,
+    pending_scalp_target_touches,
     record_scalp_observations,
+    record_scalp_target_setups,
     scalp_cache_path,
     scalp_forecast_stats,
-    scalp_setup_direction,
     scalp_scorecard,
+    scalp_setup_direction,
     scan_cached_scalp_universe,
     scan_scalp_frame,
     settle_scalp_observations,
+    settle_scalp_target_outcomes,
     _assign_alert_tiers,
     _closed_market_context,
     _rank_market_contexts,
@@ -448,18 +457,217 @@ class DigestTests(unittest.TestCase):
                 return TelegramDelivery("SENT", 7)
 
         manifest = load_trade1_universe()
-        report = ScalpScanReport(
-            manifest.version, 89, 89, 0, (), (observation(),), START_MS
+        items = tuple(
+            replace(observation(family=family, score=2.8), alert_tier="KURULUM")
+            for family in ("B1", "F3")
         )
-        notifier = Notifier()
-        delivery = deliver_scalp_observations(
-            Settings(),
-            report,
-            manifest=manifest,
-            notifier=notifier,  # type: ignore[arg-type]
-        )
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), items, START_MS)
+        rows = [
+            {
+                "schema": "scalp-observation-outcome-v1",
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -20.0,
+                "net_bps": -32.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory) / "state"
+            state_dir.mkdir()
+            (state_dir / "ledger.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+            )
+            notifier = Notifier()
+            delivery = deliver_scalp_observations(
+                Settings(scalp_state_dir=state_dir),
+                report,
+                manifest=manifest,
+                notifier=notifier,  # type: ignore[arg-type]
+            )
         self.assertEqual(delivery.status, "SENT")  # type: ignore[union-attr]
         self.assertEqual(len(notifier.calls), 1)
+
+    def test_directional_setup_tracks_two_and_three_percent_targets(self) -> None:
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(observation(family=family), alert_tier="KURULUM")
+            for family in ("B1", "F3")
+        )
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -20.0,
+                "net_bps": -32.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), items, START_MS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_dir = root / "state"
+            data_dir = root / "data"
+            data_dir.mkdir()
+            frame = market_frame()
+            event_index = int(frame.index[frame["close_time_ms"] == items[0].bar_close_time_ms][0])
+            source_price = float(items[0].price)
+            frame.loc[event_index + 1, "low"] = source_price * 0.965
+            frame.loc[event_index + 1, "close"] = source_price * 0.98
+            frame.to_csv(scalp_cache_path(data_dir, "BTCUSDT"), index=False)
+            self.assertEqual(
+                record_scalp_target_setups(
+                    state_dir,
+                    report,
+                    manifest=manifest,
+                    top_k=2,
+                    ledger=rows,
+                    notification_sent=True,
+                ),
+                1,
+            )
+            now = datetime.fromtimestamp(
+                (items[0].bar_close_time_ms + 10 * 60_000) / 1000,
+                tz=timezone.utc,
+            )
+            events = pending_scalp_target_touches(state_dir, data_dir, now=now)
+            self.assertEqual({event["target_percent"] for event in events}, {2.0, 3.0})
+            text = format_scalp_target_touch(events[0])
+            self.assertIn("Yön özeti: AŞAĞI", text)
+            self.assertIn("BT yukarı olasılığı", text)
+            self.assertIn("BT aşağı olasılığı", text)
+
+            class Notifier:
+                def __init__(self) -> None:
+                    self.calls = []
+
+                def deliver_once(self, **kwargs):  # type: ignore[no-untyped-def]
+                    self.calls.append(kwargs)
+                    return TelegramDelivery("SENT", 8)
+
+            notifier = Notifier()
+            deliveries = deliver_scalp_target_touches(
+                Settings(
+                    scalp_state_dir=state_dir,
+                    scalp_data_dir=data_dir,
+                    telegram_state_dir=root / "telegram",
+                ),
+                notifier=notifier,  # type: ignore[arg-type]
+                now=now,
+            )
+            self.assertEqual([delivery.status for _, delivery in deliveries], ["SENT", "SENT"])
+            self.assertEqual(len(notifier.calls), 2)
+            self.assertEqual(pending_scalp_target_touches(state_dir, data_dir, now=now), [])
+
+    def test_mixed_or_radar_setup_is_not_target_tracked(self) -> None:
+        manifest = load_trade1_universe()
+        items = (observation(family="B1"),)
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), items, START_MS)
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                record_scalp_target_setups(
+                    Path(directory),
+                    report,
+                    manifest=manifest,
+                    top_k=1,
+                    ledger=(),
+                ),
+                0,
+            )
+
+    def test_notification_filter_keeps_only_exact_high_score_setups(self) -> None:
+        low = replace(observation(family="B1", score=2.0), alert_tier="KURULUM")
+        high = replace(observation(family="F3", score=2.8), alert_tier="KURULUM")
+        report = ScalpScanReport(
+            load_trade1_universe().version,
+            89,
+            89,
+            0,
+            (),
+            (low, high),
+            START_MS,
+        )
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -20.0,
+                "net_bps": -32.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        filtered = filter_scalp_notification_report(
+            report, minimum_score=2.5, ledger=rows
+        )
+        self.assertEqual(filtered.observations, report.observations)
+
+        mixed = replace(high, spot_symbol="ETHUSDT", perpetual_symbol="ETHUSDT")
+        mixed_report = replace(report, observations=(low, mixed))
+        self.assertEqual(
+            filter_scalp_notification_report(
+                mixed_report, minimum_score=2.5, ledger=rows
+            ).observations,
+            (),
+        )
+
+    def test_muted_setup_still_enters_shadow_target_ledger(self) -> None:
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(observation(family=family, score=2.8), alert_tier="KURULUM")
+            for family in ("B1", "F3")
+        )
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -20.0,
+                "net_bps": -32.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), items, START_MS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_dir = root / "state"
+            data_dir = root / "data"
+            data_dir.mkdir()
+            frame = market_frame()
+            event_index = int(frame.index[frame["close_time_ms"] == items[0].bar_close_time_ms][0])
+            source_price = float(items[0].price)
+            frame.loc[event_index + 1, "low"] = source_price * 0.975
+            frame.to_csv(scalp_cache_path(data_dir, "BTCUSDT"), index=False)
+            self.assertEqual(
+                record_scalp_target_setups(
+                    state_dir,
+                    report,
+                    manifest=manifest,
+                    top_k=2,
+                    ledger=rows,
+                    notification_sent=False,
+                ),
+                1,
+            )
+            now = datetime.fromtimestamp(
+                (items[0].bar_close_time_ms + 61 * 60_000) / 1000,
+                tz=timezone.utc,
+            )
+            outcomes = settle_scalp_target_outcomes(state_dir, data_dir, now=now)
+            self.assertEqual(len(outcomes), 2)
+            self.assertTrue(all(row["notification_sent"] is False for row in outcomes))
+            self.assertTrue(any(row["target_percent"] == 2.0 and row["hit"] for row in outcomes))
+            self.assertEqual(len(load_scalp_target_ledger(state_dir)), 2)
 
 
 class ForwardLedgerTests(unittest.TestCase):

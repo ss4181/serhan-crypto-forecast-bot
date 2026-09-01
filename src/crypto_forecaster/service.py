@@ -37,13 +37,17 @@ from .outcomes import (
 from .research import research_all
 from .scalping import (
     SCALP_STEP_MS,
+    deliver_scalp_target_touches,
     deliver_scalp_observations,
+    filter_scalp_notification_report,
     format_scalp_scorecard,
     load_scalp_ledger,
     record_scalp_observations,
+    record_scalp_target_setups,
     refresh_and_scan_scalp_universe,
     scalp_scorecard,
     settle_scalp_observations,
+    settle_scalp_target_outcomes,
 )
 from .telegram import (
     TelegramDelivery,
@@ -766,10 +770,27 @@ def serve_forever(
                         settings.scalp_data_dir,
                         now=now,
                     )
+                    if is_primary():
+                        scalp_target_deliveries = deliver_scalp_target_touches(
+                            settings, now=now
+                        )
+                        for event, delivery in scalp_target_deliveries:
+                            progress(
+                                f"Scalp {event['spot_symbol']} hedef "
+                                f"{event['direction']} %{float(event['target_percent']):g}: "
+                                f"{delivery.status}{_detail_suffix(delivery)}"
+                            )
                     scalp_recorded = record_scalp_observations(
                         settings.scalp_state_dir,
                         scalp_report.observations,
                         manifest=scalp_manifest,
+                    )
+                    record_scalp_target_setups(
+                        settings.scalp_state_dir,
+                        scalp_report,
+                        manifest=scalp_manifest,
+                        top_k=len(scalp_report.observations) or settings.scalp_top_k,
+                        ledger=load_scalp_ledger(settings.scalp_state_dir),
                     )
                     scalp_setup_symbols = {
                         item.perpetual_symbol
@@ -784,8 +805,15 @@ def serve_forever(
                         f"{len(scalp_settled)} sonuc"
                     )
                     if is_primary():
+                        scalp_notification_report = filter_scalp_notification_report(
+                            scalp_report,
+                            minimum_score=settings.scalp_minimum_alert_score,
+                            ledger=load_scalp_ledger(settings.scalp_state_dir),
+                        )
                         scalp_delivery = deliver_scalp_observations(
-                            settings, scalp_report, manifest=scalp_manifest
+                            settings,
+                            scalp_notification_report,
+                            manifest=scalp_manifest,
                         )
                         if (
                             scalp_delivery is not None
@@ -794,6 +822,28 @@ def serve_forever(
                             progress(
                                 f"Scalp Telegram: {scalp_delivery.status}{_detail_suffix(scalp_delivery)}"
                             )
+                        if scalp_delivery is not None and scalp_delivery.status in {
+                            "SENT",
+                            "DEDUPLICATED",
+                        }:
+                            tracked = record_scalp_target_setups(
+                                settings.scalp_state_dir,
+                                scalp_notification_report,
+                                manifest=scalp_manifest,
+                                top_k=settings.scalp_top_k,
+                                ledger=load_scalp_ledger(settings.scalp_state_dir),
+                            )
+                            if tracked:
+                                progress(f"Scalp hedef izleme: {tracked} yeni kurulum")
+                    scalp_target_settled = settle_scalp_target_outcomes(
+                        settings.scalp_state_dir,
+                        settings.scalp_data_dir,
+                        now=now,
+                    )
+                    if scalp_target_settled:
+                        progress(
+                            f"Scalp hedef karnesi: {len(scalp_target_settled)} kademe sonuc"
+                        )
                 except (OSError, RuntimeError, TypeError, ValueError) as error:
                     # Experimental observation must never take the verified
                     # BTC/ETH service down or trigger its exponential backoff.

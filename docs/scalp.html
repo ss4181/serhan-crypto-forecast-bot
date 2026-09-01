@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trade3 sinyal karnesi</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; padding: 1.5rem; font: 15px/1.45 system-ui, sans-serif; background: #f6f8fb; color: #18202a; }
+    main { max-width: 1200px; margin: auto; }
+    h1 { margin: 0 0 .25rem; }
+    .muted { color: #66717f; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin: 1.25rem 0; }
+    .card { background: #fff; border: 1px solid #dce3eb; border-radius: 10px; padding: .8rem 1rem; }
+    .value { display: block; font-size: 1.5rem; font-weight: 700; }
+    .controls { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: .8rem; }
+    input, select { border: 1px solid #c7d0da; border-radius: 7px; padding: .5rem; background: #fff; color: inherit; }
+    .table-wrap { overflow-x: auto; background: #fff; border: 1px solid #dce3eb; border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; min-width: 850px; }
+    th, td { padding: .55rem .7rem; border-bottom: 1px solid #e7ecf1; text-align: left; white-space: nowrap; }
+    th { background: #edf2f7; font-size: .8rem; }
+    .up { color: #17824b; font-weight: 700; } .down { color: #bd3b3b; font-weight: 700; }
+    .hit { color: #17824b; } .miss { color: #bd3b3b; } .pending { color: #9a6a00; }
+    footer { margin-top: 1rem; font-size: .8rem; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #12161b; color: #e6edf3; } .card, .table-wrap, input, select { background: #1b222b; border-color: #303b48; }
+      th { background: #242d38; } th, td { border-color: #303b48; } .muted { color: #9aa7b5; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Trade3 sinyal karnesi</h1>
+  <div class="muted" id="updated">Veri yükleniyor…</div>
+  <section class="cards">
+    <div class="card">Toplam<span class="value" id="total">-</span></div>
+    <div class="card">Sonuçlanan<span class="value" id="settled">-</span></div>
+    <div class="card">Bekleyen<span class="value" id="pending">-</span></div>
+    <div class="card">Scalp %2/%3<span class="value" id="scalp-rate">-</span></div>
+    <div class="card">Bildirim filtresi<span class="value" id="notified-rate">-</span></div>
+  </section>
+  <div class="controls">
+    <input id="search" placeholder="Coin ara (BTCUSDT)">
+    <select id="kind"><option value="">Tümü</option><option value="regular">Normal model</option><option value="scalp-target">Scalp hedef</option></select>
+    <select id="status"><option value="">Tüm durumlar</option><option value="HEDEF ULAŞTI">Hedef ulaştı</option><option value="HEDEF ULAŞMADI">Hedef ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option></select>
+  </div>
+  <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Skor</th><th>Aile</th><th>Hedef</th><th>Durum</th><th>Bildirim</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <footer class="muted">Bu sayfa araştırma/ileri-test sonuçlarını gösterir; emir veya kazanç garantisi değildir.</footer>
+</main>
+<script>
+  const fmt = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 2 });
+  let data = { signals: [], summary: {} };
+  const el = id => document.getElementById(id);
+  const pct = value => value == null ? '-' : `%${(value * 100).toFixed(1)}`;
+  function render() {
+    const q = el('search').value.trim().toUpperCase(), kind = el('kind').value, status = el('status').value;
+    const rows = data.signals.filter(x => (!q || x.symbol.includes(q)) && (!kind || x.kind === kind) && (!status || x.status === status));
+    el('rows').innerHTML = rows.map(x => {
+      const time = x.sourceTimeMs ? new Date(x.sourceTimeMs).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }) : '-';
+      const direction = `<span class="${x.direction.includes('YUKARI') ? 'up' : 'down'}">${x.direction || '-'}</span>`;
+      const stateClass = x.success === true ? 'hit' : x.success === false ? 'miss' : 'pending';
+      const families = Array.isArray(x.families) ? x.families.join('+') : '-';
+      return `<tr><td>${time}</td><td>${x.kind === 'scalp-target' ? 'Scalp' : 'Model'}</td><td>${x.symbol}</td><td>${direction}</td><td>${x.score == null ? '-' : fmt.format(x.score)}</td><td>${families}</td><td>${x.targetPercent == null ? '-' : (x.direction === 'YUKARI' ? '+' : '-') + x.targetPercent + '%'}</td><td class="${stateClass}">${x.status}</td><td>${x.notified ? 'Gönderildi' : 'Sessiz'}</td><td>${x.netBps == null ? '-' : fmt.format(x.netBps)}</td></tr>`;
+    }).join('') || '<tr><td colspan="10">Kayıt yok.</td></tr>';
+  }
+  fetch('scalp-data.json', { cache: 'no-store' }).then(r => r.json()).then(x => {
+    data = x; const s = x.summary || {}; el('updated').textContent = `Son güncelleme: ${x.generatedAtUtc || '-'} • kayıt: ${s.signalCount || 0}`;
+    el('total').textContent = s.signalCount ?? 0; el('settled').textContent = s.settledCount ?? 0; el('pending').textContent = s.pendingCount ?? 0;
+    el('scalp-rate').textContent = pct(s.scalpTargetHitRate); el('notified-rate').textContent = pct(s.notifiedScalpTargetHitRate); render();
+  }).catch(() => { el('updated').textContent = 'Dashboard verisi henüz yayınlanmadı.'; render(); });
+  ['search','kind','status'].forEach(id => el(id).addEventListener('input', render));
+</script>
+</body>
+</html>

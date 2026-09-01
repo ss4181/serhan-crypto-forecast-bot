@@ -1,0 +1,16 @@
+{
+  "schema": "trade3-signal-dashboard-v1",
+  "generatedAtUtc": null,
+  "summary": {
+    "signalCount": 0,
+    "settledCount": 0,
+    "pendingCount": 0,
+    "scalpTargetCount": 0,
+    "scalpTargetHits": 0,
+    "scalpTargetHitRate": null,
+    "notifiedScalpTargetCount": 0,
+    "notifiedScalpTargetHits": 0,
+    "notifiedScalpTargetHitRate": null
+  },
+  "signals": []
+}
