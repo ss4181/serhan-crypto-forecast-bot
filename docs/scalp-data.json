@@ -1,6 +1,8 @@
 {
   "schema": "trade3-signal-dashboard-v1",
   "generatedAtUtc": null,
+  "sourceStatus": "unknown",
+  "latestSignalAtUtc": null,
   "summary": {
     "signalCount": 0,
     "settledCount": 0,

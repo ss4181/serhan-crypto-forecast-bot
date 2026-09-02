@@ -317,7 +317,11 @@ başarı oranını gerçekten artırıp artırmadığı tüm adaylarla karşıla
 `docs/scalp-data.json` dosyasını üretir. `docs/scalp.html` GitHub Pages üzerinde
 normal model sonuçlarını ve scalp `%2/%3` hedef başarılarını filtrelenebilir
 tabloda gösterir; durumlar `HEDEF ULAŞTI`, `HEDEF ULAŞMADI`, `BEKLEMEDE` ve
-`Sessiz` olarak ayrılır.
+`Sessiz` olarak ayrılır. GitHub barındırılan runner Binance'a erişemezse bulut
+yenilemesi uyarı olarak kalır ve Pages son önbellekteki kırpılmış veriyi yine
+yayınlar. Sayfa, yayın zamanını gerçek son sinyal zamanından ayırır ve veriyi
+`Güncel` ya da `Önbellek` olarak açıkça etiketler; Oracle üzerindeki ana servis
+ve Telegram gönderimi bu durumdan etkilenmez.
 
 Evreni ve spot→vadeli kontrat eşlemelerini ağsız doğrulama:
 

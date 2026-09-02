@@ -10,6 +10,10 @@
     main { max-width: 1200px; margin: auto; }
     h1 { margin: 0 0 .25rem; }
     .muted { color: #66717f; }
+    .freshness { display: inline-block; margin-top: .45rem; border-radius: 999px; padding: .25rem .65rem; font-size: .82rem; font-weight: 700; }
+    .freshness.fresh { background: #dff5e8; color: #12683c; }
+    .freshness.stale { background: #fff0c9; color: #805600; }
+    .freshness.unknown { background: #e8edf3; color: #536171; }
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin: 1.25rem 0; }
     .card { background: #fff; border: 1px solid #dce3eb; border-radius: 10px; padding: .8rem 1rem; }
     .value { display: block; font-size: 1.5rem; font-weight: 700; }
@@ -32,6 +36,7 @@
 <main>
   <h1>Trade3 sinyal karnesi</h1>
   <div class="muted" id="updated">Veri yükleniyor…</div>
+  <div class="freshness unknown" id="freshness">Veri durumu bekleniyor</div>
   <section class="cards">
     <div class="card">Toplam<span class="value" id="total">-</span></div>
     <div class="card">Sonuçlanan<span class="value" id="settled">-</span></div>
@@ -64,10 +69,13 @@
     }).join('') || '<tr><td colspan="10">Kayıt yok.</td></tr>';
   }
   fetch('scalp-data.json', { cache: 'no-store' }).then(r => r.json()).then(x => {
-    data = x; const s = x.summary || {}; el('updated').textContent = `Son güncelleme: ${x.generatedAtUtc || '-'} • kayıt: ${s.signalCount || 0}`;
+    data = x; const s = x.summary || {}, status = x.sourceStatus || 'unknown';
+    const sourceLabel = status === 'fresh' ? 'Güncel veri' : status === 'stale' ? 'Önbellek — Binance yenilemesi başarısız' : 'Henüz veri üretilmedi';
+    const badge = el('freshness'); badge.className = `freshness ${status}`; badge.textContent = sourceLabel;
+    el('updated').textContent = `Sayfa yayını: ${x.generatedAtUtc || '-'} • son sinyal: ${x.latestSignalAtUtc || '-'} • kayıt: ${s.signalCount || 0}`;
     el('total').textContent = s.signalCount ?? 0; el('settled').textContent = s.settledCount ?? 0; el('pending').textContent = s.pendingCount ?? 0;
     el('scalp-rate').textContent = pct(s.scalpTargetHitRate); el('notified-rate').textContent = pct(s.notifiedScalpTargetHitRate); render();
-  }).catch(() => { el('updated').textContent = 'Dashboard verisi henüz yayınlanmadı.'; render(); });
+  }).catch(() => { el('updated').textContent = 'Dashboard verisi henüz yayınlanmadı.'; el('freshness').textContent = 'Veri alınamadı'; render(); });
   ['search','kind','status'].forEach(id => el(id).addEventListener('input', render));
 </script>
 </body>

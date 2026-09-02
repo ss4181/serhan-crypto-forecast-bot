@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 
 from crypto_forecaster.config import Settings
@@ -54,9 +55,20 @@ class DashboardTests(unittest.TestCase):
                 encoding="utf-8",
             )
             settings = Settings(outcome_state_dir=outcomes, scalp_state_dir=scalp)
-            payload = build_dashboard_payload(settings)
+            payload = build_dashboard_payload(
+                settings,
+                now=datetime(2026, 9, 2, 8, 0, tzinfo=UTC),
+                source_status="stale",
+            )
             self.assertEqual(payload["summary"]["scalpTargetHitRate"], 1.0)
             self.assertEqual(payload["summary"]["notifiedScalpTargetHitRate"], 1.0)
+            self.assertEqual(payload["sourceStatus"], "stale")
+            self.assertEqual(payload["generatedAtUtc"], "2026-09-02T08:00:00Z")
+            self.assertEqual(payload["latestSignalAtUtc"], "2023-11-14T22:15:00Z")
             self.assertNotIn("CRYPTO_TELEGRAM_BOT_TOKEN", json.dumps(payload))
             output = write_dashboard_payload(settings, root / "dashboard.json")
             self.assertTrue(output.exists())
+
+    def test_dashboard_rejects_unknown_source_status(self) -> None:
+        with self.assertRaisesRegex(ValueError, "fresh veya stale"):
+            build_dashboard_payload(Settings(), source_status="unknown")

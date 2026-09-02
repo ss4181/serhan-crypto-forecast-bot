@@ -137,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dashboard.add_argument("--output", type=Path, default=Path("docs/scalp-data.json"))
     dashboard.add_argument("--limit", type=int, default=2_000)
+    dashboard.add_argument(
+        "--source-status",
+        choices=("fresh", "stale"),
+        default="fresh",
+        help="Yayindaki verinin canli yenilemeden mi onbellekten mi geldigini isaretle",
+    )
 
     subparsers.add_parser(
         "scalp-universe",
@@ -297,7 +303,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.command == "dashboard-export":
-            output = write_dashboard_payload(settings, args.output, limit=args.limit)
+            output = write_dashboard_payload(
+                settings,
+                args.output,
+                limit=args.limit,
+                source_status=args.source_status,
+            )
             print(f"Dashboard verisi yazildi: {output}")
             return 0
         if args.command == "scalp-universe":

@@ -100,6 +100,11 @@ jobs:
         run: python run.py verify-models --refresh --days 365 --send
 
       - name: Refresh, forecast and notify
+        id: forecast
+        # Binance occasionally refuses GitHub-hosted runner IPs.  The always-on
+        # Oracle service remains primary; a cloud refresh failure must not stop
+        # the last known, redacted dashboard from being published.
+        continue-on-error: true
         shell: bash
         run: |
           extra=""
@@ -107,7 +112,14 @@ jobs:
           python run.py cloud-run --days 365 $extra
 
       - name: Prepare public signal dashboard
-        run: python run.py dashboard-export --output docs/scalp-data.json
+        shell: bash
+        run: |
+          source_status="fresh"
+          if [[ "${{ steps.forecast.outcome }}" != "success" ]]; then
+            source_status="stale"
+            echo "::warning::Binance refresh failed; publishing the last cached dashboard data."
+          fi
+          python run.py dashboard-export --output docs/scalp-data.json --source-status "$source_status"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
