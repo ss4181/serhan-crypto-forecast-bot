@@ -1,13 +1,591 @@
 <!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0; url=scalp.html">
-  <link rel="canonical" href="scalp.html">
-  <title>Trade3 sinyal karnesi</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trade Lab — BTC/ETH olasılık araştırma botu</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; padding: 2.5rem 1.25rem 6rem; max-width: 46rem;
+  font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1b1b1b; background: #fff;
+  -webkit-text-size-adjust: 100%;
+}
+h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .5rem; }
+h2 {
+  font-size: 1.3rem; margin: 3rem 0 .75rem; padding-top: 1.25rem;
+  border-top: 1px solid #e2e2e2;
+}
+h3 { font-size: 1.05rem; margin: 2rem 0 .5rem; }
+p, ul, ol { margin: 0 0 1rem; }
+li { margin-bottom: .3rem; }
+a { color: #0b5cad; }
+code {
+  font: .875em/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: #f2f2f2; padding: .1em .35em; border-radius: 3px;
+}
+pre {
+  background: #f7f7f7; border: 1px solid #e5e5e5; border-radius: 4px;
+  padding: .9rem 1rem; overflow-x: auto;
+}
+pre code { background: none; padding: 0; }
+blockquote {
+  margin: 1.25rem 0; padding: .1rem 0 .1rem 1rem;
+  border-left: 3px solid #c8c8c8; color: #444;
+}
+/* Wide tables scroll inside their own box rather than the page. */
+.table-wrap { overflow-x: auto; margin: 0 0 1.25rem; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { padding: .45rem .7rem; border-bottom: 1px solid #e5e5e5; text-align: left; }
+th { font-weight: 600; background: #f7f7f7; white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+hr { border: none; border-top: 1px solid #e2e2e2; margin: 2.5rem 0; }
+footer { margin-top: 4rem; font-size: .85rem; color: #666; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6e6e6; background: #16181c; }
+  h2, hr { border-color: #2e323a; }
+  a { color: #79b8ff; }
+  code { background: #23262c; }
+  pre { background: #1c1f24; border-color: #2e323a; }
+  th { background: #1c1f24; }
+  th, td { border-color: #2e323a; }
+  blockquote { border-color: #3a3f48; color: #b8bcc4; }
+  footer { color: #9aa0a8; }
+}
+@media print {
+  body { max-width: none; padding: 0; color: #000; background: #fff; }
+  h2 { page-break-after: avoid; }
+  .table-wrap, table { page-break-inside: avoid; }
+}
+</style>
 </head>
 <body>
-  <p>Trade3 sinyal karnesine yönlendiriliyorsunuz. <a href="scalp.html">Dashboard’u açın</a>.</p>
+<h1>Trade Lab</h1>
+<p>BTC ve ETH için, kapanmış Binance mumlarından kalibre olasılık üreten bir
+araştırma botu. Emir vermez, borsa hesabına bağlanmaz, API anahtarı kullanmaz.</p>
+<p>Bu sayfa neyi kurduğumuzu, <strong>neden öyle kurduğumuzu</strong> ve ölçtüğümüzde ne
+çıktığını anlatır. Sonuçlar olumlu değil; onları da olduğu gibi yazdık, çünkü
+bir araştırma kaydının değeri doğruladıklarında değil, elediklerindedir.</p>
+<hr />
+<h2>Bir cümlelik özet</h2>
+<p>Altı ayrı hipotez test edildi, <strong>altısı da reddedildi</strong>; hiçbir model
+maliyet sonrası pozitif beklenti üretmiyor, ve bot bu yüzden hiçbir işlem
+sinyali göndermiyor — bu bir arıza değil, sistemin doğru çalışmasıdır.</p>
+<hr />
+<h2>1. Sistem nasıl çalışıyor</h2>
+<p><code>Binance kapalı mumlar
+   → belirteçler (9 gösterge, yalnız o an bilinen değerlerden)
+   → hedef: üçlü bariyer (önce hangi tarafa %1 gidilir, 24 saat içinde)
+   → kronolojik walk-forward + Platt kalibrasyonu
+   → maliyet sonrası beklenti kapısı
+   → Telegram (iki seviye) + canlı karne</code></p>
+<p>Varsayılan olarak altı bağımsız model var: <code>BTCUSDT</code> ve <code>ETHUSDT</code> × <code>5m</code>,
+<code>15m</code>, <code>1h</code>. Her biri kendi ayrı düzenlileştirilmiş lojistik regresyonu. İzlenen
+semboller <code>CRYPTO_SYMBOLS</code> ile değiştirilebilir; Bonferroni düzeltmesi model
+sayısından türetildiği için evren büyüdükçe kapı kendiliğinden sıkılaşır.</p>
+<p><strong>Veri:</strong> Binance'in salt-okunur kline uç noktasından yalnızca <strong>kapanmış</strong>
+mumlar; varsayılan olarak <strong>sürekli vadeli sözleşme</strong>, çünkü işlem yapılan
+enstrüman o. Spot fiyat yakın seyreder ama farklı bir enstrümandır, bu yüzden
+önbellek dosya adı piyasayı içerir — biri diğeri sanılamaz. Açık mum asla
+kullanılmaz. Önbellekte OHLCV'ye ek olarak <code>quote_volume</code>,
+<code>trade_count</code> ve <code>taker_buy_base</code> da saklanır.</p>
+<p><strong>Belirteçler (9):</strong> ATR'ye bölünmüş 1/3/12 mum momentumu, EMA(8/21) farkı,
+RSI(14), Bollinger(20) z-konumu, log ATR(14) yüzdesi, 20 mumluk log-hacim
+z-skoru, mum içi alıcı/satıcı baskısı.</p>
+<p>Haber, sosyal medya, zincir verisi veya gelecekte oluşan hiçbir değer
+kullanılmaz.</p>
+<hr />
+<h2>2. Hedef: neden "üçlü bariyer"</h2>
+<p>İlk kurulumda hedef <strong>"bir sonraki mumun kapanışı daha yüksek mi"</strong> idi. Bu
+hedefin sessiz bir kusuru var: bir baz puanlık sürüklenmeyi gerçek bir hareketle
+aynı olay sayar. Böylece bir model isabetli görünürken komisyona para
+kaptırabilir — nitekim kaptırıyordu.</p>
+<p>Yeni hedef, o mumda açılan bir işlemin <strong>önce hangi bariyere değdiğidir</strong>:</p>
+<ul>
+<li><strong>Kâr al / zarar kes:</strong> girişten <code>±100</code> baz puan (hedeflenen <code>%1</code>'lik işlem)</li>
+<li><strong>Süre bariyeri:</strong> en fazla 24 saat; o zamana kadar değilmezse piyasadan kapanır</li>
+<li><strong>Aynı mumda iki seviye birden görülürse</strong> hangisinin önce geldiği mum
+  verisinden bilinemez → <strong>her iki yön için de zarar</strong> sayılır</li>
+</ul>
+<p>Son madde önemli: bir tacir, kanıtlayamadığı iyi sonucu varsayamaz.</p>
+<h3>Bariyer genişliği tek başına işi belirler</h3>
+<p>Simetrik bariyerde başabaş isabet oranı:</p>
+<blockquote>
+<p><strong>gerekli isabet = %50 + maliyet / (2 × bariyer)</strong></p>
+</blockquote>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Bariyer</th>
+<th>Maliyet</th>
+<th>Gereken isabet</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>40 bps</td>
+<td>20 bps (spot taker)</td>
+<td><strong>%75</strong> — pratikte imkânsız</td>
+</tr>
+<tr>
+<td>100 bps</td>
+<td>10 bps (vadeli taker)</td>
+<td><strong>%55</strong> — ulaşılabilir bir bar</td>
+</tr>
+</tbody>
+</table></div>
+<p>İlk kurduğumuz bariyer (maliyetin 2 katı) hiçbir modelin geçemeyeceği bir bar
+koyuyordu. Bunu proje sahibi fark etti: "%1'lik işlem yapacağım, vadelide
+komisyon çok daha küçük kalmaz mı?" Haklıydı — ve düzeltme barı <code>%75</code>'ten
+<code>%55</code>'e indirdi, örneklem 20 kat büyüdü.</p>
+<hr />
+<h2>3. Doğrulama protokolü</h2>
+<p>Veri <strong>asla karıştırılmaz</strong>. Her fold şu sıradadır:</p>
+<p><code>geçmiş train → embargo → daha yeni kalibrasyon → embargo → daha yeni test</code></p>
+<p>Embargo <strong>tam bir etiket ufku</strong> kadardır. Bariyer etiketi ileriye 288 mum (5m
+için 24 saat) baktığı için tek mumluk embargo, eğitim setinin komşusunun
+puanlandığı fiyat hareketini görmesine izin verirdi.</p>
+<h3>Bildirim kapısı</h3>
+<p>Bir modelin işlem sinyali gönderebilmesi için <strong>hepsi</strong> gerekir:</p>
+<ol>
+<li>En az 100 yüksek güven OOS örneği</li>
+<li>Yüksek güven yön doğruluğu ≥ <code>%53</code></li>
+<li>Tüm modeller birlikte değerlendirildiği için Bonferroni aile-düzeltmeli
+   <code>%95 Wilson</code> alt sınırı <code>%50</code> üzerinde — düzeltme model sayısından türetilir,
+   böylece evren büyüdükçe bar kendiliğinden yükselir</li>
+<li>Brier skoru, yalnız tarihsel yukarı oranını kullanan tabandan iyi</li>
+<li>ECE ≤ <code>%10</code></li>
+<li><strong>Maliyet düşüldükten sonra sinyal başına beklenti pozitif</strong></li>
+<li><strong>Bu beklentinin blok bootstrap <code>%95</code> alt sınırı sıfırın üstünde</strong></li>
+<li><strong>Sinyaller en az 12 bağımsız bloğa dağılmış</strong> — daha azında aralık
+   güvenilmez (ölçüldü: 2 blokta null altında <code>%26</code> yanlış pozitif)</li>
+</ol>
+<p>Son iki madde belirleyicidir. Yön isabetinin <code>%50</code> üzerinde olması tek başına
+hiçbir şey ifade etmez: kazanan ve kaybeden işlemlerin büyüklükleri farklıdır.</p>
+<h3>Blok uzunluğu neden etiket ufkundan büyük olmalı</h3>
+<p>Yüksek güven sinyalleri aynı seansta kümelenir. Bağımsız örnek varsayan güven
+aralığı bu yüzden fazla dardır. Ama <strong>takvim günü de yetmez</strong>: <code>5m</code> etiketi 288
+mum ileri baktığı için sonuç penceresi tam bir gün kaplar, komşu günler örtüşür.</p>
+<p>Blok artık veriden türetilir: <strong>en az etiket penceresinin iki katı, asla bir
+günden kısa değil.</strong> Bu hatayı bir deney sırasında bulduk — ayrıntısı aşağıda.</p>
+<p><strong>Blok sayısı da yetmeli.</strong> Bir bootstrap'ın yeniden örnekleyecek bloğa ihtiyacı
+var. Gerçek bir 12 günlük örneklemde günlük sonuçların işareti rastgele
+çevrilerek (gerçek ortalama sıfır) ölçüldü: <strong>2 blokla</strong> <code>%95</code> alt sınırı
+zamanın <code>%26</code>'sında sıfırı geçiyor, <strong>4 blokla</strong> <code>%12</code>'sinde — nominal <code>%5</code>'e
+karşı. 12 blokta <code>%6.7</code>'ye iniyor. Bu yüzden kapı artık en az 12 bağımsız blok
+istiyor; daha azında aralık ne kadar güvenli görünürse görünsün kanıt değildir.</p>
+<p>Bu kuralın izi eski ölçümlerde zaten vardı: evren testinde <code>NEARUSDT</code> üç sinyal
+ve iki günle <code>+90.00</code> bps alt sınır üretmişti — kapıdan yalnızca "en az 100
+sinyal" kuralı sayesinde geçememişti. Kural artık örtük değil.</p>
+<hr />
+<h2>4. Bugünkü sonuçlar</h2>
+<p>Bariyer <code>±100</code> bps, maliyet <code>10</code> bps (Binance USD-M vadeli taker), gereken
+isabet <code>%55</code>. Ölçüm 365 günlük veri, tamamen OOS dilimlerden:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th style="text-align: right;">OOS mum</th>
+<th style="text-align: right;">Çözülen</th>
+<th style="text-align: right;">İsabet (n)</th>
+<th style="text-align: right;">Brüt bps</th>
+<th style="text-align: right;">Net bps</th>
+<th style="text-align: right;">Net %95 aralık</th>
+<th style="text-align: center;">Kapı</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BTCUSDT 5m</td>
+<td style="text-align: right;">41.349</td>
+<td style="text-align: right;">%84</td>
+<td style="text-align: right;"><strong>%53.89</strong> (3.333)</td>
+<td style="text-align: right;">+5.08</td>
+<td style="text-align: right;">−4.92</td>
+<td style="text-align: right;">−28.82 / +17.43</td>
+<td style="text-align: center;">KALDI</td>
+</tr>
+<tr>
+<td>BTCUSDT 15m</td>
+<td style="text-align: right;">13.778</td>
+<td style="text-align: right;">%89</td>
+<td style="text-align: right;">%48.87 (839)</td>
+<td style="text-align: right;">−2.13</td>
+<td style="text-align: right;">−12.13</td>
+<td style="text-align: right;">−41.55 / +14.74</td>
+<td style="text-align: center;">KALDI</td>
+</tr>
+<tr>
+<td>BTCUSDT 1h</td>
+<td style="text-align: right;">3.439</td>
+<td style="text-align: right;">%97</td>
+<td style="text-align: right;">%46.51 (86)</td>
+<td style="text-align: right;">−8.02</td>
+<td style="text-align: right;">−18.02</td>
+<td style="text-align: right;">−63.57 / +32.86</td>
+<td style="text-align: center;">KALDI</td>
+</tr>
+<tr>
+<td>ETHUSDT 5m</td>
+<td style="text-align: right;">41.349</td>
+<td style="text-align: right;">%98</td>
+<td style="text-align: right;">%50.08 (4.617)</td>
+<td style="text-align: right;">−0.02</td>
+<td style="text-align: right;">−10.02</td>
+<td style="text-align: right;">−29.60 / +6.86</td>
+<td style="text-align: center;">KALDI</td>
+</tr>
+<tr>
+<td>ETHUSDT 15m</td>
+<td style="text-align: right;">13.778</td>
+<td style="text-align: right;">%98</td>
+<td style="text-align: right;">%50.41 (1.817)</td>
+<td style="text-align: right;">+1.04</td>
+<td style="text-align: right;">−8.96</td>
+<td style="text-align: right;">−27.38 / +6.82</td>
+<td style="text-align: center;">KALDI</td>
+</tr>
+<tr>
+<td>ETHUSDT 1h</td>
+<td style="text-align: right;">3.439</td>
+<td style="text-align: right;">%100</td>
+<td style="text-align: right;">%47.50 (400)</td>
+<td style="text-align: right;">−8.72</td>
+<td style="text-align: right;">−18.72</td>
+<td style="text-align: right;">−43.23 / +2.41</td>
+<td style="text-align: center;">KALDI</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Hiçbiri geçmiyor.</strong> En iyisi <code>BTCUSDT 5m</code>: %53.89 isabet, gereken %55. Aradaki
+1,1 puan küçük görünüyor ama altı farklı yoldan kapatmaya çalıştık ve hiçbiri
+tutmadı.</p>
+<p>Bir de rahatsız edici bir referans var: bariyer hedefinde yukarı tarafın önce
+görülme oranı <code>%52.5</code>. Yani hiç düşünmeden "yukarı" diyen bir kural, modele
+yakın isabet veriyor.</p>
+<hr />
+<h2>5. Denenen ve elenen hipotezler</h2>
+<p>Hepsi aynı walk-forward dilimlerinde, aynı kapıyla ölçüldü. <strong>Her fikir
+önceden yazıldı, bir kez ölçüldü, sonucu kabul edildi.</strong></p>
+<h3>5.1 Emir akışı — reddedildi</h3>
+<p>Binance her mumla birlikte taker alım hacmini gönderir. Bir mum pasif alımla da
+yeşil kapanabilir, agresif satışa denk gelen bir alışla da; OHLCV bu ikisini
+ayırt edemez, taker hacmi edebilir. Umut verici görünüyordu.</p>
+<p>Dört form denendi: ham denge, 12 mumluk ortalama, 20 mumluk z-skoru, 3 mumluk
+değişim, artı ortalama işlem büyüklüğü. <strong>18 model karşılaştırmasının 16'sında
+net beklenti kötüleşti</strong>, en kötüsü −16,4 bps.</p>
+<p><em>Neden:</em> agresör ayrımı mumun kendi hareketiyle eşzamanlı, yani büyük ölçüde
+<code>candle_pressure</code>'ın tekrarı. Bilgi katmadan varyans ekliyor.</p>
+<h3>5.2 Gradient boosting — reddedildi, ama bir hata buldurdu</h3>
+<p><code>HistGradientBoosting</code> ilk bakışta atılım gibi görünmüştü:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th>İsabet</th>
+<th>Net bps</th>
+<th>Ayrı hafta</th>
+<th>Blok alt sınırı</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ETHUSDT 5m</td>
+<td><strong>%70.6</strong></td>
+<td><strong>+27.3</strong></td>
+<td>10</td>
+<td><strong>−16.0</strong></td>
+</tr>
+<tr>
+<td>ETHUSDT 15m</td>
+<td>%60.2</td>
+<td>+8.4</td>
+<td>10</td>
+<td>−26.2</td>
+</tr>
+<tr>
+<td>BTCUSDT 15m</td>
+<td>%34.9</td>
+<td>−38.9</td>
+<td>9</td>
+<td>−55.9</td>
+</tr>
+</tbody>
+</table></div>
+<p>1.594 sinyal görünüyor ama yalnız <strong>10 ayrı haftaya</strong> düşüyor. Kümelenmeye göre
+düzeltince artı kayboluyor. Üstelik isabetin modeller arasında %34,9 ile %70,6
+arasında salınması, sinyalin değil varyansın imzası.</p>
+<p><strong>Bu deney kapıdaki gerçek bir hatayı ortaya çıkardı:</strong> bootstrap gün
+bloklarıyla yapılıyordu, oysa etiket penceresi bir günü kaplıyor. Gün blokları
+bağımlılığı kırmıyordu. Düzeltildi — ve deney kaybetmesine rağmen altyapıyı
+sağlamlaştırdı. <code>scikit-learn</code> bağımlılığı eklenmedi.</p>
+<h3>5.3 Funding oranı — reddedildi</h3>
+<p>Funding, uzun pozisyonların kısalara ödediği bedeldir; aşırı bir oran, kalabalık
+tarafı ve sıkışma riskini gösterir — fiyat geçmişinde olmayan bir bilgi.</p>
+<p>Üç form: son ödenen oran, 30 ödemelik z-skoru, son 24 saatin toplamı. Hizalama
+<code>merge_asof(direction="backward")</code>, yani bir mum yalnız kapanışından <strong>önce</strong>
+ödenmiş funding'i görür. <strong>Altı modelin beşinde kötüleşti</strong>; tek iyileşende bile
+alt sınır −34,8 bps'de kaldı.</p>
+<h3>5.4 BTC-ETH öncülük — reddedildi</h3>
+<p>Her modele diğer sembolün 1 ve 3 mumluk momentumu ve ikisinin farkı eklendi,
+<code>close_time_ms</code> üzerinden birebir hizalanarak (hizalama %100 tuttu, teknik
+aksaklık yok). <strong>Altı modelin beşinde kötüleşti.</strong></p>
+<h3>5.5 Oynaklık rejimi filtresi — önerme yanlış çıktı</h3>
+<p>Fikir: <code>%1</code>'in ulaşılamayacağı sakin rejimlerde sinyal üretmeyelim, ölü ağırlık
+taşımayalım. Filtre: <code>ATR × √ufuk ≥ bariyer</code>.</p>
+<p>Ölçüm önermeyi çürüttü: bu koşul zaten zamanın <strong>%91-100</strong>'ünde sağlanıyor.
+<code>5m</code> için <code>ATR × √288 ≈ 204</code> bps, bariyerin iki katı. <code>%1</code> hedefi sakin
+dönemlerde de ulaşılabilir. Filtrenin fiilen elediği tek yerde
+(<code>BTCUSDT 5m</code>, sinyallerin %26'sı) sonuç −4,9'dan −9,7 bps'ye geriledi.</p>
+<h3>5.6 Altcoin evreni — reddedildi, ve önce beni yanılttı</h3>
+<p>Proje sahibinin bir aylık vadeli işlem geçmişi, botun <strong>yanlış piyasaları</strong>
+izlediğini gösterdi: 18 sembolde işlem yapılmış, bot ikisine bakıyordu ve
+<code>ETHUSDT</code> sonucun <code>%0.5</code>'iydi. Kârın <code>%83</code>'ü iki altcoin'den geliyordu.</p>
+<p>İlk ölçüm umut verdi. Onun işlem yaptığı 8 altcoin'de dördü <code>%55</code> barının
+üzerindeydi, ikisinin net beklentisi pozitifti — <code>BTC</code> ve <code>ETH</code> ise listenin en
+altındaydı.</p>
+<p><strong>Ama sembolleri, onun kârlı işlem yaptığı yerlerden seçmiştim.</strong> Yani listeye
+geriye dönük olarak "hareketli çıkmış" varlıklar koymuş oldum. Bu, tam olarak
+kapının engellemeye çalıştığı hatanın bir biçimi.</p>
+<p>Temiz test için evren <strong>sonuçlara bakılmadan</strong> sabitlendi: en az 400 gün önce
+listelenmiş USDT sürekli vadeli sözleşmeler, güncel hacme göre ilk 40. Hepsi
+ölçüldü, hiçbiri sonradan elenmedi.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>Ölçülen</th>
+<th>Kenar yoksa beklenen</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kapıyı geçen</td>
+<td><strong>0 / 40</strong></td>
+<td>0</td>
+</tr>
+<tr>
+<td>Medyan isabet (n≥100)</td>
+<td><code>%51.35</code></td>
+<td><code>%50</code></td>
+</tr>
+<tr>
+<td>Medyan net</td>
+<td><code>-10.37</code> bps</td>
+<td><code>-10.00</code> bps</td>
+</tr>
+<tr>
+<td>Örneklem-ağırlıklı net</td>
+<td><code>-8.20</code> bps</td>
+<td><code>-10.00</code> bps</td>
+</tr>
+<tr>
+<td>Alt sınırı sıfırı geçen</td>
+<td><code>0 / 14</code></td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<p>Ağırlıklı net ile "kenar yok" varsayımı arasındaki fark <code>1.8</code> bps — komisyonu
+bile karşılamayan bir gürültü farkı. <code>%55</code> barını geçen sembol oranı, yanlı
+seçimde <code>4/8</code> iken önceden belirlenmiş evrende <code>4/14</code>'e düştü ve hiçbiri güven
+aralığı sınavını geçemedi.</p>
+<p>Küçük örneklem tuzağı da görünür oldu: <code>n&lt;100</code> olan 13 sembolün 5'i pozitif net
+gösteriyor, medyan örneklemleri 36. <code>LINKUSDT</code> <code>%68</code> isabet (n=19), <code>NEARUSDT</code>
+<code>%100</code> (n=3). Kapının 100 eşiği tam olarak bunları elemek için var.</p>
+<p>Bu deney iki düzeltme getirdi: izlenen semboller artık ayarlanabilir, ve
+Bonferroni düzeltmesi model sayısından türüyor — sabit <code>z</code> 40 sembolde düzeltmeyi
+sessizce zayıflatırdı, ki bu olmayan kenarları var gösteren yöndür.</p>
+<h3>5.7 Açık pozisyon — test <strong>edilemedi</strong></h3>
+<p>Binance <code>openInterestHist</code> uç noktası yalnız son ~30 günü tutuyor; 60 gün öncesi
+<code>HTTP 400</code> veriyor. Bir yıllık walk-forward için geçmiş yok.</p>
+<p>Bu yüzden bot <strong>ileriye doğru kayıt tutuyor</strong>: her turda veriyi çekip
+<code>data/{SEMBOL}_open_interest.csv</code> dosyasına ekliyor. Bu kayıt hiçbir modeli
+beslemiyor, hiçbir iddia taşımıyor — amacı, birkaç ay sonra sorunun
+sorulabilmesi. Fiyattan türemeyen, henüz denenmemiş tek bilgi kaynağı.</p>
+<hr />
+<h2>6. Bildirim tasarımı</h2>
+<p>Altı modelin hiçbiri kapıyı geçmediği için işlem sinyali gelmiyor. Ama kanalın
+sessiz kalması "bot bozuk" ile "geçen model yok" arasındaki farkı gizlerdi. Bu
+yüzden iki seviye var:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Seviye</th>
+<th>Ne demek</th>
+<th>Ne zaman</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>İŞLEM ADAYI</strong></td>
+<td>Maliyet sonrası beklentisi pozitif ve alt sınırı sıfırın üstünde</td>
+<td>Kapıyı geçen modellerden, hedef mumun en az %60'ı önündeyken</td>
+</tr>
+<tr>
+<td><strong>GÖZLEM</strong></td>
+<td>Model tahmin üretti ama işlem beklentisi kanıtlanmadı</td>
+<td>Altı modelin tamamı için <strong>günde bir</strong> özet</td>
+</tr>
+</tbody>
+</table></div>
+<p>Ayrıca bot sorulduğunda cevap verir: <code>/durum</code> (altı modelin anlık durumu),
+<code>/performans</code> (canlı karne), <code>/kisiler</code>, sahip için <code>/ekle</code> ve <code>/sil</code>.</p>
+<p><strong>Tazelik kapısı:</strong> bir tahmin ancak hedef mumun en az %60'ı önündeyken
+gönderilir. Kapanmış bir mumun kapanışını tahmin etmek tahmin değildir.</p>
+<hr />
+<h2>7. Canlı karne</h2>
+<p>Backtest modeli ölçer; canlı karne <strong>botun kendisini</strong> ölçer. Gönderilen her
+sinyal bariyeri çözülene kadar bekletilir — kâr al, zarar kes ya da süre dolması
+— ve backtest'in puanladığı şekilde puanlanıp kalıcı bir deftere yazılır.</p>
+<p>Sonraki mumun kapanışına bakmak, modele sorulandan başka bir soruyu ölçerdi.
+<strong>Yanlış şeyi ölçen bir ileri test, hiç test olmamasından kötüdür: kanıt gibi
+görünür.</strong></p>
+<h3>İstatistiksel güç — dürüst beklenti</h3>
+<p>Bariyer ufku 24 saat olduğu için model başına günde en fazla bir bağımsız
+gözlem çıkar; semboller ve zaman dilimleri birbiriyle ilişkili olduğundan
+gerçekte günde ~2-3 bağımsız gözlem.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Süre</th>
+<th>Ne öğreniriz</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 ay</td>
+<td>Yalnız kaba arıza tespiti</td>
+</tr>
+<tr>
+<td>3 ay</td>
+<td>Yön eğiliminin işareti</td>
+</tr>
+<tr>
+<td>6+ ay</td>
+<td>%5 puanlık kenarı ayırt edebilecek güç</td>
+</tr>
+</tbody>
+</table></div>
+<p>Yani canlı karne tek başına modeli <strong>doğrulayamaz</strong>. İşi, backtest'in yalan
+söyleyip söylemediğini yakalamaktır — geriye dönük optimizasyona hiç maruz
+kalmamış tek ölçüm olduğu için değerlidir.</p>
+<hr />
+<h2>8. Altyapı ve neden öyle</h2>
+<p><strong>Nerede çalışıyor:</strong> Oracle Cloud Always Free sanal makinesinde <code>systemd</code>
+servisi olarak, 7/24, 60 saniyelik tarama.</p>
+<p><strong>Neden GitHub Actions değil:</strong> ölçüldü — GitHub, istenen <code>*/5</code> zamanlamanın üç
+saatte ~35 koşusundan yalnız <strong>2</strong>'sini çalıştırdı; fiili tempo saatte bir. Buna
+ek olarak private depoda her iş tam dakikaya yuvarlanarak 2.000 dakikalık aylık
+kotadan düşüyor; dakikada bir koşu ayda ~43.000 dakika eder ve 7/24 döngü
+Actions kullanım şartlarına aykırıdır. Actions artık <strong>yedek (standby)</strong> rolde:
+araştırmayı ve paneli güncel tutar, mesaj göndermez.</p>
+<p><strong>Tek gönderici kuralı:</strong> aynı anda iki <code>primary</code> kopya çalışırsa her uyarı iki
+kez gider (teslimat makbuzları ayrı disklerde) ve Telegram eş zamanlı
+<code>getUpdates</code> çağrılarını <code>409</code> ile reddettiği için komutlar kaybolur. Rol
+bayrağı bunu yapısal olarak imkânsız kılar.</p>
+<p><strong>En-fazla-bir-kez teslimat:</strong> sunucu cevap verip reddettiyse (403, 400) mesaj
+kesinlikle gitmemiştir → tekrar denenir. Zaman aşımı olduysa gitmiş olabilir →
+tekrar denenmez. Mükerrer uyarı yollamaktansa bir raporu kaçırmak yeğdir.</p>
+<p><strong>Verimlilik:</strong> bir modelin girdisi ancak yeni mum kapandığında değişir ve o an
+tam olarak bilinir, dolayısıyla tekrar kullanım bir yaklaşıklık değil birebir
+aynı sonuçtur. Altı model için tur süresi <strong>2,77 sn → 0,0002 sn</strong>; saatteki ağır
+hesap 360'tan 34'e indi.</p>
+<hr />
+<h2>9. Yol boyunca bulunan hatalar</h2>
+<p>Bu bölüm sonuçlar kadar önemli, çünkü hepsi sessizce yanlış sonuç üretiyordu.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Hata</th>
+<th>Etkisi</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kapı yön isabetine bakıyordu, kâra değil</td>
+<td>%63 isabetli model komisyondan sonra zarardaydı; kapıyı geçen iki modelin ikisi de negatif beklentiliydi</td>
+</tr>
+<tr>
+<td>Actions cache anahtarı saatlikti</td>
+<td><code>actions/cache</code> birebir anahtar isabetinde kaydetmeyi atladığı için 15m sinyali üç kez gidiyordu</td>
+</tr>
+<tr>
+<td>Tazelik kuralı 3 mum izin veriyordu</td>
+<td>Geciken koşu, <strong>zaten kapanmış</strong> mumun kapanışını tahmin ediyordu</td>
+</tr>
+<tr>
+<td>Bariyer etiketinde embargo tek mumdu</td>
+<td>Eğitim seti, komşusunun puanlandığı fiyat hareketini görüyordu</td>
+</tr>
+<tr>
+<td>Bootstrap gün bloklu idi</td>
+<td>24 saatlik etiket penceresinde günler örtüşüyor; anlamlılık olduğundan büyük görünüyordu</td>
+</tr>
+<tr>
+<td>403 kalıcı sessizliğe yol açıyordu</td>
+<td>Kesin ret "sonuç bilinmiyor" sayılıyor, yetki düzeltilse bile bir daha denenmiyordu</td>
+</tr>
+<tr>
+<td><code>update.sh</code> yeni testleri eski kütüphaneye karşı koşuyordu</td>
+<td>Kütüphaneyi değiştiren hiçbir sürüm bu kapıdan geçemezdi</td>
+</tr>
+<tr>
+<td>Komut yanıtı sessizce düşüyordu</td>
+<td>Bozuk <code>/durum</code> ile hiç gönderilmemiş <code>/durum</code> ayırt edilemiyordu</td>
+</tr>
+<tr>
+<td>Canlı karne yanlış hedefi ölçüyordu</td>
+<td>Bariyer modelinin sonuçları sonraki mum kapanışıyla puanlanıyordu</td>
+</tr>
+<tr>
+<td>Saatler UTC yazılıyordu</td>
+<td>14:19 UTC damgası, 17:19 gösteren telefonda üç saat eski görünüyordu</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>10. Sınırlar</h2>
+<ul>
+<li>Veri kaynağı tek borsa (Binance); başka borsada fiyat ve likidite farklı olabilir.</li>
+<li>Backtest komisyonu hesaba katar ama <strong>kaymayı ve emir gerçekleşmesini ölçmez</strong> —
+  gerçek maliyet raporlanandan yüksektir.</li>
+<li>Altı hipotez denendi; her ek deneme, şans eseri barı geçen bir şey bulma
+  ihtimalini artırır. Bonferroni düzeltmesi altı modeli kapsar, <strong>kaç fikir
+  denediğimizi kapsamaz</strong>.</li>
+<li><code>%50</code> yakınındaki kısa vadeli piyasa yönü normaldir. Kapıyı hiçbir model
+  geçmezse doğru davranış sinyal göndermemektir.</li>
+<li>Bu yazılım yatırım tavsiyesi değildir ve otomatik alım-satım yapmaz.</li>
+</ul>
+<hr />
+<h2>11. Sırada ne var</h2>
+<p>Kendiliğinden ilerleyen iki şey var:</p>
+<ol>
+<li><strong>Açık pozisyon verisi</strong> birikiyor. 3 ayda ilk bakış, 6 ayda gerçek test.
+   Fiyattan türemeyen, henüz denenmemiş tek kaynak.</li>
+<li><strong>Canlı karne</strong> birikiyor ve artık doğru soruyu ölçüyor.</li>
+</ol>
+<p>Kalan ucuz fikirler tükendi. Daha fazla varyant denemek, er ya da geç şans eseri
+geçen bir şey bulmak demektir — ve o noktada gerçek mi tesadüf mü ayırt etmek
+mümkün olmaz. <strong>Altı temiz ret, arayıp bulunacak bir "başarı"dan daha güvenilir
+bir bilgidir.</strong></p>
+<p>Sonuncusu bunun neden böyle olduğunu da gösterdi: yanlı seçilmiş sekiz sembol
+"altcoin'lerde kenar var" dedi, önceden belirlenmiş kırk sembol demedi. Aradaki
+tek fark, listeyi kimin ve neye bakarak yaptığıydı.</p>
+<hr />
+<h2>Çalışma ilkesi</h2>
+<p>Bu projede tek bir kural her şeyin önünde geldi:</p>
+<blockquote>
+<p>Ölçülmemiş bir iddia yayınlanmaz; ölçülen sonuç, hoşa gitmese de yayınlanır.</p>
+</blockquote>
+<p>Başlangıçta %63 isabetli görünen bir model vardı ve kimse komisyondan sonra para
+kaybettirdiğini söylemiyordu. Bugün altı modelin de neden sinyal üretmediğini,
+rakamıyla ve gerekçesiyle biliyoruz. Aradaki fark, bu projenin asıl çıktısı.</p>
+<footer>
+Bu sayfa <code>docs/index.md</code> dosyasından üretilmiştir
+(<code>python docs/build.py</code>). Kaynak değişirse yeniden üretin.
+</footer>
 </body>
 </html>
