@@ -925,6 +925,23 @@ def load_scalp_target_ledger(state_dir: Path, *, limit: int = 20_000) -> list[di
     return rows
 
 
+def load_pending_scalp_targets(
+    state_dir: Path, *, limit: int = 20_000
+) -> list[dict[str, Any]]:
+    """Load valid open target setups without exposing mutable state paths."""
+    if limit < 1:
+        raise ValueError("Scalp hedef limiti pozitif olmali")
+    directory = _target_pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json"))[-limit:]:
+        payload = _read_scalp_target_record(path)
+        if payload is not None:
+            rows.append(payload)
+    return rows
+
+
 def mark_scalp_target_touch_delivered(
     state_dir: Path, setup_id: str, target_percent: float
 ) -> None:
@@ -1995,6 +2012,7 @@ __all__ = [
     "format_scalp_observation_digest",
     "format_scalp_scorecard",
     "format_scalp_target_touch",
+    "load_pending_scalp_targets",
     "load_scalp_ledger",
     "load_scalp_target_ledger",
     "mark_scalp_target_touch_delivered",

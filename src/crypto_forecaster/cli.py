@@ -12,7 +12,7 @@ from urllib.request import HTTPRedirectHandler
 from .commands import load_members, owner_id, safe_name, save_members
 from .config import INTERVALS, SYMBOLS, Settings
 from .data import BinanceMarketDataClient, MarketDataError, update_cache
-from .dashboard import write_dashboard_payload
+from .dashboard import dashboard_payload_text, write_dashboard_payload
 from .hub import post_snapshot, write_snapshot
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .research import research_all
@@ -135,7 +135,15 @@ def build_parser() -> argparse.ArgumentParser:
         "dashboard-export",
         help="GitHub Pages icin kimlik bilgisi icermeyen sinyal verisi uret",
     )
-    dashboard.add_argument("--output", type=Path, default=Path("docs/scalp-data.json"))
+    destination = dashboard.add_mutually_exclusive_group()
+    destination.add_argument(
+        "--output", type=Path, default=Path("docs/scalp-data.json")
+    )
+    destination.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Salt-okunur uzak aktarim icin yalniz JSON'u standart cikisa yaz",
+    )
     dashboard.add_argument("--limit", type=int, default=2_000)
     dashboard.add_argument(
         "--source-status",
@@ -303,6 +311,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.command == "dashboard-export":
+            if args.stdout:
+                print(
+                    dashboard_payload_text(
+                        settings,
+                        limit=args.limit,
+                        source_status=args.source_status,
+                    ),
+                    end="",
+                )
+                return 0
             output = write_dashboard_payload(
                 settings,
                 args.output,

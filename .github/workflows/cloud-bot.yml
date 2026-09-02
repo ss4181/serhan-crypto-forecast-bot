@@ -111,9 +111,48 @@ jobs:
           if [[ "${{ inputs.force_research }}" == "true" ]]; then extra="--force-research"; fi
           python run.py cloud-run --days 365 $extra
 
+      - name: Read sanitized dashboard from primary server
+        id: oracle-dashboard
+        continue-on-error: true
+        shell: bash
+        env:
+          DASHBOARD_SSH_PRIVATE_KEY: ${{ secrets.DASHBOARD_SSH_PRIVATE_KEY }}
+        run: |
+          echo "source=unavailable" >> "$GITHUB_OUTPUT"
+          if [[ -z "$DASHBOARD_SSH_PRIVATE_KEY" ]]; then
+            echo "::notice::DASHBOARD_SSH_PRIVATE_KEY is not configured; using the cloud cache."
+            exit 0
+          fi
+
+          host="141.145.144.65"
+          expected_fingerprint="SHA256:k8eem1GuKL/Tu8lOFlIgjPKGmhYW9ACtUCTB4h7MqUE"
+          key_file="$RUNNER_TEMP/trade3-dashboard-key"
+          known_hosts="$RUNNER_TEMP/trade3-known-hosts"
+          trap 'rm -f "$key_file" "$known_hosts"' EXIT
+          umask 077
+          printf '%s\n' "$DASHBOARD_SSH_PRIVATE_KEY" | tr -d '\r' > "$key_file"
+          ssh-keyscan -T 10 -t ed25519 "$host" > "$known_hosts" 2>/dev/null
+          actual_fingerprint="$(ssh-keygen -lf "$known_hosts" -E sha256 | awk 'NR == 1 {print $2}')"
+          if [[ "$actual_fingerprint" != "$expected_fingerprint" ]]; then
+            echo "::error::Oracle SSH host fingerprint does not match the pinned value."
+            exit 1
+          fi
+
+          ssh -i "$key_file" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            ubuntu@"$host" > docs/scalp-data.json
+          python -m json.tool docs/scalp-data.json > /dev/null
+          echo "source=oracle" >> "$GITHUB_OUTPUT"
+
       - name: Prepare public signal dashboard
         shell: bash
         run: |
+          if [[ "${{ steps.oracle-dashboard.outputs.source }}" == "oracle" ]]; then
+            echo "Using the sanitized dashboard exported by the primary Oracle service."
+            exit 0
+          fi
           source_status="fresh"
           if [[ "${{ steps.forecast.outcome }}" != "success" ]]; then
             source_status="stale"

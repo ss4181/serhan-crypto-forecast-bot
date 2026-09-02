@@ -8,6 +8,8 @@
     "settledCount": 0,
     "pendingCount": 0,
     "scalpTargetCount": 0,
+    "settledScalpTargetCount": 0,
+    "pendingScalpTargetCount": 0,
     "scalpTargetHits": 0,
     "scalpTargetHitRate": null,
     "notifiedScalpTargetCount": 0,

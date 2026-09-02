@@ -10,7 +10,7 @@ from typing import Any
 
 from .config import Settings
 from .outcomes import load_ledger, pending_dir
-from .scalping import load_scalp_target_ledger
+from .scalping import load_pending_scalp_targets, load_scalp_target_ledger
 
 SCHEMA = "trade3-signal-dashboard-v1"
 SOURCE_STATUSES = frozenset({"fresh", "stale"})
@@ -86,6 +86,29 @@ def build_dashboard_payload(
                 "notified": True,
             }
         )
+    scalp_pending = load_pending_scalp_targets(settings.scalp_state_dir, limit=limit)
+    for row in scalp_pending[-limit:]:
+        signals.append(
+            {
+                "kind": "scalp-target",
+                "signalId": str(row.get("setup_id", "")),
+                "symbol": str(row.get("spot_symbol", "")),
+                "interval": "5m",
+                "direction": str(row.get("direction", "")),
+                "tier": "KURULUM",
+                "score": _number(row.get("score")),
+                "families": row.get("families", []),
+                "probabilityUp": row.get("probability_up", {}),
+                "probabilityDown": row.get("probability_down", {}),
+                "sourcePrice": _number(row.get("source_price")),
+                "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+                "status": "BEKLEMEDE",
+                "success": None,
+                "netBps": None,
+                "targetPercent": None,
+                "notified": bool(row.get("notification_sent", False)),
+            }
+        )
     scalp_rows = load_scalp_target_ledger(settings.scalp_state_dir, limit=limit)
     for row in scalp_rows[-limit:]:
         signals.append(
@@ -116,8 +139,12 @@ def build_dashboard_payload(
         default=None,
     )
     scalp_targets = [row for row in signals if row["kind"] == "scalp-target"]
-    notified = [row for row in scalp_targets if row["notified"]]
-    hit_count = sum(row["success"] is True for row in scalp_targets)
+    settled_scalp_targets = [
+        row for row in scalp_targets if row["success"] is not None
+    ]
+    pending_scalp_targets = [row for row in scalp_targets if row["success"] is None]
+    notified = [row for row in settled_scalp_targets if row["notified"]]
+    hit_count = sum(row["success"] is True for row in settled_scalp_targets)
     notified_hit_count = sum(row["success"] is True for row in notified)
     return {
         "schema": SCHEMA,
@@ -129,8 +156,14 @@ def build_dashboard_payload(
             "settledCount": sum(row["success"] is not None for row in signals),
             "pendingCount": sum(row["success"] is None for row in signals),
             "scalpTargetCount": len(scalp_targets),
+            "settledScalpTargetCount": len(settled_scalp_targets),
+            "pendingScalpTargetCount": len(pending_scalp_targets),
             "scalpTargetHits": hit_count,
-            "scalpTargetHitRate": hit_count / len(scalp_targets) if scalp_targets else None,
+            "scalpTargetHitRate": (
+                hit_count / len(settled_scalp_targets)
+                if settled_scalp_targets
+                else None
+            ),
             "notifiedScalpTargetCount": len(notified),
             "notifiedScalpTargetHits": notified_hit_count,
             "notifiedScalpTargetHitRate": (
@@ -150,14 +183,27 @@ def write_dashboard_payload(
     source_status: str = "fresh",
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
-    payload = build_dashboard_payload(
-        settings, now=now, limit=limit, source_status=source_status
-    )
     output.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        dashboard_payload_text(
+            settings, now=now, limit=limit, source_status=source_status
+        ),
         encoding="utf-8",
     )
     return output
+
+
+def dashboard_payload_text(
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+    limit: int = 2_000,
+    source_status: str = "fresh",
+) -> str:
+    """Serialize the public allow-list for a file or restricted SSH command."""
+    payload = build_dashboard_payload(
+        settings, now=now, limit=limit, source_status=source_status
+    )
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -197,5 +243,6 @@ __all__ = [
     "SCHEMA",
     "SOURCE_STATUSES",
     "build_dashboard_payload",
+    "dashboard_payload_text",
     "write_dashboard_payload",
 ]

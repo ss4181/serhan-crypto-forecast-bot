@@ -323,6 +323,37 @@ yayınlar. Sayfa, yayın zamanını gerçek son sinyal zamanından ayırır ve v
 `Güncel` ya da `Önbellek` olarak açıkça etiketler; Oracle üzerindeki ana servis
 ve Telegram gönderimi bu durumdan etkilenmez.
 
+Oracle'daki gerçek geçmişi Pages'e taşımak için ana sunucu anahtarını paylaşmak
+yerine ayrı bir salt-okunur anahtar kullanılır. `dashboard-export --stdout`
+yalnız allow-list edilmiş JSON üretir; `deploy/install-dashboard-key.sh` bu
+anahtarı terminal, port yönlendirme ve başka komut çalıştırma yetkisi olmadan
+kurar. Windows PowerShell'de ayrı anahtar oluşturma ve kurma akışı:
+
+```powershell
+ssh-keygen -t ed25519 -C "trade3-dashboard" -f "$env:USERPROFILE\.ssh\trade3-dashboard"
+scp -i "C:\Users\serha\.ssh\oracle-bot.key" "$env:USERPROFILE\.ssh\trade3-dashboard.pub" ubuntu@141.145.144.65:/tmp/trade3-dashboard.pub
+ssh -i "C:\Users\serha\.ssh\oracle-bot.key" ubuntu@141.145.144.65
+```
+
+Yeni anahtarın parola sorularında iki kez Enter'a basılır. Sunucuda önce yeni
+kod deploy edilir, sonra public key sınırlandırılır:
+
+```bash
+cd ~/serhan-crypto-forecast-bot
+git pull
+sudo bash deploy/update.sh
+sudo bash deploy/install-dashboard-key.sh /tmp/trade3-dashboard.pub
+```
+
+Windows'ta özel anahtar `Get-Content -Raw
+"$env:USERPROFILE\.ssh\trade3-dashboard" | Set-Clipboard` ile panoya alınır ve
+GitHub **Settings → Secrets and variables → Actions → New repository secret**
+ekranında adı tam olarak `DASHBOARD_SSH_PRIVATE_KEY` olan secret'a yapıştırılır.
+Özel anahtar sohbete, repoya veya sunucu ortam dosyasına yazılmaz. Workflow
+başarılı SSH aktarımında Oracle JSON'unu; anahtar eksik/erişilemez olduğunda
+mevcut bulut önbelleğini yayınlar. Sunucu ED25519 parmak izi workflow'da sabittir;
+beklenmedik bir host anahtarı veri aktarımını kapatır.
+
 Evreni ve spot→vadeli kontrat eşlemelerini ağsız doğrulama:
 
 ```powershell
