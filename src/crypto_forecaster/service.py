@@ -19,7 +19,13 @@ from .config import (
     local_text,
     model_path,
 )
-from .commands import CommandOutcome, format_explanations, poll_and_answer
+from .commands import (
+    CommandOutcome,
+    format_explanations,
+    load_members,
+    load_pending_members,
+    poll_and_answer,
+)
 from .data import BinanceMarketDataClient, load_cache, update_cache
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
@@ -712,6 +718,11 @@ def serve_forever(
 ) -> None:
     if poll_seconds < 20:
         raise ValueError("Tarama araligi en az 20 saniye olmali")
+    # Older releases created these files with the process umask. Harden them
+    # before any market refresh so private membership data is never left open
+    # while a long first scan is running.
+    load_members(settings.telegram_state_dir)
+    load_pending_members(settings.telegram_state_dir)
     client = BinanceMarketDataClient()
     if is_primary() and telegram_configured():
         try:

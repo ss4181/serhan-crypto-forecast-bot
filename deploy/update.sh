@@ -61,6 +61,15 @@ if ! "$APP_DIR/.venv/bin/python" -m unittest discover -s "$APP_DIR/tests" -t "$A
 fi
 
 chown -R "$BOT_USER":"$BOT_USER" "$APP_DIR"
+# Membership state contains Telegram identifiers.  Older releases may have
+# created it with 0755/0644 defaults, so every update repairs those permissions
+# before the service starts.
+install -d -m 700 -o "$BOT_USER" -g "$BOT_USER" "$APP_DIR/state/telegram"
+for private_state in members.json pending_members.json; do
+  if [[ -f "$APP_DIR/state/telegram/$private_state" ]]; then
+    chmod 600 "$APP_DIR/state/telegram/$private_state"
+  fi
+done
 
 echo "==> Servis yeniden baslatiliyor"
 systemctl restart "$SERVICE"
