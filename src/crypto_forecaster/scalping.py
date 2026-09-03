@@ -34,7 +34,7 @@ from .telegram import (
     TelegramDelivery,
     TelegramNotifier,
     digest_signal_id,
-    telegram_menu_keyboard,
+    telegram_channel_keyboard,
 )
 from .universe import UniverseEntry, UniverseManifest, load_trade1_universe
 
@@ -658,7 +658,9 @@ def deliver_scalp_observations(
     newest_close = max(item.bar_close_time_ms for item in shown)
     bucket = newest_close // SCALP_STEP_MS
     signal_id = digest_signal_id(f"scalp-observation|{manifest.version}", bucket)
-    return (notifier or TelegramNotifier()).deliver_once(
+    return (
+        notifier or TelegramNotifier(state_dir=settings.telegram_state_dir)
+    ).deliver_once(
         signal_id=signal_id,
         text=format_scalp_observation_digest(
             filtered_report,
@@ -667,7 +669,7 @@ def deliver_scalp_observations(
             ledger=ledger,
         ),
         state_dir=settings.telegram_state_dir / "scalp",
-        reply_markup=telegram_menu_keyboard(),
+        reply_markup=telegram_channel_keyboard(),
     )
 
 
@@ -1008,7 +1010,7 @@ def deliver_scalp_target_touches(
     events = pending_scalp_target_touches(settings.scalp_state_dir, settings.scalp_data_dir, now=now)
     if not events:
         return []
-    sender = notifier or TelegramNotifier()
+    sender = notifier or TelegramNotifier(state_dir=settings.telegram_state_dir)
     deliveries: list[tuple[dict[str, Any], TelegramDelivery]] = []
     for event in events:
         percent = float(event["target_percent"])
@@ -1019,7 +1021,7 @@ def deliver_scalp_target_touches(
             signal_id=signal_id,
             text=format_scalp_target_touch(event),
             state_dir=settings.telegram_state_dir / "scalp-targets",
-            reply_markup=telegram_menu_keyboard(),
+            reply_markup=telegram_channel_keyboard(),
         )
         deliveries.append((event, delivery))
         if delivery.status in {"SENT", "DEDUPLICATED"}:

@@ -19,7 +19,7 @@ on:
         default: false
         type: boolean
       verify_models:
-        description: "Altı modelin de kanala mesaj ürettiğini doğrula"
+        description: "Altı modelin de Telegram özel mesajı ürettiğini doğrula"
         required: false
         default: false
         type: boolean
@@ -44,6 +44,7 @@ jobs:
       CRYPTO_TELEGRAM_BOT_TOKEN: ${{ secrets.CRYPTO_TELEGRAM_BOT_TOKEN }}
       CRYPTO_TELEGRAM_CHAT_ID: ${{ secrets.CRYPTO_TELEGRAM_CHAT_ID }}
       CRYPTO_TELEGRAM_OWNER_ID: ${{ secrets.CRYPTO_TELEGRAM_OWNER_ID }}
+      CRYPTO_TELEGRAM_DELIVERY_MODE: direct
       # The always-on host is the only sender.  Leaving this job on "primary"
       # while the VM runs would double every alert and make both sides fight
       # over getUpdates.  Set the repository variable to "primary" only if the

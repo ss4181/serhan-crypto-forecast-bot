@@ -46,14 +46,14 @@ from .service import (
     serve_forever,
 )
 from .telegram import (
-    CHAT_ID_ENV,
     OWNER_ID_ENV,
     TOKEN_ENV,
     TelegramError,
     TelegramNotifier,
     digest_signal_id,
     is_primary,
-    telegram_menu_keyboard,
+    telegram_channel_keyboard,
+    telegram_configured,
 )
 from .universe import load_trade1_universe
 
@@ -158,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers.add_parser(
-        "telegram-test", help="Ucuncu Telegram kanalina sabit test mesaji gonder"
+        "telegram-test", help="Telegram ozel mesaj teslimatini test et"
     )
 
     verify = subparsers.add_parser(
@@ -172,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--send",
         action="store_true",
-        help="Her model icin kanala bir dogrulama mesaji gonder",
+        help="Her model icin Telegram teslimatini dogrula",
     )
 
     card = subparsers.add_parser(
@@ -352,12 +352,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             return 0
         if args.command == "telegram-test":
-            message_id = TelegramNotifier().send_message(
-                "✅ TELEGRAM BAGLANTI TESTI — ucuncu kanal baglanti testi.\n\n"
+            message_id = TelegramNotifier(
+                state_dir=settings.telegram_state_dir
+            ).send_message(
+                "✅ TELEGRAM BAĞLANTI TESTİ\n\n"
                 "🤖 BTC/ETH olasilik botu\n"
-                "📡 Kanal baglantisi ve menü yaniti hazir.\n\n"
+                "🔐 Özel mesaj teslimatı ve kişisel menü hazır.\n\n"
                 "⚠️ Yalnizca arastirma altyapisidir; yatirim tavsiyesi veya emir degildir.",
-                reply_markup=telegram_menu_keyboard(),
+                reply_markup=telegram_channel_keyboard(),
             )
             print(f"Telegram test mesaji gonderildi (message_id={message_id}).")
             return 0
@@ -370,7 +372,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(format_scorecard(card))
             if args.send:
                 if not _telegram_configured():
-                    print("Telegram kanali tanimli degil; karne gonderilmedi.")
+                    print("Telegram teslimati tanimli degil; karne gonderilmedi.")
                     return 0
                 delivery = deliver_scorecard(settings, days=args.days)
                 print(
@@ -435,11 +437,13 @@ def _refresh(
 def _verify_models(settings: Settings, *, send: bool) -> int:
     """Prove every symbol/interval can build — and optionally deliver — a message.
 
-    Delivery is gated on the research result, so a silent channel is ambiguous:
+    Delivery is gated on the research result, so a silent inbox is ambiguous:
     it can mean "no model qualified" or "the pipeline is broken".  This checks
     the pipeline for all six models independently of the research gate.
     """
-    notifier = TelegramNotifier() if send else None
+    notifier = (
+        TelegramNotifier(state_dir=settings.telegram_state_dir) if send else None
+    )
     bucket = int(datetime.now(timezone.utc).timestamp() * 1000) // 60_000
     failures = 0
     print(f"{'Model':<16}{'Mesaj':>8}{'Tier':>9}{'Net bps':>10}  Durum")
@@ -465,7 +469,7 @@ def _verify_models(settings: Settings, *, send: bool) -> int:
                     signal_id=digest_signal_id(f"verify|{key}", bucket),
                     text=text,
                     state_dir=settings.telegram_state_dir,
-                    reply_markup=telegram_menu_keyboard(),
+                    reply_markup=telegram_channel_keyboard(),
                 )
                 status = delivery.status + (
                     f" ({delivery.detail})" if delivery.detail else ""
@@ -544,11 +548,7 @@ def _deliver_cloud_scorecard(settings: Settings) -> None:
 
 
 def _telegram_configured() -> bool:
-    return (
-        is_primary()
-        and bool(os.environ.get(TOKEN_ENV, "").strip())
-        and bool(os.environ.get(CHAT_ID_ENV, "").strip())
-    )
+    return is_primary() and telegram_configured()
 
 
 def _print_metrics(results):  # type: ignore[no-untyped-def]
@@ -640,7 +640,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
     if not send:
         return
     if not _telegram_configured():
-        print("Telegram kanali tanimli/primary degil; scalp gozlemi gonderilmedi.")
+        print("Telegram tanimli/primary degil; scalp gozlemi gonderilmedi.")
         return
     target_deliveries = deliver_scalp_target_touches(settings)
     for event, target_delivery in target_deliveries:
@@ -680,17 +680,16 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
 
 def _deliver_cloud_eligible(settings: Settings, predictions):  # type: ignore[no-untyped-def]
     token_configured = bool(os.environ.get(TOKEN_ENV, "").strip())
-    chat_configured = bool(os.environ.get(CHAT_ID_ENV, "").strip())
-    if token_configured != chat_configured:
-        raise TelegramError(
-            "Telegram bulut ayarlari eksik; bot token ve kanal kimligi birlikte tanimlanmali"
-        )
     if not token_configured:
         if any(prediction.eligible for prediction in predictions):
             print(
-                "Telegram kanali henuz bagli degil; uygun sinyal panele yazildi ancak mesaj gonderilmedi."
+                "Telegram henuz bagli degil; uygun sinyal panele yazildi ancak mesaj gonderilmedi."
             )
         return []
+    if not telegram_configured():
+        raise TelegramError(
+            "Telegram ayarlari eksik; ozel teslimatta bot token ve sahip kimligi gerekli"
+        )
     if not is_primary():
         print(
             "Bu kosu yedek (standby) rolde; arastirma ve panel guncellendi, mesaj gonderilmedi."

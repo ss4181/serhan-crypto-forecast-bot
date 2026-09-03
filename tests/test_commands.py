@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from crypto_forecaster.commands import load_members, poll_and_answer, safe_name, save_members
+from crypto_forecaster.commands import (
+    load_members,
+    load_pending_members,
+    poll_and_answer,
+    safe_name,
+    save_members,
+)
 from crypto_forecaster.config import Settings
 from crypto_forecaster.telegram import TelegramError, telegram_menu_keyboard
-
 
 OWNER = 500100
 MEMBER = 700200
@@ -37,7 +42,7 @@ class FakeNotifier:
         self.sent.append((chat_id, text))
         return len(self.sent)
 
-    def answer_callback_query(self, callback_query_id: str) -> None:
+    def answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
         self.callbacks.append(callback_query_id)
 
 
@@ -45,8 +50,11 @@ def update(update_id: int, sender: int, text: str, chat: int | None = None) -> d
     return {
         "update_id": update_id,
         "message": {
-            "from": {"id": sender},
-            "chat": {"id": chat if chat is not None else sender},
+            "from": {"id": sender, "first_name": f"Kisi {sender}"},
+            "chat": {
+                "id": chat if chat is not None else sender,
+                "type": "private" if chat is None or chat == sender else "group",
+            },
             "text": text,
         },
     }
@@ -59,8 +67,13 @@ def callback_update(
         "update_id": update_id,
         "callback_query": {
             "id": f"callback-{update_id}",
-            "from": {"id": sender},
-            "message": {"chat": {"id": chat if chat is not None else sender}},
+            "from": {"id": sender, "first_name": f"Kisi {sender}"},
+            "message": {
+                "chat": {
+                    "id": chat if chat is not None else sender,
+                    "type": "private" if chat is None or chat == sender else "group",
+                }
+            },
             "data": data,
         },
     }
@@ -72,7 +85,9 @@ def run(
     members: dict[int, str] | None = None,
     scalp_performance_text=None,
 ):
-    settings = Settings(telegram_state_dir=directory, outcome_state_dir=directory / "outcomes")
+    settings = Settings(
+        telegram_state_dir=directory, outcome_state_dir=directory / "outcomes"
+    )
     if members:
         save_members(directory, members)
     notifier = FakeNotifier(updates)
@@ -109,6 +124,54 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(notifier.sent[0], (MEMBER, "DURUM METNI"))
         self.assertEqual(notifier.sent[1], (MEMBER, "KARNE 7 GUN"))
 
+    def test_member_cannot_see_other_members(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, notifier, _ = run(
+                Path(directory),
+                [update(1, MEMBER, "/kisiler")],
+                members={MEMBER: "Ortak", STRANGER: "Gizli Kisi"},
+            )
+        self.assertIn("yalnızca bot sahibine", notifier.sent[0][1])
+        self.assertNotIn(str(STRANGER), notifier.sent[0][1])
+
+    def test_group_commands_are_never_answered(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            outcome, notifier, _ = run(
+                Path(directory), [update(1, OWNER, "/durum", chat=-100123)]
+            )
+        self.assertEqual(outcome.refused, 1)
+        self.assertEqual(notifier.sent, [])
+
+    def test_join_request_requires_owner_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outcome, notifier, _ = run(
+                root,
+                [
+                    update(1, STRANGER, "/katil"),
+                    callback_update(2, OWNER, f"approve_member:{STRANGER}"),
+                ],
+            )
+            stored = load_members(root)
+            pending = load_pending_members(root)
+        self.assertEqual(outcome.refused, 0)
+        self.assertEqual(stored.get(STRANGER), f"Kisi {STRANGER}")
+        self.assertEqual(pending, {})
+        self.assertEqual(notifier.sent[0][0], STRANGER)
+        self.assertEqual(notifier.sent[1][0], OWNER)
+        self.assertIn("YENİ ERİŞİM İSTEĞİ", notifier.sent[1][1])
+        self.assertEqual(notifier.sent[-1][0], STRANGER)
+        self.assertIn("onaylandı", notifier.sent[-1][1])
+
+    def test_duplicate_join_request_notifies_owner_only_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, notifier, _ = run(
+                Path(directory),
+                [update(1, STRANGER, "/katil"), update(2, STRANGER, "/katil")],
+            )
+        owner_messages = [message for chat, message in notifier.sent if chat == OWNER]
+        self.assertEqual(len(owner_messages), 1)
+
     def test_authorized_inline_button_returns_explanations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             outcome, notifier, _ = run(
@@ -123,7 +186,10 @@ class CommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             outcome, notifier, _ = run(
                 Path(directory),
-                [callback_update(1, OWNER, "start"), callback_update(2, OWNER, "members")],
+                [
+                    callback_update(1, OWNER, "start"),
+                    callback_update(2, OWNER, "members"),
+                ],
             )
         self.assertEqual(outcome.answered, 2)
         self.assertIn("/durum", notifier.sent[0][1])
@@ -159,11 +225,13 @@ class CommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             outcome, notifier, _ = run(
-                root, [update(1, MEMBER, f"/ekle {STRANGER} Yeni")], members={MEMBER: "Ortak"}
+                root,
+                [update(1, MEMBER, f"/ekle {STRANGER} Yeni")],
+                members={MEMBER: "Ortak"},
             )
             stored = load_members(root)
         self.assertEqual(outcome.answered, 1)
-        self.assertIn("yalnizca kanal sahibi", notifier.sent[0][1])
+        self.assertIn("yalnızca bot sahibi", notifier.sent[0][1])
         self.assertNotIn(STRANGER, stored)
 
     def test_owner_adds_a_person_who_can_then_ask(self) -> None:
@@ -182,7 +250,9 @@ class CommandTests(unittest.TestCase):
 
     def test_add_requires_a_numeric_identifier(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            _, notifier, _ = run(Path(directory), [update(1, OWNER, "/ekle @kullanici")])
+            _, notifier, _ = run(
+                Path(directory), [update(1, OWNER, "/ekle @kullanici")]
+            )
         self.assertIn("sayisal Telegram kimligi", notifier.sent[0][1])
 
     def test_offset_advances_so_commands_are_answered_once(self) -> None:
@@ -209,7 +279,9 @@ class CommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _, owner_view, _ = run(root, [update(1, OWNER, "/yardim")])
-            _, member_view, _ = run(root, [update(2, MEMBER, "/yardim")], members={MEMBER: "O"})
+            _, member_view, _ = run(
+                root, [update(2, MEMBER, "/yardim")], members={MEMBER: "O"}
+            )
         self.assertIn("/ekle", owner_view.sent[0][1])
         self.assertNotIn("/ekle", member_view.sent[0][1])
 
@@ -227,6 +299,7 @@ class DisabledCommandTests(unittest.TestCase):
             outcome, notifier, _ = run(Path(directory), [update(1, OWNER, "/durum")])
         self.assertEqual(outcome.received, 0)
         self.assertEqual(notifier.offsets, [])
+
 
 class FailureVisibilityTests(unittest.TestCase):
     @patch.dict(os.environ, {"CRYPTO_TELEGRAM_OWNER_ID": str(OWNER)}, clear=False)
@@ -274,6 +347,7 @@ class FailureVisibilityTests(unittest.TestCase):
         self.assertEqual(outcome.failed, 1)
         self.assertIn("4096", outcome.detail)
         self.assertIn("uretilemedi", notifier.sent[0][1])
+
 
 if __name__ == "__main__":
     unittest.main()

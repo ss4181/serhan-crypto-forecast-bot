@@ -13,6 +13,8 @@ from crypto_forecaster.telegram import is_primary
 CREDENTIALS = {
     "CRYPTO_TELEGRAM_BOT_TOKEN": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
     "CRYPTO_TELEGRAM_CHAT_ID": "-100123",
+    "CRYPTO_TELEGRAM_OWNER_ID": "500100",
+    "CRYPTO_TELEGRAM_DELIVERY_MODE": "direct",
 }
 
 

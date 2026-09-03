@@ -51,10 +51,12 @@ from .scalping import (
 )
 from .telegram import (
     TelegramDelivery,
+    TelegramError,
     TelegramNotifier,
     digest_signal_id,
     is_primary,
-    telegram_menu_keyboard,
+    telegram_channel_keyboard,
+    telegram_configured,
 )
 from .universe import UniverseManifest, load_trade1_universe
 
@@ -526,14 +528,14 @@ def deliver_eligible(
     ]
     if not eligible_predictions:
         return []
-    client = notifier or TelegramNotifier()
+    client = notifier or TelegramNotifier(state_dir=settings.telegram_state_dir)
     deliveries: list[tuple[Prediction, TelegramDelivery]] = []
     for prediction in eligible_predictions:
         delivery = client.deliver_once(
             signal_id=prediction.signal_id,
             text=format_prediction(prediction),
             state_dir=settings.telegram_state_dir,
-            reply_markup=telegram_menu_keyboard(),
+            reply_markup=telegram_channel_keyboard(),
         )
         if delivery.status == "SENT":
             _record(settings, prediction)
@@ -556,12 +558,12 @@ def deliver_observation_digest(
     signal_id = digest_signal_id(
         "observation-digest", int(current.timestamp() * 1000) // bucket_ms
     )
-    client = notifier or TelegramNotifier()
+    client = notifier or TelegramNotifier(state_dir=settings.telegram_state_dir)
     delivery = client.deliver_once(
         signal_id=signal_id,
         text=format_observation_digest(predictions, now=current),
         state_dir=settings.telegram_state_dir,
-        reply_markup=telegram_menu_keyboard(),
+        reply_markup=telegram_channel_keyboard(),
     )
     if delivery.status == "SENT":
         for prediction in predictions:
@@ -581,12 +583,12 @@ def deliver_scorecard(
     signal_id = digest_signal_id(
         "scorecard", int(current.timestamp() * 1000) // (24 * 60 * 60 * 1000)
     )
-    client = notifier or TelegramNotifier()
+    client = notifier or TelegramNotifier(state_dir=settings.telegram_state_dir)
     return client.deliver_once(
         signal_id=signal_id,
         text=format_scorecard(card),
         state_dir=settings.telegram_state_dir,
-        reply_markup=telegram_menu_keyboard(),
+        reply_markup=telegram_channel_keyboard(),
     )
 
 
@@ -635,7 +637,7 @@ def deliver_target_touches(
     )
     if not events:
         return []
-    client = notifier or TelegramNotifier()
+    client = notifier or TelegramNotifier(state_dir=settings.telegram_state_dir)
     deliveries: list[tuple[dict[str, object], TelegramDelivery]] = []
     for event in events:
         percent = float(event["target_percent"])
@@ -647,7 +649,7 @@ def deliver_target_touches(
             signal_id=target_signal_id,
             text=format_target_touch(event),
             state_dir=settings.telegram_state_dir / "targets",
-            reply_markup=telegram_menu_keyboard(),
+            reply_markup=telegram_channel_keyboard(),
         )
         if delivery.status in {"SENT", "DEDUPLICATED"}:
             mark_target_touch_delivered(
@@ -678,7 +680,6 @@ def answer_commands(
             )
         ),
         explanation_text=format_explanations,
-        reply_markup=telegram_menu_keyboard(),
         notifier=notifier,
         now=current,
     )
@@ -712,6 +713,14 @@ def serve_forever(
     if poll_seconds < 20:
         raise ValueError("Tarama araligi en az 20 saniye olmali")
     client = BinanceMarketDataClient()
+    if is_primary() and telegram_configured():
+        try:
+            TelegramNotifier(
+                state_dir=settings.telegram_state_dir
+            ).configure_private_command_menu()
+            progress("Telegram ozel komut menuleri hazirlandi")
+        except TelegramError as error:
+            progress(f"Telegram komut menusu hazirlanamadi: {error}")
     consecutive_failures = 0
     cache = PredictionCache()
     scalp_manifest: UniverseManifest | None = None

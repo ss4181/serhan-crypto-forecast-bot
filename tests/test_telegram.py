@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from email.message import Message
 import json
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from email.message import Message
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
@@ -16,23 +16,31 @@ from crypto_forecaster.telegram import (
     telegram_menu_keyboard,
 )
 
-
 CREDENTIALS = {
     "CRYPTO_TELEGRAM_BOT_TOKEN": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
     "CRYPTO_TELEGRAM_CHAT_ID": "-100123",
+    "CRYPTO_TELEGRAM_DELIVERY_MODE": "channel",
+}
+
+DIRECT_CREDENTIALS = {
+    "CRYPTO_TELEGRAM_BOT_TOKEN": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
+    "CRYPTO_TELEGRAM_OWNER_ID": "500100",
+    "CRYPTO_TELEGRAM_DELIVERY_MODE": "direct",
 }
 
 
 def rate_limit_error(retry_after: str = "0") -> HTTPError:
     headers = Message()
     headers["Retry-After"] = retry_after
-    return HTTPError("https://api.telegram.org", 429, "Too Many Requests", headers, None)
+    return HTTPError(
+        "https://api.telegram.org", 429, "Too Many Requests", headers, None
+    )
 
 
 class FakeResponse:
-    def __init__(self) -> None:
+    def __init__(self, chat_id: int = -100123) -> None:
         self.payload = json.dumps(
-            {"ok": True, "result": {"message_id": 99, "chat": {"id": -100123}}}
+            {"ok": True, "result": {"message_id": 99, "chat": {"id": chat_id}}}
         ).encode()
 
     def __enter__(self):  # type: ignore[no-untyped-def]
@@ -59,9 +67,7 @@ class TelegramTests(unittest.TestCase):
 
         keyboard = telegram_menu_keyboard()
         self.assertEqual(
-            TelegramNotifier(opener=opener).send_message(
-                "test", reply_markup=keyboard
-            ),
+            TelegramNotifier(opener=opener).send_message("test", reply_markup=keyboard),
             99,
         )
         self.assertEqual(requests[0]["reply_markup"], keyboard)
@@ -75,8 +81,122 @@ class TelegramTests(unittest.TestCase):
         callbacks = {button["callback_data"] for button in buttons}
         self.assertEqual(
             callbacks,
-            {"start", "explanations", "status", "performance:30", "scalp_performance:30", "members"},
+            {
+                "start",
+                "explanations",
+                "status",
+                "performance:30",
+                "scalp_performance:30",
+            },
         )
+
+    def test_owner_menu_alone_contains_membership_controls(self) -> None:
+        member_callbacks = {
+            button["callback_data"]
+            for row in telegram_menu_keyboard()["inline_keyboard"]
+            for button in row
+        }
+        owner_callbacks = {
+            button["callback_data"]
+            for row in telegram_menu_keyboard(is_owner=True)["inline_keyboard"]
+            for button in row
+        }
+        self.assertNotIn("members", member_callbacks)
+        self.assertEqual(
+            owner_callbacks - member_callbacks, {"members", "pending_members"}
+        )
+
+    @patch.dict(os.environ, DIRECT_CREDENTIALS, clear=False)
+    def test_direct_delivery_sends_separate_private_messages(self) -> None:
+        requests = []
+
+        def opener(request, timeout):  # type: ignore[no-untyped-def]
+            payload = json.loads(request.data.decode("utf-8"))
+            requests.append(payload)
+            return FakeResponse(int(payload["chat_id"]))
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            (state / "members.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "telegram-members-v1",
+                        "members": [{"id": 700200, "name": "Uye"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            message_id = TelegramNotifier(state_dir=state, opener=opener).send_message(
+                "test"
+            )
+        self.assertEqual(message_id, 99)
+        self.assertEqual([row["chat_id"] for row in requests], [500100, 700200])
+        owner_buttons = {
+            button["callback_data"]
+            for row in requests[0]["reply_markup"]["inline_keyboard"]
+            for button in row
+        }
+        member_buttons = {
+            button["callback_data"]
+            for row in requests[1]["reply_markup"]["inline_keyboard"]
+            for button in row
+        }
+        self.assertIn("members", owner_buttons)
+        self.assertNotIn("members", member_buttons)
+
+    @patch.dict(os.environ, DIRECT_CREDENTIALS, clear=False)
+    def test_direct_delivery_is_deduplicated_for_each_recipient(self) -> None:
+        requests = []
+
+        def opener(request, timeout):  # type: ignore[no-untyped-def]
+            payload = json.loads(request.data.decode("utf-8"))
+            requests.append(payload)
+            return FakeResponse(int(payload["chat_id"]))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            telegram_state = root / "telegram"
+            telegram_state.mkdir()
+            (telegram_state / "members.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "telegram-members-v1",
+                        "members": [{"id": 700200, "name": "Uye"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            notifier = TelegramNotifier(state_dir=telegram_state, opener=opener)
+            first = notifier.deliver_once(
+                signal_id="e" * 64,
+                text="test",
+                state_dir=root / "receipts",
+            )
+            second = notifier.deliver_once(
+                signal_id="e" * 64,
+                text="test",
+                state_dir=root / "receipts",
+            )
+        self.assertEqual(first.status, "SENT")
+        self.assertEqual(second.status, "DEDUPLICATED")
+        self.assertEqual([request["chat_id"] for request in requests], [500100, 700200])
+
+    @patch.dict(os.environ, DIRECT_CREDENTIALS, clear=False)
+    def test_native_command_menu_scopes_membership_controls_to_owner(self) -> None:
+        requests = []
+
+        def opener(request, timeout):  # type: ignore[no-untyped-def]
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(500100)
+
+        TelegramNotifier(opener=opener).configure_private_command_menu()
+        private_commands = {item["command"] for item in requests[0]["commands"]}
+        owner_commands = {item["command"] for item in requests[1]["commands"]}
+        self.assertEqual(requests[0]["scope"], {"type": "all_private_chats"})
+        self.assertEqual(requests[1]["scope"], {"type": "chat", "chat_id": 500100})
+        self.assertNotIn("kisiler", private_commands)
+        self.assertEqual(owner_commands - private_commands, {"kisiler", "bekleyenler"})
+        self.assertEqual(requests[2]["scope"], {"type": "all_group_chats"})
 
     @patch.dict(os.environ, CREDENTIALS, clear=False)
     def test_rate_limited_send_is_retried(self) -> None:
@@ -128,17 +248,23 @@ class TelegramTests(unittest.TestCase):
             attempts += 1
             if attempts == 1:
                 headers = Message()
-                raise HTTPError("https://api.telegram.org", 403, "Forbidden", headers, None)
+                raise HTTPError(
+                    "https://api.telegram.org", 403, "Forbidden", headers, None
+                )
             return FakeResponse()
 
         notifier = TelegramNotifier(opener=opener)
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
-            first = notifier.deliver_once(signal_id="c" * 64, text="test", state_dir=state)
+            first = notifier.deliver_once(
+                signal_id="c" * 64, text="test", state_dir=state
+            )
             self.assertEqual(first.status, "REDDEDILDI")
             self.assertIn("403", first.detail)
             self.assertEqual(list(state.glob("*.intent.json")), [])
-            second = notifier.deliver_once(signal_id="c" * 64, text="test", state_dir=state)
+            second = notifier.deliver_once(
+                signal_id="c" * 64, text="test", state_dir=state
+            )
         self.assertEqual(second.status, "SENT")
 
     @patch.dict(os.environ, CREDENTIALS, clear=False)

@@ -8,7 +8,7 @@ Bu proje varsayılan olarak `BTCUSDT` ve `ETHUSDT` için Binance **sürekli vade
 sözleşmesinin kapanmış `5m`, `15m` ve `1h` mumlarını kullanır (işlem yapılan
 enstrüman o; `CRYPTO_MARKET=spot` ile spot seriye geçilebilir, semboller
 `CRYPTO_SYMBOLS` ile değiştirilebilir). Bir sonraki mum kapanışının yukarı/aşağı olasılığını
-hesaplar ve sonucu Telegram kanalına yollar. Emir vermez, borsa hesabına bağlanmaz
+hesaplar ve sonucu onaylı kişilere ayrı Telegram özel mesajı olarak yollar. Emir vermez, borsa hesabına bağlanmaz
 ve Binance API anahtarı kullanmaz.
 
 ## İki bildirim seviyesi
@@ -22,7 +22,7 @@ bildirimler iki seviyeye ayrılmıştır.
 | **İŞLEM ADAYI** | Modelin maliyet sonrası ölçülen beklentisi pozitif ve bu beklentinin blok-bootstrap `%95` alt sınırı sıfırın üstünde | Yalnız araştırma kapısını geçen modellerden, hedef mumun en az `%60`'ı önündeyken |
 | **GÖZLEM** | Model bir tahmin üretti ama işlem beklentisi kanıtlanmadı | Altı modelin tamamı için **günde bir** tek özet mesaj |
 
-GÖZLEM seviyesi sayesinde **hiçbir model sessiz kalmaz**: kanalda altı modelin de
+GÖZLEM seviyesi sayesinde **hiçbir model sessiz kalmaz**: Telegram'da altı modelin de
 durumu günlük olarak görünür, ama beklentisi negatif bir tahmin işlem sinyali
 gibi sunulmaz. Aradaki zamanda gereksiz mesaj gelmez; merak ettiğinizde
 `/durum` yazarak anlık cevabı alırsınız.
@@ -400,13 +400,16 @@ CRYPTO_SCALP_BULL_BREADTH=0.60
 Taze veri kapsamı eşik altındaysa Telegram gönderimi kapalı kalır; deneysel
 tarayıcıdaki hata mevcut BTC/ETH servisinin çalışmasını durdurmaz.
 
-## Üçüncü Telegram kanalı
+## Telegram özel mesaj servisi
 
-Telegram'da üçüncü kanalı oluşturun. BotFather ile yeni bir bot oluşturabilir veya mevcut
-bildirim botunu bu kanala ekleyebilirsiniz. Botu kanal yöneticisi yapıp mesaj gönderme
-yetkisi verin. Token'ı repoya ya da komut satırı argümanına yazmayın.
+Varsayılan yapı kanal değil, **kişiye özel teslimattır**. Bot sahibi ve sahibin
+onayladığı aboneler aynı bildirimi ayrı özel sohbetlerde alır; aboneler birbirini,
+abone listesini veya başka kişilerin Telegram kimliklerini göremez. Grup ve kanal
+içindeki komutlar çalışmaz. Üyelik ekleme, çıkarma, onaylama ve reddetme işlemleri
+yalnızca `CRYPTO_TELEGRAM_OWNER_ID` ile tanımlanan bot sahibine açıktır.
 
-Bot token'ı ve kanal kimliğini kullanıcı ortamına kaydedin:
+BotFather token'ını ve sahibin sayısal Telegram kimliğini işletim sistemi ortamına
+kaydedin. Token'ı repoya, ekran görüntüsüne veya komut satırı argümanına yazmayın:
 
 ```powershell
 [Environment]::SetEnvironmentVariable(
@@ -415,31 +418,36 @@ Bot token'ı ve kanal kimliğini kullanıcı ortamına kaydedin:
   "User"
 )
 [Environment]::SetEnvironmentVariable(
-  "CRYPTO_TELEGRAM_CHAT_ID",
-  "@kanal_kullanici_adi_veya_-100_ile_baslayan_id",
+  "CRYPTO_TELEGRAM_OWNER_ID",
+  "123456789",
+  "User"
+)
+[Environment]::SetEnvironmentVariable(
+  "CRYPTO_TELEGRAM_DELIVERY_MODE",
+  "direct",
   "User"
 )
 ```
 
-Yeni bir terminal açıp bağlantıyı sınayın:
+Sahip önce botun özel sohbetini açıp `/start` yazmalıdır; Telegram botların
+kullanıcıyla kendiliğinden ilk konuşmayı başlatmasına izin vermez. Sonra yeni bir
+terminal açıp teslimatı sınayın:
 
 ```powershell
 python run.py telegram-test
 ```
 
-Gönderilen bildirimlere sabit bir Telegram menüsü eklenir: **Başlangıç** mevcut
+Gönderilen özel bildirimlere kişisel bir Telegram menüsü eklenir: **Başlangıç** mevcut
 komut listesini, **Açıklamalar** terimleri ve F1–F3/B1–B3 mantığını, **Güncel
 Durum** altı modelin son olasılıklarını, **Performans (30g)** gönderilmiş
 sinyallerin gerçekleşen sonuçlarını, **Scalp Karne (30g)** ise 89 coinlik scalp
-ileri-test sonuçlarını, **Yetkililer** de erişim listesini açar. Aynı açıklama
-kişisel komut olarak `/aciklamalar` ile de istenebilir. Düğme yanıtları yalnızca
-`CRYPTO_TELEGRAM_OWNER_ID` veya
-`members.json` içindeki yetkili kimliklere gönderilir; tanımsız kullanıcılar
-sessizce yok sayılır.
+ileri-test sonuçlarını açar. **Aboneler** ve **Bekleyenler** düğmeleri yalnızca
+bot sahibinin menüsünde bulunur. Aynı açıklama `/aciklamalar` komutuyla da
+istenebilir.
 
-### Altı modelin de kanala ulaştığını doğrulama
+### Altı modelin de özel mesaja ulaştığını doğrulama
 
-Sessiz bir kanal iki anlama gelebilir: hiçbir model kapıyı geçmemiştir ya da
+Sessiz bir gelen kutusu iki anlama gelebilir: hiçbir model kapıyı geçmemiştir ya da
 boru hattı bozulmuştur. Bu komut ikisini ayırır — araştırma kapısından bağımsız
 olarak her modelin mesaj üretip üretemediğini tek tek dener:
 
@@ -447,8 +455,8 @@ olarak her modelin mesaj üretip üretemediğini tek tek dener:
 python run.py verify-models --refresh
 ```
 
-`--send` eklendiğinde altı modelin her biri için kanala birer doğrulama mesajı
-gider, yani kanalda hepsini gözle görürsünüz:
+`--send` eklendiğinde altı modelin her biri sahibin ve onaylı abonelerin özel
+sohbetine gider:
 
 ```powershell
 python run.py verify-models --refresh --send
@@ -457,37 +465,48 @@ python run.py verify-models --refresh --send
 Bulutta aynı doğrulama, workflow'u elle çalıştırırken `verify_models` seçeneğiyle
 yapılır.
 
-### Bota soru sorma
+### Üyelik ve bota soru sorma
 
-Bot yalnız mesaj göndermez; kendisine sorulduğunda cevap verir. Bunun için
-sahibin sayısal Telegram kimliği gerekir (`@userinfobot` gibi bir bota yazarak
-öğrenebilirsiniz):
+Yeni bir kişi botun özel sohbetinde `/start` yazınca yalnız kendi kimliğini ve
+**Erişim İste** düğmesini görür. `/katil` veya düğme sahibine tek bir onay isteği
+gönderir. İstek sahibin özel sohbetinde **Onayla / Reddet** düğmeleriyle görünür.
+Karar verilene kadar kişi hiçbir sinyal, performans veya üye bilgisi alamaz.
 
-```powershell
-[Environment]::SetEnvironmentVariable("CRYPTO_TELEGRAM_OWNER_ID", "123456789", "User")
-```
-
-Sonra bota **özel mesaj** olarak:
+Onaylı abonelerin özel sohbette kullanabileceği komutlar:
 
 | Komut | Ne yapar |
 |---|---|
 | `/durum` | Altı modelin o anki durumu — beklemeden anlık cevap |
 | `/performans [gün]` | Gönderilen sinyallerin gerçek sonucu (varsayılan 30 gün) |
 | `/scalpkarne [gün]` | Scalp ileri-test sonuçları (varsayılan 30 gün) |
-| `/kisiler` | Yetkili kişiler |
 | `/yardim` | Komut listesi |
-| `/ekle <kimlik> <ad>` | **Yalnız sahip** — birine sorgulama yetkisi verir |
-| `/sil <kimlik>` | **Yalnız sahip** — yetkiyi kaldırır |
+
+Yalnız sahibin görebildiği ve kullanabildiği üyelik kontrolleri:
+
+| Komut | Ne yapar |
+|---|---|
+| `/kisiler` | Özel mesaj abonelerini gösterir |
+| `/bekleyenler` | Bekleyen erişim isteklerini gösterir |
+| `/onayla <kimlik>` | Bekleyen isteği onaylar |
+| `/reddet <kimlik>` | Bekleyen isteği reddeder |
+| `/ekle <kimlik> <ad>` | Kişiyi doğrudan abone yapar |
+| `/sil <kimlik>` | Aboneliği ve yeni bildirim teslimatını kaldırır |
 
 Yetki kuralları:
 
-- `CRYPTO_TELEGRAM_OWNER_ID` tanımlı değilse komut yanıtlama tamamen kapalıdır.
-- Listede olmayan birinin komutu **sessizce yok sayılır**. Cevap verilseydi
-  herkes botu istediği anda mesaj üretmeye zorlayabilirdi.
-- Eklenen kişi yalnızca **sorgulama** yetkisi alır. Hiçbir komut emir veremez,
+- `CRYPTO_TELEGRAM_OWNER_ID` tanımlı değilse doğrudan teslimat kapalıdır.
+- Tanımsız kişi yalnız `/start`, `/myid` ve `/katil` erişim akışını kullanabilir;
+  diğer komutları sessizce yok sayılır.
+- Aynı kişi bekleyen isteği tekrar gönderirse sahibine ikinci bildirim üretilmez.
+- Komut ve düğmeler yalnız `private` türündeki, gönderenle sohbet kimliği aynı
+  olan konuşmada kabul edilir; grupta veya kanalda yönetim yüzeyi yoktur.
+- Abone yalnızca **bildirim ve sorgulama** yetkisi alır. Hiçbir komut emir veremez,
   pozisyon açamaz veya para hareketi başlatamaz; botun böyle bir yüzeyi yoktur.
 - Gelen mesaj metni sabit bir komut tablosuyla eşleştirilir; hiçbir zaman
   talimat olarak yorumlanmaz. Kişi adları da yazdırılmadan önce temizlenir.
+- `members.json` ve `pending_members.json` sunucuda yalnız servis hesabının
+  okuyabileceği izinlerle tutulur; token ise `/etc/crypto-forecaster.env` içinde
+  kalır ve repoya girmez.
 
 Kişileri komut satırından da yönetebilirsiniz:
 
@@ -504,16 +523,18 @@ denemek için:
 python run.py commands
 ```
 
-### Kanal mesajı gitmiyorsa
+### Özel mesaj gitmiyorsa
 
-Günlükte `REDDEDILDI (... HTTP 403)` görüyorsanız bot kanala yazma yetkisine
-sahip değildir. Telegram'da kanal → **Administrators** → **Add Admin** ile botu
-ekleyin ve **Post Messages** yetkisini açık bırakın. Kanal kimliğini
-`@kullaniciadi` olarak verdiyseniz kanalın herkese açık olması gerekir; özel
-kanalda `-100...` ile başlayan sayısal kimliği kullanın.
+Günlükte `REDDEDILDI (... HTTP 403)` görüyorsanız hedef kişi botu hiç
+başlatmamış veya sonradan engellemiş olabilir. Kişi botun özel sohbetini açıp
+`/start` yazmalıdır. Üyeyi doğrudan `/ekle` ile eklemek Telegram'ın bu ilk temas
+kuralını aşmaz.
 
-Bot komutlara cevap verip kanala yazamıyorsa sorun token değil, yetkidir:
-özel mesaj her zaman çalışır, kanala yazmak ayrı izin ister.
+Kanal yalnız geriye dönük uyumluluk için isteğe bağlıdır. Bilinçli olarak eski
+yayın biçimine dönmek isterseniz `CRYPTO_TELEGRAM_DELIVERY_MODE=channel` ve
+`CRYPTO_TELEGRAM_CHAT_ID` tanımlanabilir. Kanal gönderilerinde özel komut
+düğmeleri bulunmaz. Normal kullanımda kanal kurmak veya botu kanal yöneticisi
+yapmak gerekmez.
 
 `0.1.0` öncesi bir sürümden güncellediyseniz diskte takılı kalmış bir teslimat
 niyeti olabilir — o sürüm reddedilen gönderimi de "sonucu bilinmiyor" sayıp bir
@@ -540,7 +561,7 @@ Backtest modeli ölçer, karne botun kendisini ölçer:
 python run.py scorecard --days 30
 ```
 
-Bulut çalışması bu özeti UTC gününde bir kez kanala da yollar.
+Bulut çalışması primary role alınırsa bu özeti UTC gününde bir kez onaylı özel sohbetlere de yollar.
 
 ### Geniş hedef dokunuş bildirimleri
 
@@ -700,8 +721,8 @@ Durum iki ayrı Actions cache'inde tutulur:
 GitHub deposunda şu Actions secrets tanımlanmalıdır:
 
 - `CRYPTO_TELEGRAM_BOT_TOKEN`
-- `CRYPTO_TELEGRAM_CHAT_ID`
-- `CRYPTO_TELEGRAM_OWNER_ID` — komutlara cevap verilmesi için gerekir
+- `CRYPTO_TELEGRAM_OWNER_ID` — doğrudan teslimat ve sahip kontrolleri için gerekir
+- `CRYPTO_TELEGRAM_CHAT_ID` yalnız isteğe bağlı eski `channel` modunda gerekir
 - `PROJECT_HUB_INGEST_URL` — panelin **`/api/ingest`** yolu olmalıdır;
   `/api/project-ingest` farklı bir şemayı doğrular ve gönderimi `400` ile reddeder
 - `PROJECT_HUB_INGEST_TOKEN`
@@ -709,7 +730,7 @@ GitHub deposunda şu Actions secrets tanımlanmalıdır:
 
 Bulut çalışması elle de başlatılabilir; `force_research` bütün modelleri yeniden
 araştırır, `telegram_test` tek bir bağlantı testi yollar, `verify_models` altı
-modelin de kanala ulaştığını doğrular. Token değerlerini repoya veya workflow
+modelin de özel mesaj teslimatını doğrular. Token değerlerini repoya veya workflow
 dosyasına yazmayın.
 
 ## Sınırlar
