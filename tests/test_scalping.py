@@ -23,18 +23,25 @@ from crypto_forecaster.scalping import (
     format_scalp_scorecard,
     format_scalp_target_touch,
     filter_scalp_notification_report,
+    format_scalp_bracket_result,
+    load_pending_scalp_brackets,
+    load_pending_scalp_targets,
+    load_scalp_bracket_ledger,
     load_scalp_ledger,
     load_scalp_target_ledger,
     pending_scalp_target_touches,
     record_scalp_observations,
+    record_scalp_bracket_setups,
     record_scalp_target_setups,
     scalp_cache_path,
     scalp_forecast_stats,
     scalp_scorecard,
     scalp_setup_direction,
+    scalp_setup_assessment,
     scan_cached_scalp_universe,
     scan_scalp_frame,
     settle_scalp_observations,
+    settle_scalp_bracket_outcomes,
     settle_scalp_target_outcomes,
     _assign_alert_tiers,
     _closed_market_context,
@@ -384,6 +391,41 @@ class DigestTests(unittest.TestCase):
         self.assertLess(text.count("\n"), 30)
         self.assertLessEqual(len(text), 4096)
 
+    def test_calibrated_five_family_digest_stays_inside_telegram_limit(self) -> None:
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(
+                observation(family=family, score=2.8),
+                alert_tier="KURULUM",
+                regime_state="BULL",
+                volatility_bps=25.0,
+            )
+            for family in ("B1", "B2", "B3", "F1", "F3")
+        )
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "BULL",
+                "horizon_minutes": horizon,
+                "gross_bps": 40.0,
+                "net_bps": 28.0,
+                "round_trip_cost_bps": 12.0,
+                "score": 1.0 + sample / 20.0,
+                "exit_time_ms": START_MS + sample * 86_400_000,
+            }
+            for family in ("B1", "B2", "B3", "F1", "F3")
+            for horizon in (15, 30, 60)
+            for sample in range(12)
+        ]
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), items, START_MS)
+        text = format_scalp_observation_digest(
+            report, manifest=manifest, top_k=5, ledger=rows
+        )
+        self.assertIn("Boğa devamı LONG", text)
+        self.assertIn("Net başarı olasılığı", text)
+        self.assertLessEqual(len(text), 4096)
+
     def test_digest_shows_settled_up_down_probability_and_expected_move(self) -> None:
         manifest = load_trade1_universe()
         item = observation()
@@ -438,6 +480,67 @@ class DigestTests(unittest.TestCase):
             scalp_setup_direction(items, rows),
             ("AŞAĞI", ("AŞAĞI", "AŞAĞI", "AŞAĞI")),
         )
+
+    def test_setup_assessment_names_bull_exhaustion_and_uses_net_short_results(self) -> None:
+        items = tuple(
+            replace(
+                observation(family=family, score=2.8),
+                alert_tier="KURULUM",
+                regime_state="BULL",
+            )
+            for family in ("B1", "F3")
+        )
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "BULL",
+                "horizon_minutes": horizon,
+                "gross_bps": -40.0,
+                "net_bps": -52.0,
+                "round_trip_cost_bps": 12.0,
+                "score": 1.0 + sample / 20.0,
+                "exit_time_ms": START_MS + sample * 86_400_000,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+            for sample in range(12)
+        ]
+        assessment = scalp_setup_assessment(items, rows)
+        self.assertEqual(assessment.direction, "AŞAĞI")
+        self.assertEqual(assessment.strategy_code, "BULL_EXHAUSTION_SHORT")
+        self.assertGreater(assessment.success_probability or 0.0, 0.9)
+        self.assertAlmostEqual(assessment.expected_net_bps or 0.0, 28.0)
+        self.assertIsNotNone(assessment.quality_percentile)
+
+    def test_setup_assessment_uses_predeclared_strategy_horizon(self) -> None:
+        items = tuple(
+            replace(
+                observation(family=family, score=2.8),
+                alert_tier="KURULUM",
+                regime_state="BULL",
+            )
+            for family in ("B1", "F3")
+        )
+        gross_by_horizon = {15: -20.0, 30: -30.0, 60: -100.0}
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "BULL",
+                "horizon_minutes": horizon,
+                "gross_bps": gross_by_horizon[horizon],
+                "net_bps": gross_by_horizon[horizon] - 12.0,
+                "round_trip_cost_bps": 12.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+            for _sample in range(20)
+        ]
+        assessment = scalp_setup_assessment(items, rows)
+        self.assertEqual(assessment.strategy_code, "BULL_EXHAUSTION_SHORT")
+        self.assertEqual(assessment.horizon_minutes, 30)
+        self.assertAlmostEqual(assessment.expected_net_bps or 0.0, 18.0)
 
     def test_low_coverage_fails_closed_before_telegram(self) -> None:
         manifest = load_trade1_universe()
@@ -564,6 +667,9 @@ class DigestTests(unittest.TestCase):
             self.assertEqual([delivery.status for _, delivery in deliveries], ["SENT", "SENT"])
             self.assertEqual(len(notifier.calls), 2)
             self.assertEqual(pending_scalp_target_touches(state_dir, data_dir, now=now), [])
+            pending = load_pending_scalp_targets(state_dir)
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["delivered_percents"], [2.0, 3.0])
 
     def test_mixed_or_radar_setup_is_not_target_tracked(self) -> None:
         manifest = load_trade1_universe()
@@ -619,6 +725,72 @@ class DigestTests(unittest.TestCase):
             (),
         )
 
+    def test_notification_filter_prefers_calibrated_quality_over_raw_score(self) -> None:
+        items = tuple(
+            replace(
+                observation(family=family, score=1.2),
+                alert_tier="KURULUM",
+                regime_state="BULL",
+            )
+            for family in ("B1", "F3")
+        )
+        report = ScalpScanReport(
+            load_trade1_universe().version,
+            89,
+            89,
+            0,
+            (),
+            items,
+            START_MS,
+        )
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "BULL",
+                "horizon_minutes": horizon,
+                "gross_bps": -40.0,
+                "net_bps": -52.0,
+                "round_trip_cost_bps": 12.0,
+                "score": 0.5 + sample / 100.0,
+                "exit_time_ms": START_MS + sample * 86_400_000,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+            for sample in range(20)
+        ]
+        filtered = filter_scalp_notification_report(
+            report,
+            minimum_score=2.5,
+            ledger=rows,
+            minimum_quality_percentile=0.60,
+            minimum_direction_probability=0.55,
+            minimum_expected_net_bps=0.0,
+            minimum_calibration_samples=30,
+        )
+        self.assertEqual(filtered.observations, items)
+
+        losing_rows = [
+            {
+                **row,
+                "gross_bps": -5.0,
+                "net_bps": -17.0,
+            }
+            for row in rows
+        ]
+        self.assertEqual(
+            filter_scalp_notification_report(
+                report,
+                minimum_score=2.5,
+                ledger=losing_rows,
+                minimum_quality_percentile=0.60,
+                minimum_direction_probability=0.55,
+                minimum_expected_net_bps=0.0,
+                minimum_calibration_samples=30,
+            ).observations,
+            (),
+        )
+
     def test_muted_setup_still_enters_shadow_target_ledger(self) -> None:
         manifest = load_trade1_universe()
         items = tuple(
@@ -660,7 +832,7 @@ class DigestTests(unittest.TestCase):
                 1,
             )
             now = datetime.fromtimestamp(
-                (items[0].bar_close_time_ms + 61 * 60_000) / 1000,
+                (items[0].bar_close_time_ms + 24 * 60 * 60_000 + 60_000) / 1000,
                 tz=timezone.utc,
             )
             outcomes = settle_scalp_target_outcomes(state_dir, data_dir, now=now)
@@ -668,6 +840,132 @@ class DigestTests(unittest.TestCase):
             self.assertTrue(all(row["notification_sent"] is False for row in outcomes))
             self.assertTrue(any(row["target_percent"] == 2.0 and row["hit"] for row in outcomes))
             self.assertEqual(len(load_scalp_target_ledger(state_dir)), 2)
+
+    def test_sent_setup_promotes_existing_shadow_trackers(self) -> None:
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(observation(family=family), alert_tier="KURULUM")
+            for family in ("B1", "F3")
+        )
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -20.0,
+                "net_bps": -32.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), items, START_MS)
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory)
+            self.assertEqual(
+                record_scalp_target_setups(
+                    state_dir,
+                    report,
+                    manifest=manifest,
+                    top_k=2,
+                    ledger=rows,
+                    notification_sent=False,
+                ),
+                1,
+            )
+            self.assertEqual(
+                record_scalp_bracket_setups(
+                    state_dir,
+                    report,
+                    manifest=manifest,
+                    top_k=2,
+                    ledger=rows,
+                    notification_sent=False,
+                ),
+                1,
+            )
+            record_scalp_target_setups(
+                state_dir,
+                report,
+                manifest=manifest,
+                top_k=2,
+                ledger=rows,
+                notification_sent=True,
+            )
+            record_scalp_bracket_setups(
+                state_dir,
+                report,
+                manifest=manifest,
+                top_k=2,
+                ledger=rows,
+                notification_sent=True,
+            )
+            self.assertTrue(load_pending_scalp_targets(state_dir)[0]["notification_sent"])
+            self.assertTrue(load_pending_scalp_brackets(state_dir)[0]["notification_sent"])
+
+    def test_dynamic_bracket_uses_next_open_and_same_bar_tie_is_stop(self) -> None:
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(
+                observation(family=family),
+                alert_tier="KURULUM",
+                regime_state="BULL",
+                volatility_bps=20.0,
+                estimated_cost_bps=12.0,
+            )
+            for family in ("B1", "F3")
+        )
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "BULL",
+                "horizon_minutes": horizon,
+                "gross_bps": -40.0,
+                "net_bps": -52.0,
+                "round_trip_cost_bps": 12.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), items, START_MS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_dir = root / "state"
+            data_dir = root / "data"
+            data_dir.mkdir()
+            frame = market_frame()
+            event_index = int(
+                frame.index[frame["close_time_ms"] == items[0].bar_close_time_ms][0]
+            )
+            entry_price = 101.0
+            frame.loc[event_index + 1, "open"] = entry_price
+            frame.loc[event_index + 1, "high"] = entry_price * 1.02
+            frame.loc[event_index + 1, "low"] = entry_price * 0.98
+            frame.to_csv(scalp_cache_path(data_dir, "BTCUSDT"), index=False)
+            self.assertEqual(
+                record_scalp_bracket_setups(
+                    state_dir,
+                    report,
+                    manifest=manifest,
+                    top_k=2,
+                    ledger=rows,
+                    notification_sent=True,
+                ),
+                1,
+            )
+            now = datetime.fromtimestamp(
+                (items[0].bar_close_time_ms + 10 * 60_000) / 1000,
+                tz=timezone.utc,
+            )
+            outcomes = settle_scalp_bracket_outcomes(state_dir, data_dir, now=now)
+            self.assertEqual(len(outcomes), 1)
+            self.assertEqual(outcomes[0]["entry_price"], entry_price)
+            self.assertEqual(outcomes[0]["resolution"], "STOP")
+            self.assertTrue(outcomes[0]["ambiguous_same_bar"])
+            self.assertLess(outcomes[0]["net_bps"], 0.0)
+            self.assertIn("Gerçekçi giriş", format_scalp_bracket_result(outcomes[0]))
+            self.assertEqual(len(load_scalp_bracket_ledger(state_dir)), 1)
 
 
 class ForwardLedgerTests(unittest.TestCase):

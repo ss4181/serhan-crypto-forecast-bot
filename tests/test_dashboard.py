@@ -58,6 +58,28 @@ class DashboardTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            (scalp / "bracket_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "schema": "scalp-bracket-outcome-v1",
+                        "setup_id": "d" * 64,
+                        "spot_symbol": "SOLUSDT",
+                        "direction": "YUKARI",
+                        "strategy_label": "Boğa devamı LONG",
+                        "source_price": 100,
+                        "bar_close_time_ms": 1_700_000_300_000,
+                        "target_bps": 60.0,
+                        "stop_bps": 40.0,
+                        "resolution": "TARGET",
+                        "net_bps": 48.0,
+                        "notification_sent": True,
+                        "quality_percentile": 0.8,
+                        "confidence": "ORTA",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             pending = scalp / "target_pending"
             pending.mkdir()
             (pending / f"{'c' * 64}.json").write_text(
@@ -94,11 +116,14 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(payload["summary"]["scalpTargetCount"], 2)
             self.assertEqual(payload["summary"]["settledScalpTargetCount"], 1)
             self.assertEqual(payload["summary"]["pendingScalpTargetCount"], 1)
+            self.assertEqual(payload["summary"]["scalpBracketWinRate"], 1.0)
+            self.assertEqual(payload["summary"]["settledScalpBracketCount"], 1)
             self.assertEqual(payload["sourceStatus"], "stale")
             self.assertEqual(payload["generatedAtUtc"], "2026-09-02T08:00:00Z")
-            self.assertEqual(payload["latestSignalAtUtc"], "2023-11-14T22:16:40Z")
+            self.assertEqual(payload["latestSignalAtUtc"], "2023-11-14T22:18:20Z")
             self.assertNotIn("CRYPTO_TELEGRAM_BOT_TOKEN", json.dumps(payload))
-            self.assertEqual(json.loads(dashboard_payload_text(settings))["signals"][0]["status"], "BEKLEMEDE")
+            rendered = json.loads(dashboard_payload_text(settings))["signals"]
+            self.assertTrue(any(row["status"] == "BEKLEMEDE" for row in rendered))
             output = write_dashboard_payload(settings, root / "dashboard.json")
             self.assertTrue(output.exists())
 

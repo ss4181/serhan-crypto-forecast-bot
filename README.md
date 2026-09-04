@@ -278,7 +278,12 @@ rejimi ve uygun canlı spread birlikteyse **KURULUM** olarak gösterilir. Bu iki
 etiket de araştırmadır. En yüksek puanlı en fazla beş kayıt tek kompakt Telegram
 özetinde gösterilir, 89 ayrı mesaj gönderilmez.
 
-Mesajdaki puan bir olasılık veya beklenen getiri değildir. Bot iki açık Binance
+Mesajdaki eski puan artık **ham güç** adıyla gösterilir; bir olasılık veya
+beklenen getiri değildir. Bot aile/rejim içindeki geçmiş ham güç dağılımını da
+tutarak aileleri karşılaştırılabilir bir yüzdeliğe çevirir. Yeterli ileri veri
+oluştuğunda Telegram kapısı ham puan yerine bu yüzdelik, maliyet sonrası başarı
+olasılığı ve beklenen net hareketi kullanır. Henüz yeterli örnek yoksa
+`CRYPTO_SCALP_MIN_ALERT_SCORE` yalnız geçici geri dönüş filtresidir. Bot iki açık Binance
 USD-M uç noktasından en iyi alış/satış ile funding bilgisini alır. Her gözleme
 `max(tarihsel 12 bps, 2 × taker komisyonu + canlı spread + 2 × tek-yön kayma)`
 maliyeti yazar. Hesaba özel komisyon imzalı istek gerektirdiği için ortam
@@ -288,7 +293,7 @@ Telegram scalp özeti her coin için dikey ve emoji destekli bir blok gösterir:
 **sinyal anındaki fiyat** ve varsa bildirim anındaki mark fiyatı, beklenen ufuk,
 Binance USD-M perp piyasası,
 24 saatlik kapalı mum getirisi ve evren sırası, son 1 saat hacminin önceki 24
-saat medyanına oranı, aile/skor, maliyet/spread, funding ve tetikleyici ayrı
+saat medyanına oranı, aktif alıcı payı, aile/ham güç, maliyet/spread, funding ve tetikleyici ayrı
 satırlardadır. `BT
 15/30/60dk` bölümü yalnızca kapanmış ileri-test kaydından hesaplanır; her ufuk
 için yukarı/aşağı gerçekleşme oranı, medyan brüt hareket, medyan
@@ -300,22 +305,39 @@ yok` yazılır; model veya olasılık uydurulmaz. Her coin için ayrıca aileler
 `AŞAĞI` veya `KARIŞIK`. Bu, geçmiş ileri-test sentezidir; long/short önerisi
 değildir.
 
+Net yönlü kurulumlar ayrı araştırma stratejilerine etiketlenir: **Boğa devamı
+LONG**, **Aşırı yükseliş geri çekilmesi SHORT**, **Sert düşüş sonrası toparlanma
+LONG** ve **Düşüş devamı SHORT**. Böylece boğa içindeki geri çekilme ile boğa
+devamı aynı sonuç havuzunda değerlendirilmez. Bildirimde seçilen ufuk, net başarı
+olasılığı, beklenen net hareket, örnek sayısı, bağımsız gün sayısı ve güven düzeyi
+açıkça yer alır.
+
+Her net kurulum ayrıca maliyet ve son 24 adet 5m mumun tipik gerçek aralığına göre
+önceden belirlenen dinamik bir hedef/stop parantezine alınır. Giriş sinyalden
+sonraki ilk mumun açılışıdır; hedef ve stop aynı mumda görülürse sıra bilinmediği
+için sonuç temkinli biçimde **STOP** yazılır. Hedef, stop veya süre sonu ilk
+gerçekleşen sonuçtur. Net getiri, MFE (en iyi hareket), MAE (en kötü hareket) ve
+geçen süre ayrı `bracket_ledger.jsonl` karnesine kaydedilir.
+
 `KURULUM` seviyesine yükseltilmiş ve örneklem-ağırlıklı BT yön özeti net biçimde
 `YUKARI` veya `AŞAĞI` olan çoklu-aile kurulumları, digest Telegram'a başarıyla
-ulaştıktan sonra ayrı bir hedef izleyicisine alınır. Sinyal fiyatından itibaren
+ulaştıktan sonra ayrı bir kilometre taşı izleyicisine alınır. Sinyal fiyatından itibaren
 `+%2/+%3` veya `-%2/-%3` seviyelerine kapanmış 5m mumun yüksek/düşük değeri
-dokunduğunda, hedef kademesi başına tek bildirim gönderilir. `RADAR`, `KARIŞIK`
+dokunduğunda, varsayılan 24 saat içinde kademe başına tek bildirim gönderilir.
+Bu seviyeler scalp TP değildir; daha geniş momentum takibidir. `RADAR`, `KARIŞIK`
 ve `YUKARI/AŞAĞI AĞIRLIKLI` özetler hedef bildirimi üretmez; tüm bildirimler
 araştırma amaçlıdır.
 
-Telegram filtresi ayrıca yalnızca net yönlü, çoklu-aile `KURULUM` ve varsayılan
-`2.5` üzeri skoru olan kurulumları gönderir (`CRYPTO_SCALP_MIN_ALERT_SCORE`).
-Diğer adaylar gölge ölçümde tutulur; bu sayede sessize alma kararının `%2`
-başarı oranını gerçekten artırıp artırmadığı tüm adaylarla karşılaştırılabilir.
+Telegram filtresi, yeterli örnek bulunan aile/rejimlerde varsayılan olarak aile
+içi en güçlü `%40`, en az `%55` net başarı olasılığı ve pozitif beklenen net
+hareket ister. Yetersiz örnekte eski ham güç eşiğine geri düşer. Diğer adaylar
+gölge ölçümde tutulur; bu sayede sessize alma kararının hem gerçekçi TP/SL net
+getirisini hem de `%2/%3` kilometre taşlarını artırıp artırmadığı karşılaştırılır.
 
 `python run.py dashboard-export` komutu, Telegram kimlik bilgileri içermeyen
 `docs/scalp-data.json` dosyasını üretir. `docs/scalp.html` GitHub Pages üzerinde
-normal model sonuçlarını ve scalp `%2/%3` hedef başarılarını filtrelenebilir
+normal model sonuçlarını, scalp `%2/%3` kilometre taşlarını ve gerçekçi ilk
+dokunuş TP/SL sonuçlarını filtrelenebilir
 tabloda gösterir; durumlar `HEDEF ULAŞTI`, `HEDEF ULAŞMADI`, `BEKLEMEDE` ve
 `Sessiz` olarak ayrılır. GitHub barındırılan runner Binance'a erişemezse bulut
 yenilemesi uyarı olarak kalır ve Pages son önbellekteki kırpılmış veriyi yine

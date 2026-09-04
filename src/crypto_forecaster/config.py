@@ -128,6 +128,41 @@ class Settings:
             "CRYPTO_SCALP_MIN_ALERT_SCORE", 2.5, 0.0, 10.0
         )
     )
+    # The raw detector scores have different scales in each family.  Once
+    # enough forward observations exist, Telegram therefore gates on an
+    # empirical family/regime percentile and realised direction quality too.
+    scalp_minimum_quality_percentile: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MIN_QUALITY_PERCENTILE", 0.60, 0.0, 1.0
+        )
+    )
+    scalp_minimum_direction_probability: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MIN_DIRECTION_PROBABILITY", 0.55, 0.50, 1.0
+        )
+    )
+    scalp_minimum_expected_net_bps: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MIN_EXPECTED_NET_BPS", 0.0, -100.0, 1_000.0
+        )
+    )
+    scalp_minimum_calibration_samples: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_MIN_CALIBRATION_SAMPLES", 30, 5, 10_000
+        )
+    )
+    # A volatility-aware first-touch bracket measures actual scalp quality.
+    # The old +/-2% and +/-3% levels remain separate 24-hour milestones.
+    scalp_bracket_horizon_minutes: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_BRACKET_HORIZON_MINUTES", 60, 15, 240
+        )
+    )
+    scalp_milestone_horizon_hours: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_MILESTONE_HORIZON_HOURS", 24, 1, 72
+        )
+    )
     scalp_cache_days: int = field(
         default_factory=lambda: _environment_int("CRYPTO_SCALP_CACHE_DAYS", 3, 2, 30)
     )

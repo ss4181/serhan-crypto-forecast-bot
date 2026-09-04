@@ -10,7 +10,12 @@ from typing import Any
 
 from .config import Settings
 from .outcomes import load_ledger, pending_dir
-from .scalping import load_pending_scalp_targets, load_scalp_target_ledger
+from .scalping import (
+    load_pending_scalp_brackets,
+    load_pending_scalp_targets,
+    load_scalp_bracket_ledger,
+    load_scalp_target_ledger,
+)
 
 SCHEMA = "trade3-signal-dashboard-v1"
 SOURCE_STATUSES = frozenset({"fresh", "stale"})
@@ -107,6 +112,11 @@ def build_dashboard_payload(
                 "netBps": None,
                 "targetPercent": None,
                 "notified": bool(row.get("notification_sent", False)),
+                "strategy": str(row.get("strategy_label", "")),
+                "confidence": str(row.get("confidence", "")),
+                "successProbability": _number(row.get("success_probability")),
+                "expectedNetBps": _number(row.get("expected_net_bps")),
+                "qualityPercentile": _number(row.get("quality_percentile")),
             }
         )
     scalp_rows = load_scalp_target_ledger(settings.scalp_state_dir, limit=limit)
@@ -130,6 +140,86 @@ def build_dashboard_payload(
                 "netBps": None,
                 "targetPercent": _number(row.get("target_percent")),
                 "notified": bool(row.get("notification_sent", False)),
+                "strategy": str(row.get("strategy_label", "")),
+                "confidence": str(row.get("confidence", "")),
+                "successProbability": _number(row.get("success_probability")),
+                "expectedNetBps": _number(row.get("expected_net_bps")),
+                "qualityPercentile": _number(row.get("quality_percentile")),
+            }
+        )
+    for row in load_pending_scalp_brackets(settings.scalp_state_dir, limit=limit)[-limit:]:
+        signals.append(
+            {
+                "kind": "scalp-bracket",
+                "signalId": str(row.get("setup_id", "")),
+                "symbol": str(row.get("spot_symbol", "")),
+                "interval": "5m",
+                "direction": str(row.get("direction", "")),
+                "tier": "KURULUM",
+                "score": _number(row.get("raw_score")),
+                "families": row.get("families", []),
+                "probabilityUp": None,
+                "probabilityDown": None,
+                "sourcePrice": _number(row.get("source_price")),
+                "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+                "status": "TP/SL BEKLEMEDE",
+                "success": None,
+                "netBps": None,
+                "targetPercent": (
+                    _number(row.get("target_bps")) / 100.0
+                    if _number(row.get("target_bps")) is not None
+                    else None
+                ),
+                "notified": bool(row.get("notification_sent", False)),
+                "strategy": str(row.get("strategy_label", "")),
+                "confidence": str(row.get("confidence", "")),
+                "successProbability": _number(row.get("success_probability")),
+                "expectedNetBps": _number(row.get("expected_net_bps")),
+                "qualityPercentile": _number(row.get("quality_percentile")),
+                "stopPercent": (
+                    _number(row.get("stop_bps")) / 100.0
+                    if _number(row.get("stop_bps")) is not None
+                    else None
+                ),
+            }
+        )
+    for row in load_scalp_bracket_ledger(settings.scalp_state_dir, limit=limit)[-limit:]:
+        signals.append(
+            {
+                "kind": "scalp-bracket",
+                "signalId": str(row.get("setup_id", "")),
+                "symbol": str(row.get("spot_symbol", "")),
+                "interval": "5m",
+                "direction": str(row.get("direction", "")),
+                "tier": "KURULUM",
+                "score": _number(row.get("raw_score")),
+                "families": row.get("families", []),
+                "probabilityUp": None,
+                "probabilityDown": None,
+                "sourcePrice": _number(row.get("source_price")),
+                "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+                "status": str(row.get("resolution", "SONUÇ")),
+                "success": row.get("resolution") == "TARGET",
+                "netBps": _number(row.get("net_bps")),
+                "targetPercent": (
+                    _number(row.get("target_bps")) / 100.0
+                    if _number(row.get("target_bps")) is not None
+                    else None
+                ),
+                "notified": bool(row.get("notification_sent", False)),
+                "strategy": str(row.get("strategy_label", "")),
+                "confidence": str(row.get("confidence", "")),
+                "successProbability": _number(row.get("success_probability")),
+                "expectedNetBps": _number(row.get("expected_net_bps")),
+                "qualityPercentile": _number(row.get("quality_percentile")),
+                "stopPercent": (
+                    _number(row.get("stop_bps")) / 100.0
+                    if _number(row.get("stop_bps")) is not None
+                    else None
+                ),
+                "mfeBps": _number(row.get("mfe_bps")),
+                "maeBps": _number(row.get("mae_bps")),
+                "elapsedMinutes": _number(row.get("elapsed_minutes")),
             }
         )
     signals.sort(key=lambda row: int(row.get("sourceTimeMs") or 0), reverse=True)
@@ -146,6 +236,11 @@ def build_dashboard_payload(
     notified = [row for row in settled_scalp_targets if row["notified"]]
     hit_count = sum(row["success"] is True for row in settled_scalp_targets)
     notified_hit_count = sum(row["success"] is True for row in notified)
+    scalp_brackets = [row for row in signals if row["kind"] == "scalp-bracket"]
+    settled_scalp_brackets = [
+        row for row in scalp_brackets if row["success"] is not None
+    ]
+    bracket_wins = sum(row["success"] is True for row in settled_scalp_brackets)
     return {
         "schema": SCHEMA,
         "generatedAtUtc": current.isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -168,6 +263,14 @@ def build_dashboard_payload(
             "notifiedScalpTargetHits": notified_hit_count,
             "notifiedScalpTargetHitRate": (
                 notified_hit_count / len(notified) if notified else None
+            ),
+            "scalpBracketCount": len(scalp_brackets),
+            "settledScalpBracketCount": len(settled_scalp_brackets),
+            "scalpBracketWins": bracket_wins,
+            "scalpBracketWinRate": (
+                bracket_wins / len(settled_scalp_brackets)
+                if settled_scalp_brackets
+                else None
             ),
         },
         "signals": signals,

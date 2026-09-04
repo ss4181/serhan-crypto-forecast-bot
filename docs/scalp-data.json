@@ -14,7 +14,11 @@
     "scalpTargetHitRate": null,
     "notifiedScalpTargetCount": 0,
     "notifiedScalpTargetHits": 0,
-    "notifiedScalpTargetHitRate": null
+    "notifiedScalpTargetHitRate": null,
+    "scalpBracketCount": 0,
+    "settledScalpBracketCount": 0,
+    "scalpBracketWins": 0,
+    "scalpBracketWinRate": null
   },
   "signals": []
 }

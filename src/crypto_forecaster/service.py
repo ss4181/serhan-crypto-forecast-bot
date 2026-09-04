@@ -43,16 +43,20 @@ from .outcomes import (
 from .research import research_all
 from .scalping import (
     SCALP_STEP_MS,
+    deliver_scalp_bracket_wins,
     deliver_scalp_target_touches,
     deliver_scalp_observations,
     filter_scalp_notification_report,
     format_scalp_scorecard,
+    load_scalp_bracket_ledger,
     load_scalp_ledger,
+    record_scalp_bracket_setups,
     record_scalp_observations,
     record_scalp_target_setups,
     refresh_and_scan_scalp_universe,
     scalp_scorecard,
     settle_scalp_observations,
+    settle_scalp_bracket_outcomes,
     settle_scalp_target_outcomes,
 )
 from .telegram import (
@@ -682,7 +686,10 @@ def answer_commands(
         ),
         scalp_performance_text=lambda days: format_scalp_scorecard(
             scalp_scorecard(
-                load_scalp_ledger(settings.scalp_state_dir), days=days, now=current
+                load_scalp_ledger(settings.scalp_state_dir),
+                bracket_rows=load_scalp_bracket_ledger(settings.scalp_state_dir),
+                days=days,
+                now=current,
             )
         ),
         explanation_text=format_explanations,
@@ -811,6 +818,15 @@ def serve_forever(
                         manifest=scalp_manifest,
                         top_k=len(scalp_report.observations) or settings.scalp_top_k,
                         ledger=load_scalp_ledger(settings.scalp_state_dir),
+                        milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+                    )
+                    record_scalp_bracket_setups(
+                        settings.scalp_state_dir,
+                        scalp_report,
+                        manifest=scalp_manifest,
+                        top_k=len(scalp_report.observations) or settings.scalp_top_k,
+                        ledger=load_scalp_ledger(settings.scalp_state_dir),
+                        horizon_minutes=settings.scalp_bracket_horizon_minutes,
                     )
                     scalp_setup_symbols = {
                         item.perpetual_symbol
@@ -829,6 +845,10 @@ def serve_forever(
                             scalp_report,
                             minimum_score=settings.scalp_minimum_alert_score,
                             ledger=load_scalp_ledger(settings.scalp_state_dir),
+                            minimum_quality_percentile=settings.scalp_minimum_quality_percentile,
+                            minimum_direction_probability=settings.scalp_minimum_direction_probability,
+                            minimum_expected_net_bps=settings.scalp_minimum_expected_net_bps,
+                            minimum_calibration_samples=settings.scalp_minimum_calibration_samples,
                         )
                         scalp_delivery = deliver_scalp_observations(
                             settings,
@@ -852,6 +872,17 @@ def serve_forever(
                                 manifest=scalp_manifest,
                                 top_k=settings.scalp_top_k,
                                 ledger=load_scalp_ledger(settings.scalp_state_dir),
+                                notification_sent=True,
+                                milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+                            )
+                            record_scalp_bracket_setups(
+                                settings.scalp_state_dir,
+                                scalp_notification_report,
+                                manifest=scalp_manifest,
+                                top_k=settings.scalp_top_k,
+                                ledger=load_scalp_ledger(settings.scalp_state_dir),
+                                notification_sent=True,
+                                horizon_minutes=settings.scalp_bracket_horizon_minutes,
                             )
                             if tracked:
                                 progress(f"Scalp hedef izleme: {tracked} yeni kurulum")
@@ -864,6 +895,22 @@ def serve_forever(
                         progress(
                             f"Scalp hedef karnesi: {len(scalp_target_settled)} kademe sonuc"
                         )
+                    scalp_bracket_settled = settle_scalp_bracket_outcomes(
+                        settings.scalp_state_dir,
+                        settings.scalp_data_dir,
+                        now=now,
+                    )
+                    if scalp_bracket_settled:
+                        progress(
+                            f"Scalp ilk-dokunus karnesi: {len(scalp_bracket_settled)} sonuc"
+                        )
+                    if is_primary():
+                        for event, delivery in deliver_scalp_bracket_wins(settings):
+                            if delivery.status != "DEDUPLICATED":
+                                progress(
+                                    f"Scalp {event['spot_symbol']} dinamik hedef: "
+                                    f"{delivery.status}{_detail_suffix(delivery)}"
+                                )
                 except (OSError, RuntimeError, TypeError, ValueError) as error:
                     # Experimental observation must never take the verified
                     # BTC/ETH service down or trigger its exponential backoff.

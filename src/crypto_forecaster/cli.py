@@ -17,18 +17,22 @@ from .hub import post_snapshot, write_snapshot
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .research import research_all
 from .scalping import (
+    deliver_scalp_bracket_wins,
     deliver_scalp_target_touches,
     deliver_scalp_observations,
     filter_scalp_notification_report,
     format_scalp_observation_digest,
     format_scalp_scorecard,
+    load_scalp_bracket_ledger,
     load_scalp_ledger,
+    record_scalp_bracket_setups,
     record_scalp_observations,
     record_scalp_target_setups,
     refresh_and_scan_scalp_universe,
     scalp_scorecard,
     scan_cached_scalp_universe,
     settle_scalp_observations,
+    settle_scalp_bracket_outcomes,
     settle_scalp_target_outcomes,
 )
 from .service import (
@@ -305,7 +309,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 format_scalp_scorecard(
                     scalp_scorecard(
-                        load_scalp_ledger(settings.scalp_state_dir), days=args.days
+                        load_scalp_ledger(settings.scalp_state_dir),
+                        bracket_rows=load_scalp_bracket_ledger(settings.scalp_state_dir),
+                        days=args.days,
                     )
                 )
             )
@@ -610,8 +616,20 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
         manifest=manifest,
         top_k=len(report.observations) or settings.scalp_top_k,
         ledger=load_scalp_ledger(settings.scalp_state_dir),
+        milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+    )
+    bracket_tracked = record_scalp_bracket_setups(
+        settings.scalp_state_dir,
+        report,
+        manifest=manifest,
+        top_k=len(report.observations) or settings.scalp_top_k,
+        ledger=load_scalp_ledger(settings.scalp_state_dir),
+        horizon_minutes=settings.scalp_bracket_horizon_minutes,
     )
     settled_targets = settle_scalp_target_outcomes(
+        settings.scalp_state_dir, settings.scalp_data_dir
+    )
+    settled_brackets = settle_scalp_bracket_outcomes(
         settings.scalp_state_dir, settings.scalp_data_dir
     )
     setup_symbols = {
@@ -654,6 +672,10 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
         report,
         minimum_score=settings.scalp_minimum_alert_score,
         ledger=load_scalp_ledger(settings.scalp_state_dir),
+        minimum_quality_percentile=settings.scalp_minimum_quality_percentile,
+        minimum_direction_probability=settings.scalp_minimum_direction_probability,
+        minimum_expected_net_bps=settings.scalp_minimum_expected_net_bps,
+        minimum_calibration_samples=settings.scalp_minimum_calibration_samples,
     )
     delivery = deliver_scalp_observations(
         settings, notification_report, manifest=manifest
@@ -668,13 +690,33 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
                 manifest=manifest,
                 top_k=settings.scalp_top_k,
                 ledger=load_scalp_ledger(settings.scalp_state_dir),
+                notification_sent=True,
+                milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+            )
+            record_scalp_bracket_setups(
+                settings.scalp_state_dir,
+                notification_report,
+                manifest=manifest,
+                top_k=settings.scalp_top_k,
+                ledger=load_scalp_ledger(settings.scalp_state_dir),
+                notification_sent=True,
+                horizon_minutes=settings.scalp_bracket_horizon_minutes,
             )
             if tracked:
                 print(f"Scalp hedef izleme: {tracked} yeni kurulum")
-    if shadow_tracked or settled_targets:
+    bracket_deliveries = deliver_scalp_bracket_wins(settings)
+    for event, bracket_delivery in bracket_deliveries:
+        if bracket_delivery.status != "DEDUPLICATED":
+            detail = f" ({bracket_delivery.detail})" if bracket_delivery.detail else ""
+            print(
+                f"Scalp {event['spot_symbol']} dinamik hedef: "
+                f"{bracket_delivery.status}{detail}"
+            )
+    if shadow_tracked or bracket_tracked or settled_targets or settled_brackets:
         print(
             f"Scalp hedef ölçümü: {shadow_tracked} yeni setup, "
-            f"{len(settled_targets)} kademe sonucu"
+            f"{len(settled_targets)} kademe sonucu; "
+            f"{bracket_tracked} yeni parantez, {len(settled_brackets)} ilk-dokunus sonucu"
         )
 
 

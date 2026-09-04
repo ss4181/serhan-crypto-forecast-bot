@@ -45,6 +45,8 @@ SCALP_PENDING_SCHEMA = "scalp-observation-pending-v1"
 SCALP_LEDGER_SCHEMA = "scalp-observation-outcome-v1"
 SCALP_TARGET_PENDING_SCHEMA = "scalp-target-pending-v1"
 SCALP_TARGET_LEDGER_SCHEMA = "scalp-target-outcome-v1"
+SCALP_BRACKET_PENDING_SCHEMA = "scalp-bracket-pending-v1"
+SCALP_BRACKET_LEDGER_SCHEMA = "scalp-bracket-outcome-v1"
 SCALP_TARGET_TOUCH_PERCENTS = (2.0, 3.0)
 SCALP_SETTLEMENT_GRACE_DAYS = 2
 SCALP_BACKTEST_HORIZONS = (15, 30, 60)
@@ -63,6 +65,22 @@ FAMILY_EVIDENCE = {
     "B1": "yalniz boga rejiminde ileri test edilen yeni hipotez",
     "B2": "yalniz boga rejiminde ileri test edilen yeni hipotez",
     "B3": "yalniz boga rejiminde ileri test edilen yeni hipotez",
+}
+STRATEGY_LABELS = {
+    "BULL_CONTINUATION_LONG": "Boğa devamı LONG",
+    "BULL_EXHAUSTION_SHORT": "Aşırı yükseliş geri çekilmesi SHORT",
+    "FLUSH_RECOVERY_LONG": "Sert düşüş sonrası toparlanma LONG",
+    "DOWNSIDE_CONTINUATION_SHORT": "Düşüş devamı SHORT",
+    "DIRECTIONAL_LONG": "Yönsel momentum LONG",
+    "DIRECTIONAL_SHORT": "Yönsel momentum SHORT",
+}
+STRATEGY_HORIZONS = {
+    "BULL_CONTINUATION_LONG": 60,
+    "BULL_EXHAUSTION_SHORT": 30,
+    "FLUSH_RECOVERY_LONG": 60,
+    "DOWNSIDE_CONTINUATION_SHORT": 30,
+    "DIRECTIONAL_LONG": 60,
+    "DIRECTIONAL_SHORT": 60,
 }
 
 
@@ -90,6 +108,8 @@ class _ScalpMarketContext:
     rank_24h: int | None = None
     universe_size: int | None = None
     volume_1h_ratio: float | None = None
+    taker_buy_ratio_1h: float | None = None
+    volatility_bps: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,12 +137,29 @@ class ScalpObservation:
     universe_size: int | None = None
     volume_1h_ratio: float | None = None
     mark_price: float | None = None
+    taker_buy_ratio_1h: float | None = None
+    volatility_bps: float | None = None
 
     @property
     def signal_id(self) -> str:
         material = f"{self.universe_version}|{self.perpetual_symbol}|{self.family}|{self.bar_close_time_ms}"
         return sha256(material.encode("ascii")).hexdigest()
 
+
+@dataclass(frozen=True, slots=True)
+class ScalpSetupAssessment:
+    """Empirical, direction-aware quality for one multi-family setup."""
+
+    strategy_code: str
+    strategy_label: str
+    direction: str
+    horizon_minutes: int | None
+    success_probability: float | None
+    expected_net_bps: float | None
+    sample_count: int
+    independent_days: int
+    quality_percentile: float | None
+    confidence: str
 
 @dataclass(frozen=True, slots=True)
 class ScalpScanReport:
@@ -535,6 +572,8 @@ def format_scalp_observation_digest(
         cost = item.estimated_cost_bps or manifest.scalp_round_trip_cost_bps
         detail = ", ".join(item.details)
         tier_icon = "✅" if tier == "KURULUM" else "🔔"
+        direction, horizon_directions = scalp_setup_direction(items, ledger_rows)
+        assessment = scalp_setup_assessment(items, ledger_rows)
         lines.extend(
             [
                 f"{tier_icon} {index}. {tier} | {item.spot_symbol} {mapping}".rstrip(),
@@ -542,21 +581,43 @@ def format_scalp_observation_digest(
                 f"   💰 Sinyal fiyati: {_format_signal_price(item.price)}",
                 f"   ⏱ Beklenen ufuk: {horizon_label} dk",
                 "   🏦 Piyasa: Binance USD-M perp",
-                f"   🧩 Aile: {families} | Skor: {item.score:.2f}",
+                f"   🧠 Strateji: {assessment.strategy_label}",
+                f"   🧩 Aile: {families} | Ham güç: {item.score:.2f}",
                 f"   💸 Maliyet: ~{cost:.1f} bps | Spread: {spread}",
                 f"   💡 Tetikleyici: {detail}",
             ]
         )
-        direction, horizon_directions = scalp_setup_direction(items, ledger_rows)
         lines.append(
             f"   🧭 Yön özeti (yerleşmiş BT): {direction} | "
             f"15/30/60dk: {'/'.join(horizon_directions)}"
         )
-        if item.mark_price is not None:
-            lines.insert(
-                3,
-                f"   📍 Güncel mark: {_format_signal_price(item.mark_price)}",
+        if assessment.success_probability is not None:
+            quality = (
+                f"%{assessment.quality_percentile * 100:.0f}"
+                if assessment.quality_percentile is not None
+                else "veri yok"
             )
+            lines.extend(
+                [
+                    f"   🎯 Net başarı olasılığı: %{assessment.success_probability * 100:.1f}",
+                    f"   💹 Beklenen net: {assessment.expected_net_bps / 100:+.2f}% "
+                    f"| seçilen ufuk: {assessment.horizon_minutes} dk",
+                    f"   🛡 Güven: {assessment.confidence} | "
+                    f"n={assessment.sample_count}, bağımsız gün={assessment.independent_days}",
+                    f"   📏 Aile içi güç yüzdeliği: {quality}",
+                ]
+            )
+        if direction in {"YUKARI", "AŞAĞI"}:
+            target_bps, stop_bps = _dynamic_bracket_bps(items)
+            target_multiplier = 1.0 + target_bps / 10_000.0 if direction == "YUKARI" else 1.0 - target_bps / 10_000.0
+            stop_multiplier = 1.0 - stop_bps / 10_000.0 if direction == "YUKARI" else 1.0 + stop_bps / 10_000.0
+            lines.append(
+                f"   🎚 Tahmini parantez (sinyal fiyatından): hedef {_format_signal_price(item.price * target_multiplier)} "
+                f"(+{target_bps / 100:.2f}%) | stop {_format_signal_price(item.price * stop_multiplier)} "
+                f"(-{stop_bps / 100:.2f}%)"
+            )
+        if item.mark_price is not None:
+            lines.append(f"   📍 Güncel mark: {_format_signal_price(item.mark_price)}")
         if item.return_24h_pct is not None:
             rank = (
                 f"{item.rank_24h}/{item.universe_size}"
@@ -573,6 +634,8 @@ def format_scalp_observation_digest(
             )
         if item.funding_rate_bps is not None:
             lines.append(f"   🧾 Funding: {item.funding_rate_bps:+.2f} bps")
+        if item.taker_buy_ratio_1h is not None:
+            lines.append(f"   🔄 Son 1s aktif alıcı payı: %{item.taker_buy_ratio_1h * 100:.1f}")
         for family_item in items:
             lines.extend(
                 "   " + line
@@ -584,7 +647,7 @@ def format_scalp_observation_digest(
     lines.extend(
         [
             "",
-            "ISLEM ADAYI DEGILDIR • Yön özeti geçmiş BT sentezidir; short/long önerisi değildir.",
+            "ISLEM ADAYI DEGILDIR • Başarı ve beklenen net, yerleşmiş ileri gözlemlerden hesaplanan araştırma verisidir.",
         ]
     )
     message = "\n".join(lines)
@@ -598,6 +661,10 @@ def filter_scalp_notification_report(
     *,
     minimum_score: float,
     ledger: Iterable[dict[str, Any]] = (),
+    minimum_quality_percentile: float | None = None,
+    minimum_direction_probability: float | None = None,
+    minimum_expected_net_bps: float | None = None,
+    minimum_calibration_samples: int = 0,
 ) -> ScalpScanReport:
     """Keep only exact-direction, high-score multi-family setups for Telegram.
 
@@ -620,12 +687,38 @@ def filter_scalp_notification_report(
         if (
             len({item.family for item in items}) < 2
             or not any(item.alert_tier == "KURULUM" for item in items)
-            or max(item.score for item in items) < threshold
         ):
             continue
-        direction, _ = scalp_setup_direction(items, ledger_rows)
-        if direction in {"YUKARI", "AŞAĞI"}:
-            eligible_symbols.add(symbol)
+        assessment = scalp_setup_assessment(items, ledger_rows)
+        if assessment.direction not in {"YUKARI", "AŞAĞI"}:
+            continue
+        calibrated = assessment.sample_count >= max(int(minimum_calibration_samples), 0)
+        if calibrated and minimum_calibration_samples > 0:
+            if (
+                assessment.success_probability is None
+                or assessment.expected_net_bps is None
+                or assessment.success_probability
+                < float(minimum_direction_probability or 0.0)
+                or assessment.expected_net_bps < float(minimum_expected_net_bps or 0.0)
+            ):
+                continue
+            if (
+                minimum_quality_percentile is not None
+                and assessment.quality_percentile is None
+                and max(item.score for item in items) < threshold
+            ):
+                continue
+            if (
+                minimum_quality_percentile is not None
+                and assessment.quality_percentile is not None
+                and assessment.quality_percentile < float(minimum_quality_percentile)
+            ):
+                continue
+        elif max(item.score for item in items) < threshold:
+            # Until a family/regime has a minimally useful forward sample, keep
+            # the old detector-strength gate as an explicitly temporary fallback.
+            continue
+        eligible_symbols.add(symbol)
     return replace(
         report,
         observations=tuple(
@@ -651,6 +744,10 @@ def deliver_scalp_observations(
         report,
         minimum_score=settings.scalp_minimum_alert_score,
         ledger=ledger,
+        minimum_quality_percentile=settings.scalp_minimum_quality_percentile,
+        minimum_direction_probability=settings.scalp_minimum_direction_probability,
+        minimum_expected_net_bps=settings.scalp_minimum_expected_net_bps,
+        minimum_calibration_samples=settings.scalp_minimum_calibration_samples,
     )
     shown = filtered_report.top(settings.scalp_top_k) if filtered_report.observations else ()
     if not shown:
@@ -681,8 +778,9 @@ def record_scalp_target_setups(
     top_k: int,
     ledger: Iterable[dict[str, Any]] = (),
     notification_sent: bool = False,
+    milestone_horizon_hours: int = 24,
 ) -> int:
-    """Park directional setups for shadow +/−2% and +/−3% measurement.
+    """Park directional setups for shadow +/−2% and +/−3% milestones.
 
     A digest can contain several families for one market.  The target watcher is
     therefore keyed by the displayed market setup, not by an individual family.
@@ -709,6 +807,7 @@ def record_scalp_target_setups(
         if direction not in {"YUKARI", "AŞAĞI"}:
             continue
         aggregate = scalp_setup_forecast_stats(items, ledger_rows)
+        assessment = scalp_setup_assessment(items, ledger_rows)
         source = items[0]
         setup_id = _scalp_setup_id(source, manifest.version)
         path = directory / f"{setup_id}.json"
@@ -726,7 +825,16 @@ def record_scalp_target_setups(
             "source_price": float(source.price),
             "bar_close_time_ms": int(source.bar_close_time_ms),
             "horizons_minutes": list(manifest.scalp_horizons_minutes),
-            "horizon_ms": max(manifest.scalp_horizons_minutes) * 60_000,
+            "horizon_ms": max(int(milestone_horizon_hours), 1) * 3_600_000,
+            "strategy_code": assessment.strategy_code,
+            "strategy_label": assessment.strategy_label,
+            "assessment_horizon_minutes": assessment.horizon_minutes,
+            "success_probability": assessment.success_probability,
+            "expected_net_bps": assessment.expected_net_bps,
+            "calibration_sample_count": assessment.sample_count,
+            "independent_days": assessment.independent_days,
+            "quality_percentile": assessment.quality_percentile,
+            "confidence": assessment.confidence,
             "tier": "KURULUM",
             "score": float(max(item.score for item in items)),
             "probability_up": {
@@ -887,6 +995,14 @@ def settle_scalp_target_outcomes(
                 "settled_at_ms": current_ms,
                 "probability_up": record.get("probability_up", {}),
                 "probability_down": record.get("probability_down", {}),
+                "strategy_code": record.get("strategy_code", ""),
+                "strategy_label": record.get("strategy_label", ""),
+                "success_probability": record.get("success_probability"),
+                "expected_net_bps": record.get("expected_net_bps"),
+                "calibration_sample_count": record.get("calibration_sample_count", 0),
+                "independent_days": record.get("independent_days", 0),
+                "quality_percentile": record.get("quality_percentile"),
+                "confidence": record.get("confidence", "VERİ YOK"),
             }
             settled.append(outcome)
             recorded.add(percent)
@@ -906,6 +1022,211 @@ def settle_scalp_target_outcomes(
     if settled:
         _append_scalp_target_ledger(state_dir, settled)
     return settled
+
+
+def record_scalp_bracket_setups(
+    state_dir: Path,
+    report: ScalpScanReport,
+    *,
+    manifest: UniverseManifest,
+    top_k: int,
+    ledger: Iterable[dict[str, Any]] = (),
+    notification_sent: bool = False,
+    horizon_minutes: int = 60,
+) -> int:
+    """Park exact-direction setups for a realistic first-touch TP/SL test."""
+    shown = report.top(top_k)
+    ledger_rows = tuple(ledger)
+    grouped: dict[str, list[ScalpObservation]] = {}
+    for item in shown:
+        grouped.setdefault(item.perpetual_symbol, []).append(item)
+    directory = _bracket_pending_dir(state_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    added = 0
+    for items in grouped.values():
+        if (
+            not any(item.alert_tier == "KURULUM" for item in items)
+            or len({item.family for item in items}) < 2
+        ):
+            continue
+        assessment = scalp_setup_assessment(items, ledger_rows)
+        if assessment.direction not in {"YUKARI", "AŞAĞI"}:
+            continue
+        source = items[0]
+        setup_id = _scalp_setup_id(source, manifest.version)
+        path = directory / f"{setup_id}.json"
+        target_bps, stop_bps = _dynamic_bracket_bps(items)
+        payload = {
+            "schema": SCALP_BRACKET_PENDING_SCHEMA,
+            "setup_id": setup_id,
+            "universe_version": manifest.version,
+            "spot_symbol": source.spot_symbol,
+            "perpetual_symbol": source.perpetual_symbol,
+            "universe_group": source.universe_group,
+            "families": [item.family for item in items],
+            "direction": assessment.direction,
+            "strategy_code": assessment.strategy_code,
+            "strategy_label": assessment.strategy_label,
+            "source_price": float(source.price),
+            "bar_close_time_ms": int(source.bar_close_time_ms),
+            "horizon_minutes": max(int(horizon_minutes), 5),
+            "target_bps": target_bps,
+            "stop_bps": stop_bps,
+            "round_trip_cost_bps": max(
+                float(item.estimated_cost_bps) for item in items
+            ),
+            "raw_score": max(float(item.score) for item in items),
+            "quality_percentile": assessment.quality_percentile,
+            "success_probability": assessment.success_probability,
+            "expected_net_bps": assessment.expected_net_bps,
+            "calibration_sample_count": assessment.sample_count,
+            "independent_days": assessment.independent_days,
+            "confidence": assessment.confidence,
+            "notification_sent": bool(notification_sent),
+        }
+        try:
+            with path.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                    + "\n"
+                )
+            added += 1
+        except FileExistsError:
+            if notification_sent:
+                existing = _read_scalp_bracket_record(path)
+                if existing is not None and not bool(existing.get("notification_sent", False)):
+                    existing["notification_sent"] = True
+                    path.write_text(
+                        json.dumps(existing, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                        + "\n",
+                        encoding="utf-8",
+                    )
+    return added
+
+
+def settle_scalp_bracket_outcomes(
+    state_dir: Path,
+    data_dir: Path,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Settle at the first target/stop touch, conservatively resolving ties."""
+    directory = _bracket_pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    current_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
+    grace_ms = SCALP_SETTLEMENT_GRACE_DAYS * 24 * 60 * 60 * 1000
+    frames: dict[str, pd.DataFrame] = {}
+    settled: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        record = _read_scalp_bracket_record(path)
+        if record is None:
+            path.unlink(missing_ok=True)
+            continue
+        source_ms = int(record["bar_close_time_ms"])
+        deadline_ms = source_ms + int(record["horizon_minutes"]) * 60_000
+        symbol = str(record["perpetual_symbol"])
+        if symbol not in frames:
+            try:
+                frames[symbol] = load_cache(scalp_cache_path(data_dir, symbol))
+            except (MarketDataError, OSError, ValueError):
+                frames[symbol] = pd.DataFrame()
+        window = _scalp_bracket_window(
+            frames[symbol], source_ms, min(current_ms, deadline_ms)
+        )
+        if window.empty:
+            if current_ms - deadline_ms > grace_ms:
+                path.unlink(missing_ok=True)
+            continue
+        outcome = _first_touch_bracket(record, window, deadline_reached=current_ms >= deadline_ms)
+        if outcome is None:
+            continue
+        settled.append(outcome)
+        path.unlink(missing_ok=True)
+    if settled:
+        _append_scalp_bracket_ledger(state_dir, settled)
+    return settled
+
+
+def load_scalp_bracket_ledger(
+    state_dir: Path, *, limit: int = 20_000
+) -> list[dict[str, Any]]:
+    path = _bracket_ledger_path(state_dir)
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in lines[-limit:]:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("schema") == SCALP_BRACKET_LEDGER_SCHEMA:
+            rows.append(payload)
+    return rows
+
+
+def load_pending_scalp_brackets(
+    state_dir: Path, *, limit: int = 20_000
+) -> list[dict[str, Any]]:
+    if limit < 1:
+        raise ValueError("Scalp parantez limiti pozitif olmali")
+    directory = _bracket_pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json"))[-limit:]:
+        payload = _read_scalp_bracket_record(path)
+        if payload is not None:
+            rows.append(payload)
+    return rows
+
+
+def format_scalp_bracket_result(event: dict[str, Any]) -> str:
+    """Explain a realised volatility-aware scalp target in stacked form."""
+    direction = str(event.get("direction", ""))
+    return "\n".join(
+        [
+            f"✅ SCALP HEDEFİ | {event['spot_symbol']} | {direction}",
+            f"🧠 Strateji: {event.get('strategy_label', '-')}",
+            f"📍 Gerçekçi giriş: {_format_signal_price(float(event['entry_price']))}",
+            f"🎯 Hedef: {_format_signal_price(float(event['target_price']))} "
+            f"(+{float(event['target_bps']) / 100:.2f}%)",
+            f"🛑 Stop: {_format_signal_price(float(event['stop_price']))} "
+            f"(-{float(event['stop_bps']) / 100:.2f}%)",
+            f"💹 Net sonuç: {float(event['net_bps']) / 100:+.2f}% "
+            f"| maliyet dahil",
+            f"📈 En iyi / en kötü hareket: +{float(event['mfe_bps']) / 100:.2f}% "
+            f"/ -{float(event['mae_bps']) / 100:.2f}%",
+            f"🕒 Süre: {float(event['elapsed_minutes']):.0f} dk",
+            "ℹ️ Araştırma sonucu; emir veya kazanç garantisi değildir.",
+        ]
+    )
+
+
+def deliver_scalp_bracket_wins(
+    settings: Settings,
+    *,
+    notifier: TelegramNotifier | None = None,
+) -> list[tuple[dict[str, Any], TelegramDelivery]]:
+    """Deliver notified bracket wins idempotently; shadow outcomes stay silent."""
+    sender = notifier or TelegramNotifier(state_dir=settings.telegram_state_dir)
+    deliveries: list[tuple[dict[str, Any], TelegramDelivery]] = []
+    for event in load_scalp_bracket_ledger(settings.scalp_state_dir):
+        if event.get("resolution") != "TARGET" or not bool(event.get("notification_sent", False)):
+            continue
+        signal_id = digest_signal_id(f"scalp-bracket|{event['setup_id']}", 0)
+        delivery = sender.deliver_once(
+            signal_id=signal_id,
+            text=format_scalp_bracket_result(event),
+            state_dir=settings.telegram_state_dir / "scalp-brackets",
+            reply_markup=telegram_channel_keyboard(),
+        )
+        deliveries.append((event, delivery))
+    return deliveries
 
 
 def load_scalp_target_ledger(state_dir: Path, *, limit: int = 20_000) -> list[dict[str, Any]]:
@@ -961,7 +1282,10 @@ def mark_scalp_target_touch_delivered(
     delivered = {float(value) for value in record.get("delivered_percents", [])}
     delivered.add(percent)
     record["delivered_percents"] = sorted(delivered)
-    if all(level in delivered for level in SCALP_TARGET_TOUCH_PERCENTS):
+    recorded = {
+        float(value) for value in record.get("outcome_recorded_percents", [])
+    }
+    if all(level in recorded for level in SCALP_TARGET_TOUCH_PERCENTS):
         path.unlink(missing_ok=True)
         return
     path.write_text(
@@ -982,14 +1306,25 @@ def format_scalp_target_touch(event: dict[str, Any]) -> str:
     families = "+".join(str(value) for value in event.get("families", [])) or "-"
     source_ms = int(event["bar_close_time_ms"])
     touch_ms = int(event["touch_close_time_ms"])
+    milestone_hours = int(event.get("horizon_ms", 0)) / 3_600_000.0
+    assessment_lines: list[str] = []
+    if event.get("strategy_label"):
+        assessment_lines.append(f"🧠 Strateji: {event['strategy_label']}")
+    if event.get("success_probability") is not None:
+        assessment_lines.append(
+            f"📐 Sinyaldeki net başarı tahmini: %{float(event['success_probability']) * 100:.1f} "
+            f"| güven {event.get('confidence', '-')}"
+        )
     return "\n".join(
         [
-            f"🎯 SCALP HEDEFİ GÖRÜLDÜ | {event['spot_symbol']}",
+            f"🎯 MOMENTUM KİLOMETRE TAŞI | {event['spot_symbol']}",
             f"🧭 Yön özeti: {direction} | 15/30/60dk: {horizon_directions or '-'}",
+            *assessment_lines,
             f"📍 Sinyal fiyatı: {_format_signal_price(float(event['source_price']))}",
             f"✅ Hedef kademe: {sign}{percent:g}%",
             f"🎯 Hedef fiyatı: {_format_signal_price(float(event['target_price']))}",
             f"💹 Mumda görülen: {_format_signal_price(float(event['touch_price']))}",
+            f"⏱ Kilometre taşı izleme ufku: {milestone_hours:g} saat",
             f"📊 BT yukarı olasılığı (15/30/60dk): {up}",
             f"📉 BT aşağı olasılığı (15/30/60dk): {down}",
             f"🧩 Aile: {families} | örneklem ağırlıklı geçmiş sentez",
@@ -1055,23 +1390,7 @@ def scalp_forecast_stats(
     if not all_rows:
         return {}
 
-    same_symbol_regime = [
-        row
-        for row in all_rows
-        if str(row.get("perpetual_symbol", "")) == item.perpetual_symbol
-        and str(row.get("regime_state", "UNKNOWN")) == item.regime_state
-    ]
-    same_regime = [
-        row
-        for row in all_rows
-        if str(row.get("regime_state", "UNKNOWN")) == item.regime_state
-    ]
-    if len(same_symbol_regime) >= 10:
-        candidates = same_symbol_regime
-    elif len(same_regime) >= 10:
-        candidates = same_regime
-    else:
-        candidates = all_rows
+    candidates = _scalp_candidate_rows(item, all_rows)
 
     result: dict[int, tuple[int, float, float, float]] = {}
     for horizon in SCALP_BACKTEST_HORIZONS:
@@ -1177,6 +1496,190 @@ def scalp_setup_forecast_stats(
     return result
 
 
+def scalp_setup_assessment(
+    items: Iterable[ScalpObservation],
+    rows: Iterable[dict[str, Any]],
+) -> ScalpSetupAssessment:
+    """Turn settled family observations into one comparable setup assessment.
+
+    Detector strength remains useful inside its own family, but it is not mixed
+    as though B1=2.5 and F1=2.5 meant the same thing.  Instead, the assessment
+    uses each family's score percentile plus direction-aware net outcomes.
+    """
+    item_tuple = tuple(items)
+    row_tuple = tuple(row for row in rows if isinstance(row, dict))
+    direction, _ = scalp_setup_direction(item_tuple, row_tuple)
+    strategy_code = _strategy_code(item_tuple, direction)
+    strategy_label = STRATEGY_LABELS.get(strategy_code, strategy_code)
+    if direction not in {"YUKARI", "AŞAĞI"}:
+        return ScalpSetupAssessment(
+            strategy_code,
+            strategy_label,
+            direction,
+            None,
+            None,
+            None,
+            0,
+            0,
+            _setup_quality_percentile(item_tuple, row_tuple),
+            "VERİ YOK",
+        )
+
+    by_horizon: dict[int, tuple[float, float, int, int]] = {}
+    for horizon in SCALP_BACKTEST_HORIZONS:
+        directed_net: list[float] = []
+        days: set[str] = set()
+        for item in item_tuple:
+            family_rows = [
+                row
+                for row in row_tuple
+                if str(row.get("family", "")) == item.family
+                and _scalp_row_has_numbers(row)
+            ]
+            for row in _scalp_candidate_rows(item, family_rows):
+                if int(row.get("horizon_minutes", 0)) != horizon:
+                    continue
+                gross = float(row["gross_bps"])
+                try:
+                    cost = float(row.get("round_trip_cost_bps", item.estimated_cost_bps))
+                except (TypeError, ValueError):
+                    cost = float(item.estimated_cost_bps)
+                net = gross - cost if direction == "YUKARI" else -gross - cost
+                if math.isfinite(net):
+                    directed_net.append(net)
+                try:
+                    exit_ms = int(row.get("exit_time_ms", 0))
+                    if exit_ms > 0:
+                        days.add(datetime.fromtimestamp(exit_ms / 1000, tz=UTC).date().isoformat())
+                except (OSError, OverflowError, TypeError, ValueError):
+                    pass
+        if directed_net:
+            wins = sum(value > 0.0 for value in directed_net)
+            # A weak beta prior avoids displaying 0%/100% from tiny samples.
+            probability = (wins + 1.0) / (len(directed_net) + 2.0)
+            by_horizon[horizon] = (
+                probability,
+                sum(directed_net) / len(directed_net),
+                len(directed_net),
+                len(days),
+            )
+    percentile = _setup_quality_percentile(item_tuple, row_tuple)
+    if not by_horizon:
+        return ScalpSetupAssessment(
+            strategy_code,
+            strategy_label,
+            direction,
+            None,
+            None,
+            None,
+            0,
+            0,
+            percentile,
+            "VERİ YOK",
+        )
+    # Horizon is fixed by playbook before reading its realised return.  Picking
+    # whichever horizon happened to look best would introduce selection bias.
+    horizon = STRATEGY_HORIZONS[strategy_code]
+    selected = by_horizon.get(horizon)
+    if selected is None:
+        return ScalpSetupAssessment(
+            strategy_code,
+            strategy_label,
+            direction,
+            horizon,
+            None,
+            None,
+            0,
+            0,
+            percentile,
+            "VERİ YOK",
+        )
+    probability, expected_net, sample_count, independent_days = selected
+    confidence = _assessment_confidence(sample_count, independent_days)
+    return ScalpSetupAssessment(
+        strategy_code,
+        strategy_label,
+        direction,
+        horizon,
+        probability,
+        expected_net,
+        sample_count,
+        independent_days,
+        percentile,
+        confidence,
+    )
+
+
+def _scalp_candidate_rows(
+    item: ScalpObservation, rows: Iterable[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    all_rows = list(rows)
+    same_symbol_regime = [
+        row
+        for row in all_rows
+        if str(row.get("perpetual_symbol", "")) == item.perpetual_symbol
+        and str(row.get("regime_state", "UNKNOWN")) == item.regime_state
+    ]
+    same_regime = [
+        row
+        for row in all_rows
+        if str(row.get("regime_state", "UNKNOWN")) == item.regime_state
+    ]
+    if len(same_symbol_regime) >= 10:
+        return same_symbol_regime
+    if len(same_regime) >= 10:
+        return same_regime
+    return all_rows
+
+
+def _setup_quality_percentile(
+    items: Iterable[ScalpObservation], rows: Iterable[dict[str, Any]]
+) -> float | None:
+    row_tuple = tuple(rows)
+    percentiles: list[float] = []
+    for item in items:
+        scores: list[float] = []
+        for row in row_tuple:
+            if str(row.get("family", "")) != item.family:
+                continue
+            if str(row.get("regime_state", "UNKNOWN")) != item.regime_state:
+                continue
+            try:
+                score = float(row["score"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(score):
+                scores.append(score)
+        if len(scores) >= 10:
+            percentiles.append(sum(value <= item.score for value in scores) / len(scores))
+    return sum(percentiles) / len(percentiles) if percentiles else None
+
+
+def _strategy_code(items: Iterable[ScalpObservation], direction: str) -> str:
+    item_tuple = tuple(items)
+    families = {item.family for item in item_tuple}
+    bull = any(item.regime_state == "BULL" for item in item_tuple)
+    if direction == "YUKARI" and "F2" in families:
+        return "FLUSH_RECOVERY_LONG"
+    if direction == "YUKARI" and bull:
+        return "BULL_CONTINUATION_LONG"
+    if direction == "AŞAĞI" and bull:
+        return "BULL_EXHAUSTION_SHORT"
+    if direction == "AŞAĞI" and "F2" in families:
+        return "DOWNSIDE_CONTINUATION_SHORT"
+    if direction == "YUKARI":
+        return "DIRECTIONAL_LONG"
+    return "DIRECTIONAL_SHORT"
+
+
+def _assessment_confidence(sample_count: int, independent_days: int) -> str:
+    if sample_count < 30 or independent_days < 3:
+        return "DÜŞÜK"
+    if sample_count < 100 or independent_days < 10:
+        return "ORTA"
+    return "YÜKSEK"
+
+
 def _classify_bt_direction(stats: tuple[int, float, float, float]) -> str:
     probability_up = float(stats[1])
     median_net = float(stats[3])
@@ -1230,11 +1733,9 @@ def _format_scalp_backtest(
     return "\n".join(
         [
             f"{item.family} BT 15/30/60dk (yerlesmis ileri-test):",
-            f"  Yukari olasiligi: {up}",
-            f"  Asagi olasiligi: {down}",
+            f"  Yukari olasiligi: {up} | Asagi olasiligi: {down}",
             f"  Medyan hareket: {gross} bps ({gross_pct})",
-            f"  Medyan net hareket: {net} bps",
-            f"  Ornek sayisi n: {counts}",
+            f"  Medyan net hareket: {net} bps | Ornek sayisi n: {counts}",
         ]
     )
 
@@ -1243,6 +1744,28 @@ def _format_signal_price(price: float) -> str:
     """Keep tiny altcoin prices readable without hiding precision."""
     text = f"${price:,.8f}".rstrip("0").rstrip(".")
     return text if text != "$" else "$0"
+
+
+def _dynamic_bracket_bps(
+    items: Iterable[ScalpObservation],
+) -> tuple[float, float]:
+    """Return a predeclared volatility/cost-aware research target and stop."""
+    item_tuple = tuple(items)
+    ranges = [
+        float(item.volatility_bps)
+        for item in item_tuple
+        if item.volatility_bps is not None
+        and math.isfinite(float(item.volatility_bps))
+        and float(item.volatility_bps) > 0.0
+    ]
+    volatility = float(median(ranges)) if ranges else 25.0
+    cost = max((float(item.estimated_cost_bps) for item in item_tuple), default=12.0)
+    # Four cost units keeps the target from being swallowed by execution;
+    # range multiples make the bracket expand for volatile contracts.  Caps
+    # prevent one abnormal candle from creating a non-scalp target.
+    target_bps = min(max(2.0 * volatility, 4.0 * cost, 30.0), 150.0)
+    stop_bps = min(max(1.25 * volatility, 2.5 * cost, 25.0), 100.0)
+    return float(target_bps), float(stop_bps)
 
 
 def record_scalp_observations(
@@ -1282,6 +1805,8 @@ def record_scalp_observations(
             "universe_size": item.universe_size,
             "volume_1h_ratio": item.volume_1h_ratio,
             "mark_price": item.mark_price,
+            "taker_buy_ratio_1h": item.taker_buy_ratio_1h,
+            "volatility_bps": item.volatility_bps,
             "execution_eligible": item.execution_eligible,
             "alert_tier": item.alert_tier,
         }
@@ -1361,6 +1886,7 @@ def load_scalp_ledger(state_dir: Path, *, limit: int = 20_000) -> list[dict[str,
 def scalp_scorecard(
     rows: Iterable[dict[str, Any]],
     *,
+    bracket_rows: Iterable[dict[str, Any]] = (),
     days: int = 30,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -1370,6 +1896,17 @@ def scalp_scorecard(
     cutoff = current_ms - days * 86_400_000
     recent = [row for row in rows if int(row.get("exit_time_ms", 0)) >= cutoff]
     keys = sorted({(str(row["family"]), int(row["horizon_minutes"])) for row in recent})
+    recent_brackets = [
+        row
+        for row in bracket_rows
+        if int(row.get("exit_time_ms", 0)) >= cutoff
+    ]
+    strategies = sorted(
+        {str(row.get("strategy_label", "Bilinmeyen")) for row in recent_brackets}
+    )
+    notified_brackets = [
+        row for row in recent_brackets if bool(row.get("notification_sent", False))
+    ]
     return {
         "days": days,
         "observationCount": len({row.get("signal_id") for row in recent}),
@@ -1396,6 +1933,33 @@ def scalp_scorecard(
             for regime in sorted(
                 {str(row.get("regime_state", "UNKNOWN")) for row in recent}
             )
+        },
+        "bracketCount": len(recent_brackets),
+        "bracketWinRate": (
+            sum(row.get("resolution") == "TARGET" for row in recent_brackets)
+            / len(recent_brackets)
+            if recent_brackets
+            else 0.0
+        ),
+        "bracketMeanNetBps": (
+            sum(float(row.get("net_bps", 0.0)) for row in recent_brackets)
+            / len(recent_brackets)
+            if recent_brackets
+            else 0.0
+        ),
+        "bracketNotified": _aggregate_brackets(notified_brackets),
+        "bracketShadow": _aggregate_brackets(
+            [row for row in recent_brackets if not bool(row.get("notification_sent", False))]
+        ),
+        "byStrategy": {
+            strategy: _aggregate_brackets(
+                [
+                    row
+                    for row in recent_brackets
+                    if str(row.get("strategy_label", "Bilinmeyen")) == strategy
+                ]
+            )
+            for strategy in strategies
         },
     }
 
@@ -1427,6 +1991,33 @@ def format_scalp_scorecard(card: dict[str, Any]) -> str:
                 f"• {family} {horizon}dk: n={stats['count']}, "
                 f"net ort {stats['meanNetBps']:+.2f} bps, "
                 f"medyan {stats['medianNetBps']:+.2f}, kazanma %{stats['winRate'] * 100:.1f}"
+            )
+    lines.append("")
+    lines.append("🎚 GERÇEKÇİ İLK-DOKUNUŞ TP/SL")
+    if not card.get("bracketCount", 0):
+        lines.append("• Henüz olgun dinamik hedef/stop sonucu yok.")
+    else:
+        lines.append(
+            f"• Toplam: n={card['bracketCount']}, hedef önce %{card['bracketWinRate'] * 100:.1f}, "
+            f"net ort {card['bracketMeanNetBps']:+.2f} bps"
+        )
+        notified = card.get("bracketNotified", {})
+        shadow = card.get("bracketShadow", {})
+        lines.append(
+            f"• Telegram: n={notified.get('count', 0)}, "
+            f"hedef önce %{notified.get('winRate', 0.0) * 100:.1f}, "
+            f"net ort {notified.get('meanNetBps', 0.0):+.2f} bps"
+        )
+        lines.append(
+            f"• Sessiz karşılaştırma: n={shadow.get('count', 0)}, "
+            f"hedef önce %{shadow.get('winRate', 0.0) * 100:.1f}, "
+            f"net ort {shadow.get('meanNetBps', 0.0):+.2f} bps"
+        )
+        for strategy, stats in card.get("byStrategy", {}).items():
+            lines.append(
+                f"• {strategy}: n={stats['count']}, hedef önce %{stats['winRate'] * 100:.1f}, "
+                f"net ort {stats['meanNetBps']:+.2f} bps, "
+                f"stop {stats['stops']} / süre {stats['timeouts']}"
             )
     lines.extend(
         [
@@ -1566,6 +2157,8 @@ def _closed_market_context(frame: pd.DataFrame) -> _ScalpMarketContext:
     if len(frame) < 289:
         return _ScalpMarketContext()
     close = frame["close"].astype("float64")
+    high = frame["high"].astype("float64")
+    low = frame["low"].astype("float64")
     volume = frame["volume"].astype("float64")
     latest = len(frame) - 1
     try:
@@ -1577,6 +2170,7 @@ def _closed_market_context(frame: pd.DataFrame) -> _ScalpMarketContext:
         return _ScalpMarketContext()
     return_24h_pct = (price / prior - 1.0) * 100.0
     volume_1h_ratio: float | None = None
+    taker_buy_ratio_1h: float | None = None
     # A complete current hour plus 24 preceding, non-overlapping hourly
     # windows require 300 closed 5m bars.  If unavailable, omit the field.
     if len(frame) >= 300:
@@ -1589,7 +2183,29 @@ def _closed_market_context(frame: pd.DataFrame) -> _ScalpMarketContext:
         baseline = float(median(prior_hours)) if prior_hours else 0.0
         if math.isfinite(current_1h) and math.isfinite(baseline) and baseline > 0.0:
             volume_1h_ratio = current_1h / baseline
-    return _ScalpMarketContext(return_24h_pct=return_24h_pct, volume_1h_ratio=volume_1h_ratio)
+    if "taker_buy_base" in frame.columns:
+        taker_buy = frame["taker_buy_base"].astype("float64").iloc[-12:].sum()
+        recent_volume = volume.iloc[-12:].sum()
+        if math.isfinite(float(taker_buy)) and recent_volume > 0.0:
+            taker_buy_ratio_1h = min(max(float(taker_buy / recent_volume), 0.0), 1.0)
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        (
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs(),
+        ),
+        axis=1,
+    ).max(axis=1)
+    recent_range_bps = (true_range / close.replace(0.0, np.nan) * 10_000.0).iloc[-24:]
+    finite_ranges = [float(value) for value in recent_range_bps if math.isfinite(float(value))]
+    volatility_bps = float(median(finite_ranges)) if finite_ranges else None
+    return _ScalpMarketContext(
+        return_24h_pct=return_24h_pct,
+        volume_1h_ratio=volume_1h_ratio,
+        taker_buy_ratio_1h=taker_buy_ratio_1h,
+        volatility_bps=volatility_bps,
+    )
 
 
 def _rank_market_contexts(
@@ -1729,6 +2345,10 @@ def _observation(
         universe_size=(context.universe_size if context is not None else None),
         volume_1h_ratio=(context.volume_1h_ratio if context is not None else None),
         mark_price=(snapshot.mark_price if snapshot is not None else None),
+        taker_buy_ratio_1h=(
+            context.taker_buy_ratio_1h if context is not None else None
+        ),
+        volatility_bps=(context.volatility_bps if context is not None else None),
     )
 
 
@@ -1795,6 +2415,8 @@ def _time_exit_outcomes(
                 "universe_size": record.get("universe_size"),
                 "volume_1h_ratio": record.get("volume_1h_ratio"),
                 "mark_price": record.get("mark_price"),
+                "taker_buy_ratio_1h": record.get("taker_buy_ratio_1h"),
+                "volatility_bps": record.get("volatility_bps"),
                 "execution_eligible": bool(record.get("execution_eligible", False)),
                 "alert_tier": str(record.get("alert_tier", "RADAR")),
             }
@@ -1846,6 +2468,10 @@ def _target_pending_dir(state_dir: Path) -> Path:
     return state_dir / "target_pending"
 
 
+def _bracket_pending_dir(state_dir: Path) -> Path:
+    return state_dir / "bracket_pending"
+
+
 def _scalp_setup_id(item: ScalpObservation, universe_version: str) -> str:
     material = f"{universe_version}|{item.perpetual_symbol}|setup|{item.bar_close_time_ms}"
     return sha256(material.encode("ascii")).hexdigest()
@@ -1863,6 +2489,110 @@ def _scalp_target_window(
         (frame["close_time_ms"] > after_ms) & (frame["close_time_ms"] <= until_ms)
     ]
     return selected.loc[:, ["close_time_ms", "high", "low", "close"]]
+
+
+def _scalp_bracket_window(
+    frame: pd.DataFrame, after_ms: int, until_ms: int
+) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    required = {"close_time_ms", "open", "high", "low", "close"}
+    if not required.issubset(frame.columns):
+        return pd.DataFrame()
+    selected = frame[
+        (frame["close_time_ms"] > after_ms) & (frame["close_time_ms"] <= until_ms)
+    ]
+    return selected.loc[:, ["close_time_ms", "open", "high", "low", "close"]]
+
+
+def _first_touch_bracket(
+    record: dict[str, Any],
+    window: pd.DataFrame,
+    *,
+    deadline_reached: bool,
+) -> dict[str, Any] | None:
+    if window.empty:
+        return None
+    entry_price = float(window.iloc[0]["open"])
+    direction = str(record["direction"])
+    long_side = direction == "YUKARI"
+    target_bps = float(record["target_bps"])
+    stop_bps = float(record["stop_bps"])
+    target_price = entry_price * (
+        1.0 + target_bps / 10_000.0 if long_side else 1.0 - target_bps / 10_000.0
+    )
+    stop_price = entry_price * (
+        1.0 - stop_bps / 10_000.0 if long_side else 1.0 + stop_bps / 10_000.0
+    )
+    resolution: str | None = None
+    ambiguous = False
+    exit_price: float | None = None
+    exit_time_ms: int | None = None
+    exit_position = len(window) - 1
+    for position, (close_time, _open, high, low, _close) in enumerate(
+        window.itertuples(index=False)
+    ):
+        high_value = float(high)
+        low_value = float(low)
+        target_hit = high_value >= target_price if long_side else low_value <= target_price
+        stop_hit = low_value <= stop_price if long_side else high_value >= stop_price
+        if target_hit and stop_hit:
+            # Five-minute bars do not reveal intrabar ordering.  Counting the
+            # tie as STOP avoids flattering the strategy with unknowable wins.
+            resolution = "STOP"
+            ambiguous = True
+            exit_price = stop_price
+        elif target_hit:
+            resolution = "TARGET"
+            exit_price = target_price
+        elif stop_hit:
+            resolution = "STOP"
+            exit_price = stop_price
+        if resolution is not None:
+            exit_time_ms = int(close_time)
+            exit_position = position
+            break
+    if resolution is None:
+        if not deadline_reached:
+            return None
+        resolution = "TIME_EXIT"
+        exit_price = float(window.iloc[-1]["close"])
+        exit_time_ms = int(window.iloc[-1]["close_time_ms"])
+    assert exit_price is not None and exit_time_ms is not None
+    gross_bps = (
+        math.log(exit_price / entry_price) * 10_000.0
+        if long_side
+        else math.log(entry_price / exit_price) * 10_000.0
+    )
+    realised_window = window.iloc[: exit_position + 1]
+    highs = realised_window["high"].astype("float64")
+    lows = realised_window["low"].astype("float64")
+    if long_side:
+        mfe_bps = max(math.log(float(highs.max()) / entry_price) * 10_000.0, 0.0)
+        mae_bps = max(math.log(entry_price / float(lows.min())) * 10_000.0, 0.0)
+    else:
+        mfe_bps = max(math.log(entry_price / float(lows.min())) * 10_000.0, 0.0)
+        mae_bps = max(math.log(float(highs.max()) / entry_price) * 10_000.0, 0.0)
+    cost = float(record["round_trip_cost_bps"])
+    return {
+        "schema": SCALP_BRACKET_LEDGER_SCHEMA,
+        **{key: value for key, value in record.items() if key != "schema"},
+        "entry_price": entry_price,
+        "target_price": target_price,
+        "stop_price": stop_price,
+        "exit_price": exit_price,
+        "exit_time_ms": exit_time_ms,
+        "resolution": resolution,
+        "success": resolution == "TARGET",
+        "ambiguous_same_bar": ambiguous,
+        "gross_bps": gross_bps,
+        "net_bps": gross_bps - cost,
+        "mfe_bps": mfe_bps,
+        "mae_bps": mae_bps,
+        "elapsed_minutes": max(
+            0.0, (exit_time_ms - int(record["bar_close_time_ms"])) / 60_000.0
+        ),
+    }
 
 
 def _scalp_target_touches(
@@ -1952,6 +2682,50 @@ def _read_scalp_target_record(path: Path) -> dict[str, Any] | None:
     return payload
 
 
+def _read_scalp_bracket_record(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    required = (
+        "setup_id",
+        "spot_symbol",
+        "perpetual_symbol",
+        "direction",
+        "source_price",
+        "bar_close_time_ms",
+        "horizon_minutes",
+        "target_bps",
+        "stop_bps",
+        "round_trip_cost_bps",
+    )
+    if not isinstance(payload, dict) or payload.get("schema") != SCALP_BRACKET_PENDING_SCHEMA:
+        return None
+    if any(key not in payload for key in required):
+        return None
+    try:
+        source_price = float(payload["source_price"])
+        source_ms = int(payload["bar_close_time_ms"])
+        horizon = int(payload["horizon_minutes"])
+        target = float(payload["target_bps"])
+        stop = float(payload["stop_bps"])
+        cost = float(payload["round_trip_cost_bps"])
+    except (TypeError, ValueError):
+        return None
+    if (
+        not all(math.isfinite(value) for value in (source_price, target, stop, cost))
+        or source_price <= 0.0
+        or source_ms < 0
+        or horizon <= 0
+        or target <= 0.0
+        or stop <= 0.0
+        or cost < 0.0
+        or str(payload["direction"]) not in {"YUKARI", "AŞAĞI"}
+    ):
+        return None
+    return payload
+
+
 def _format_probability_map(value: Any, horizons: tuple[int, ...]) -> str:
     mapping = value if isinstance(value, dict) else {}
     return "/".join(
@@ -1970,6 +2744,10 @@ def _target_ledger_path(state_dir: Path) -> Path:
     return state_dir / "target_ledger.jsonl"
 
 
+def _bracket_ledger_path(state_dir: Path) -> Path:
+    return state_dir / "bracket_ledger.jsonl"
+
+
 def _append_scalp_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     with _ledger_path(state_dir).open("a", encoding="utf-8", newline="\n") as handle:
@@ -1980,6 +2758,15 @@ def _append_scalp_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
 def _append_scalp_target_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     with _target_ledger_path(state_dir).open(
+        "a", encoding="utf-8", newline="\n"
+    ) as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _append_scalp_bracket_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with _bracket_ledger_path(state_dir).open(
         "a", encoding="utf-8", newline="\n"
     ) as handle:
         for row in rows:
@@ -1998,37 +2785,64 @@ def _aggregate_scalp(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _aggregate_brackets(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {
+            "count": 0,
+            "winRate": 0.0,
+            "meanNetBps": 0.0,
+            "stops": 0,
+            "timeouts": 0,
+        }
+    return {
+        "count": len(rows),
+        "winRate": sum(row.get("resolution") == "TARGET" for row in rows) / len(rows),
+        "meanNetBps": sum(float(row.get("net_bps", 0.0)) for row in rows) / len(rows),
+        "stops": sum(row.get("resolution") == "STOP" for row in rows),
+        "timeouts": sum(row.get("resolution") == "TIME_EXIT" for row in rows),
+    }
+
+
 __all__ = [
     "FAMILY_EVIDENCE",
     "FAMILY_LABELS",
     "SCALP_INTERVAL",
+    "SCALP_BRACKET_LEDGER_SCHEMA",
     "SCALP_TARGET_LEDGER_SCHEMA",
     "SCALP_TARGET_TOUCH_PERCENTS",
     "BullRegime",
     "ScalpObservation",
     "ScalpScanReport",
+    "ScalpSetupAssessment",
+    "deliver_scalp_bracket_wins",
     "deliver_scalp_observations",
     "deliver_scalp_target_touches",
     "evaluate_bull_regime",
     "filter_scalp_notification_report",
     "format_scalp_observation_digest",
+    "format_scalp_bracket_result",
     "format_scalp_scorecard",
     "format_scalp_target_touch",
     "load_pending_scalp_targets",
+    "load_pending_scalp_brackets",
+    "load_scalp_bracket_ledger",
     "load_scalp_ledger",
     "load_scalp_target_ledger",
     "mark_scalp_target_touch_delivered",
     "pending_scalp_target_touches",
     "record_scalp_observations",
+    "record_scalp_bracket_setups",
     "record_scalp_target_setups",
     "refresh_and_scan_scalp_universe",
     "scalp_cache_path",
     "scalp_forecast_stats",
     "scalp_scorecard",
     "scalp_setup_direction",
+    "scalp_setup_assessment",
     "scalp_setup_forecast_stats",
     "scan_cached_scalp_universe",
     "scan_scalp_frame",
     "settle_scalp_observations",
+    "settle_scalp_bracket_outcomes",
     "settle_scalp_target_outcomes",
 ]

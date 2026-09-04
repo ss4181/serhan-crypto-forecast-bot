@@ -20,7 +20,7 @@
     .controls { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: .8rem; }
     input, select { border: 1px solid #c7d0da; border-radius: 7px; padding: .5rem; background: #fff; color: inherit; }
     .table-wrap { overflow-x: auto; background: #fff; border: 1px solid #dce3eb; border-radius: 10px; }
-    table { width: 100%; border-collapse: collapse; min-width: 850px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1200px; }
     th, td { padding: .55rem .7rem; border-bottom: 1px solid #e7ecf1; text-align: left; white-space: nowrap; }
     th { background: #edf2f7; font-size: .8rem; }
     .up { color: #17824b; font-weight: 700; } .down { color: #bd3b3b; font-weight: 700; }
@@ -42,14 +42,15 @@
     <div class="card">Sonuçlanan<span class="value" id="settled">-</span></div>
     <div class="card">Bekleyen<span class="value" id="pending">-</span></div>
     <div class="card">Scalp %2/%3<span class="value" id="scalp-rate">-</span></div>
+    <div class="card">Dinamik TP/SL<span class="value" id="bracket-rate">-</span></div>
     <div class="card">Bildirim filtresi<span class="value" id="notified-rate">-</span></div>
   </section>
   <div class="controls">
     <input id="search" placeholder="Coin ara (BTCUSDT)">
-    <select id="kind"><option value="">Tümü</option><option value="regular">Normal model</option><option value="scalp-target">Scalp hedef</option></select>
-    <select id="status"><option value="">Tüm durumlar</option><option value="HEDEF ULAŞTI">Hedef ulaştı</option><option value="HEDEF ULAŞMADI">Hedef ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option></select>
+    <select id="kind"><option value="">Tümü</option><option value="regular">Normal model</option><option value="scalp-target">%2/%3 kilometre taşı</option><option value="scalp-bracket">Dinamik TP/SL</option></select>
+    <select id="status"><option value="">Tüm durumlar</option><option value="TARGET">Hedef önce</option><option value="STOP">Stop önce</option><option value="TIME_EXIT">Süre sonu</option><option value="TP/SL BEKLEMEDE">TP/SL beklemede</option><option value="HEDEF ULAŞTI">%2/%3 ulaştı</option><option value="HEDEF ULAŞMADI">%2/%3 ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option></select>
   </div>
-  <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Skor</th><th>Aile</th><th>Hedef</th><th>Durum</th><th>Bildirim</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Strateji</th><th>Ham güç</th><th>Kalite/Güven</th><th>Tahmin</th><th>Aile</th><th>Hedef / Stop</th><th>Durum</th><th>Bildirim</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
   <footer class="muted">Bu sayfa araştırma/ileri-test sonuçlarını gösterir; emir veya kazanç garantisi değildir.</footer>
 </main>
 <script>
@@ -65,8 +66,12 @@
       const direction = `<span class="${x.direction.includes('YUKARI') ? 'up' : 'down'}">${x.direction || '-'}</span>`;
       const stateClass = x.success === true ? 'hit' : x.success === false ? 'miss' : 'pending';
       const families = Array.isArray(x.families) ? x.families.join('+') : '-';
-      return `<tr><td>${time}</td><td>${x.kind === 'scalp-target' ? 'Scalp' : 'Model'}</td><td>${x.symbol}</td><td>${direction}</td><td>${x.score == null ? '-' : fmt.format(x.score)}</td><td>${families}</td><td>${x.targetPercent == null ? '-' : (x.direction === 'YUKARI' ? '+' : '-') + x.targetPercent + '%'}</td><td class="${stateClass}">${x.status}</td><td>${x.notified ? 'Gönderildi' : 'Sessiz'}</td><td>${x.netBps == null ? '-' : fmt.format(x.netBps)}</td></tr>`;
-    }).join('') || '<tr><td colspan="10">Kayıt yok.</td></tr>';
+      const type = x.kind === 'scalp-bracket' ? 'Dinamik TP/SL' : x.kind === 'scalp-target' ? '%2/%3' : 'Model';
+      const quality = x.qualityPercentile == null ? (x.confidence || '-') : `%${(x.qualityPercentile * 100).toFixed(0)} / ${x.confidence || '-'}`;
+      const forecast = x.successProbability == null ? '-' : `%${(x.successProbability * 100).toFixed(1)} / ${x.expectedNetBps == null ? '-' : fmt.format(x.expectedNetBps) + ' bps'}`;
+      const levels = x.targetPercent == null ? '-' : `${x.targetPercent}%${x.stopPercent == null ? '' : ' / ' + x.stopPercent + '%'}`;
+      return `<tr><td>${time}</td><td>${type}</td><td>${x.symbol}</td><td>${direction}</td><td>${x.strategy || '-'}</td><td>${x.score == null ? '-' : fmt.format(x.score)}</td><td>${quality}</td><td>${forecast}</td><td>${families}</td><td>${levels}</td><td class="${stateClass}">${x.status}</td><td>${x.notified ? 'Gönderildi' : 'Sessiz'}</td><td>${x.netBps == null ? '-' : fmt.format(x.netBps)}</td></tr>`;
+    }).join('') || '<tr><td colspan="13">Kayıt yok.</td></tr>';
   }
   fetch('scalp-data.json', { cache: 'no-store' }).then(r => r.json()).then(x => {
     data = x; const s = x.summary || {}, status = x.sourceStatus || 'unknown';
@@ -74,7 +79,7 @@
     const badge = el('freshness'); badge.className = `freshness ${status}`; badge.textContent = sourceLabel;
     el('updated').textContent = `Sayfa yayını: ${x.generatedAtUtc || '-'} • son sinyal: ${x.latestSignalAtUtc || '-'} • kayıt: ${s.signalCount || 0}`;
     el('total').textContent = s.signalCount ?? 0; el('settled').textContent = s.settledCount ?? 0; el('pending').textContent = s.pendingCount ?? 0;
-    el('scalp-rate').textContent = pct(s.scalpTargetHitRate); el('notified-rate').textContent = pct(s.notifiedScalpTargetHitRate); render();
+    el('scalp-rate').textContent = pct(s.scalpTargetHitRate); el('bracket-rate').textContent = pct(s.scalpBracketWinRate); el('notified-rate').textContent = pct(s.notifiedScalpTargetHitRate); render();
   }).catch(() => { el('updated').textContent = 'Dashboard verisi henüz yayınlanmadı.'; el('freshness').textContent = 'Veri alınamadı'; render(); });
   ['search','kind','status'].forEach(id => el(id).addEventListener('input', render));
 </script>
