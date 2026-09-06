@@ -12,6 +12,9 @@ const date = value => {
   return Number.isNaN(d.valueOf()) ? "—" : d.toLocaleString("tr-TR", {timeZone: "Europe/Istanbul"});
 };
 let signals = [];
+let measurements = null;
+const canonicalStatus = status => ({HEDEF: "TARGET", SURE: "TIME_EXIT"}[status] || status);
+const statusText = status => ({TARGET: "HEDEF ÖNCE", HEDEF: "HEDEF ÖNCE", TIME_EXIT: "SÜRE SONU", SURE: "SÜRE SONU"}[status] || status);
 function cell(row, text, className = "") {
   const td = document.createElement("td");
   td.textContent = String(text ?? "—");
@@ -23,7 +26,8 @@ function render() {
   const q = el("search").value.trim().toUpperCase();
   const kind = el("kind").value;
   const status = el("status").value;
-  const rows = signals.filter(x => (!q || String(x.symbol || "").includes(q)) && (!kind || x.kind === kind) && (!status || x.status === status));
+  const audience = el("audience").value;
+  const rows = signals.filter(x => (audience === "all" || !!x.notified === (audience === "notified")) && (!q || String(x.symbol || "").toUpperCase().includes(q)) && (!kind || x.kind === kind) && (!status || canonicalStatus(x.status) === status));
   const tbody = el("rows");
   tbody.replaceChildren();
   el("result-count").textContent = `${rows.length} / ${signals.length} kayıt gösteriliyor`;
@@ -46,7 +50,7 @@ function render() {
     cell(row, price(x.sourcePrice));
     cell(row, levels);
     cell(row, date(x.touchTimeMs));
-    cell(row, x.status, x.success === true ? "hit" : x.success === false ? "miss" : "pending");
+    cell(row, statusText(x.status), x.success === true ? "hit" : x.success === false ? "miss" : "pending");
     cell(row, x.notified ? "Gönderildi" : "Sessiz");
     cell(row, number(x.netBps));
     tbody.appendChild(row);
@@ -57,6 +61,41 @@ function render() {
     tbody.appendChild(row);
   }
 }
+function renderMeasurements() {
+  const touch = el("touch-cohorts"), bracket = el("bracket-cohorts");
+  touch.replaceChildren(); bracket.replaceChildren();
+  const cohorts = measurements?.audiences?.[el("audience").value];
+  for (const x of Array.isArray(cohorts) ? cohorts : []) {
+    const row = document.createElement("tr");
+    const hours = num(x.horizonHours) === null ? "Bilinmiyor" : `${number(x.horizonHours)} saat`;
+    const missing = (num(x.unresolvedCount) || 0) + (num(x.unknownDeadlineCount) || 0);
+    if (x.kind === "scalp-target") {
+      cell(row, `%${number(x.targetPercent)}`); cell(row, hours);
+      cell(row, `${number(x.hits)} / ${number(x.resolvedCount)}`);
+      cell(row, pct(x.hitRate));
+      cell(row, `${number(x.openCount)} (${number(x.earlyHits)} erken dokunuş)`);
+      cell(row, number(missing), missing ? "pending" : "");
+      touch.appendChild(row);
+    } else if (x.kind === "scalp-bracket") {
+      cell(row, hours); cell(row, number(x.resolvedCount));
+      cell(row, `${number(x.hits)} / ${number(x.stops)} / ${number(x.timeExits)}`);
+      cell(row, pct(x.hitRate)); cell(row, pct(x.positiveNetRate));
+      cell(row, num(x.meanNetBps) === null ? "—" : `${number(x.meanNetBps)} bps`, x.meanNetBps > 0 ? "hit" : x.meanNetBps < 0 ? "miss" : "");
+      cell(row, `${number(x.openCount)} / ${number(missing)}${x.missingNetCount ? ` · ${number(x.missingNetCount)} net eksik` : ""}`);
+      bracket.appendChild(row);
+    }
+  }
+  for (const [table, columns] of [[touch, 6], [bracket, 7]]) {
+    if (!table.children.length) {
+      const row = document.createElement("tr");
+      cell(row, Array.isArray(cohorts) ? "Bu kapsamda ölçülecek kayıt yok." : "Bu yayında karşılaştırılabilir ölçümler bulunmuyor.").colSpan = columns;
+      table.appendChild(row);
+    }
+  }
+  el("measurement-note").textContent = measurements?.historyComplete === false
+    ? "Geçmiş kayıt sınırına ulaşıldı; eksik geçmişten oran üretilmiyor."
+    : "Oranlar yalnız kayıtlı ve takip süresi dolmuş grupları kapsar. —: henüz hesaplanamaz. Küçük örnek yüksek güven anlamına gelmez.";
+}
 async function load() {
   try {
     const response = await fetch("scalp-data.json", {cache: "no-store"});
@@ -64,6 +103,7 @@ async function load() {
     const data = await response.json();
     if (data.schema !== "trade3-signal-dashboard-v1" || !Array.isArray(data.signals)) throw new Error("Geçersiz veri");
     signals = data.signals.filter(x => x && typeof x === "object");
+    measurements = data.measurements || null;
     const s = data.summary || {};
     el("updated").textContent = `Son yayın: ${date(data.generatedAtUtc)} • Son sinyal: ${date(data.latestSignalAtUtc)}`;
     const stale = !data.generatedAtUtc || !Number.isFinite(Date.parse(data.generatedAtUtc)) || Date.now() - Date.parse(data.generatedAtUtc) > 6 * 3600000;
@@ -75,16 +115,19 @@ async function load() {
       const v = (s.targetLevels || {})[String(level)];
       el("target-" + level).textContent = v ? `${number(v.hits)} dokundu · ${number(v.misses)} süresi doldu · ${number(v.pending)} bekliyor` : "Veri yok";
     }
-    el("bracket-rate").textContent = `${number(s.scalpBracketWins)} / ${number(s.settledScalpBracketCount)} sonuç`;
-    el("notified-rate").textContent = `${number(s.notifiedScalpTargetHits)} / ${number(s.notifiedScalpTargetCount)} kademe (2/3/5)`;
+    renderMeasurements();
     render();
   } catch (error) {
     el("updated").textContent = "Veri yüklenemedi. Sayfayı yenileyin veya daha sonra tekrar deneyin.";
     el("freshness").className = "freshness stale";
     el("freshness").textContent = "Veri alınamadı";
     signals = [];
+    measurements = null;
+    renderMeasurements();
     render();
   }
 }
 for (const id of ["search", "kind", "status"]) el(id).addEventListener("input", render);
+el("audience").value = "notified";
+el("audience").addEventListener("input", () => { renderMeasurements(); render(); });
 load();

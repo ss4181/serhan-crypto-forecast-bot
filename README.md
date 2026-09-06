@@ -794,3 +794,27 @@ Telegram Bot API `sendMessage` metodunu kullanır.
 
 Resmî teknik dayanaklar: [Binance Spot REST API](https://developers.binance.com/en/docs/products/spot/rest-api)
 ve [Telegram Bot API sendMessage](https://core.telegram.org/bots/api#sendmessage).
+
+## Ölçüm karnesi (7 Eylül 2026)
+
+Dashboard iki farklı soruyu ayrı gösterir:
+
+- **%2/%3/%5 dokunuşu:** sinyal yönünde ilgili fiyat seviyesine temas edildi mi?
+  Stop sonrası temas da dokunuştur; gerçekleşmiş işlem kârı sayılmaz.
+- **Hedef/stop simülasyonu:** hedef mi stop mu önce geldi; maliyet sonrası sonuç
+  pozitif mi? Hedefe ulaşan bir simülasyon maliyet yüzünden net negatif olabilir.
+
+Oranlara yalnız kendi takip süresi dolmuş sinyaller girer. Örneğin 24 saatlik
+bir sinyal 2 saatte hedefe ulaşsa bile 24 saat tamamlanmadan oranı değiştirmez.
+%2, %3 ve %5 ile farklı takip süreleri ayrı gruplardır. Eksik sonuç/takip süresi
+olan grupta oran gösterilmez. “Veri eksik” bir kayıp veya başarısızlık değildir.
+Bildirim gönderilen ve sessiz izlenen kayıtlar ayrı seçilebilir.
+
+Özetler gösterilecek tablo satırı sınırından önce hesaplanır; kaynak başına
+20.000 kayıt güvenlik sınırına ulaşılırsa eksik geçmişten oran üretilmez.
+Bu karne mevcut kayıtları tanımlar; bağımsız örnek veya gelecekte kazanç garantisi
+vermez. Eski dosyalarda kaybolmuş kayıtları yeniden oluşturmaz. Scalp stratejisi
+ve bildirim eşikleri bu arayüz güncellemesinde değiştirilmemiştir.
+
+JSON'daki eski toplu oran alanları artık `null` döner. Yeni tüketiciler
+`measurements.audiences` altındaki seviye/ufuk/kapsam gruplarını kullanmalıdır.

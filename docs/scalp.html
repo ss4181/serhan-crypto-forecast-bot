@@ -6,9 +6,13 @@
   <title>Trade3 sinyal karnesi</title>
   <style>
     :root { color-scheme: light dark; }
-    body { margin: 0; padding: 1.5rem; font: 15px/1.45 system-ui, sans-serif; background: #f6f8fb; color: #18202a; }
+    body { margin: 0; padding: 1.5rem; font: 16px/1.45 system-ui, sans-serif; background: #f6f8fb; color: #18202a; }
     main { max-width: 1200px; margin: auto; }
     h1 { margin: 0 0 .25rem; }
+    h2 { font-size: 1.1rem; margin: 1.4rem 0 .5rem; }
+    .cohort-table { min-width: 650px; }
+    .measurement-note { font-size: .875rem; margin: .5rem 0 1rem; }
+    summary { cursor: pointer; font-weight: 600; }
     .muted { color: #66717f; }
     .freshness { display: inline-block; margin-top: .45rem; border-radius: 999px; padding: .25rem .65rem; font-size: .82rem; font-weight: 700; }
     .freshness.fresh { background: #dff5e8; color: #12683c; }
@@ -22,7 +26,7 @@
     .table-wrap { overflow-x: auto; background: #fff; border: 1px solid #dce3eb; border-radius: 10px; }
     table { width: 100%; border-collapse: collapse; min-width: 1000px; }
     th, td { padding: .55rem .7rem; border-bottom: 1px solid #e7ecf1; text-align: left; white-space: nowrap; }
-    th { background: #edf2f7; font-size: .8rem; }
+    th { background: #edf2f7; font-size: .875rem; }
     .up { color: #17824b; font-weight: 700; } .down { color: #bd3b3b; font-weight: 700; }
     .hit { color: #17824b; } .miss { color: #bd3b3b; } .pending { color: #9a6a00; }
     footer { margin-top: 1rem; font-size: .8rem; }
@@ -38,23 +42,34 @@
   <p id="result-count" class="muted" aria-live="polite"></p>
   <div class="muted" id="updated">Veri yükleniyor…</div>
   <div class="freshness unknown" id="freshness">Veri durumu bekleniyor</div>
-  <section class="cards">
+  <h2>Gözlenen kayıtlar · tümü</h2>
+  <section class="cards" aria-label="Tüm kayıtların sayıları">
     <div class="card">Toplam<span class="value" id="total">-</span></div>
     <div class="card">Sonuçlanan<span class="value" id="settled">-</span></div>
     <div class="card">Bekleyen<span class="value" id="pending">-</span></div>
     <div class="card">%2 dokunuş<span class="value" id="target-2">-</span></div>
     <div class="card">%3 dokunuş<span class="value" id="target-3">-</span></div>
     <div class="card">%5 dokunuş<span class="value" id="target-5">-</span></div>
-    <div class="card">Stop öncesi hedef<span class="value" id="bracket-rate">-</span></div>
-    <div class="card">Bildirimli dokunuşlar<span class="value" id="notified-rate">-</span></div>
   </section>
+  <p class="measurement-note muted">Yukarıdaki dokunuşlar ufku henüz dolmamış sinyalleri de içerir; başarı oranı değildir.</p>
+  <label>İncelenen sinyaller
+    <select aria-label="Bildirim kapsamı" id="audience"><option value="notified">Bildirim gönderilen</option><option value="muted">Sessiz izlenen</option><option value="all">Hepsi</option></select>
+  </label>
+  <h2>1. %2 / %3 / %5 dokunuşları</h2>
+  <p class="measurement-note muted">Yalnız takip süresi dolan sinyaller oranlara girer. Farklı takip süreleri birleştirilmez. Dokunuş, stop sonrası da olabilir.</p>
+  <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Hedef</th><th>Takip süresi</th><th>Dokundu / Sonuç</th><th>Dokunuş oranı</th><th>Ufku açık</th><th>Veri eksik</th></tr></thead><tbody id="touch-cohorts"></tbody></table></div>
+  <h2>2. Hedef / stop simülasyonu</h2>
+  <p class="measurement-note muted">Stop öncesi hedef ve maliyet sonrası pozitif sonuç farklı ölçülerdir. Net değerler işlem başına simülasyondur; hesap getirisi değildir.</p>
+  <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Takip süresi</th><th>Sonuç</th><th>Hedef / Stop / Süre</th><th>Hedef önce</th><th>Net pozitif</th><th>Ort. net</th><th>Ufku açık / Eksik</th></tr></thead><tbody id="bracket-cohorts"></tbody></table></div>
+  <p class="measurement-note muted" id="measurement-note" aria-live="polite">Ölçümler yükleniyor…</p>
+  <h2>Sinyal kayıtları</h2>
   <div class="controls">
     <input aria-label="Coin ara" id="search" placeholder="Coin ara (BTCUSDT)">
     <select aria-label="Kayıt türü" id="kind"><option value="">Tümü</option><option value="regular">Normal model</option><option value="scalp-target">%2/%3/%5 kilometre taşı</option><option value="scalp-bracket">Dinamik TP/SL</option></select>
-    <select aria-label="Sonuç" id="status"><option value="">Tüm durumlar</option><option value="TARGET">Hedef önce</option><option value="STOP">Stop önce</option><option value="TIME_EXIT">Süre sonu</option><option value="TP/SL BEKLEMEDE">TP/SL beklemede</option><option value="HEDEF ULAŞTI">%2/%3/%5 ulaştı</option><option value="HEDEF ULAŞMADI">%2/%3/%5 ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option></select>
+    <select aria-label="Sonuç" id="status"><option value="">Tüm durumlar</option><option value="TARGET">Hedef önce</option><option value="STOP">Stop önce</option><option value="TIME_EXIT">Süre sonu</option><option value="TP/SL BEKLEMEDE">TP/SL beklemede</option><option value="HEDEF ULAŞTI">%2/%3/%5 ulaştı</option><option value="HEDEF ULAŞMADI">%2/%3/%5 ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option><option value="VERİ EKSİK">Veri eksik</option></select>
   </div>
-  <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Strateji</th><th>Ham güç</th><th>Kalite/Güven</th><th>Tahmin</th><th>Aile</th><th>Sinyal fiyatı</th><th>Hedef / Stop</th><th>Dokunma zamanı</th><th>Durum</th><th>Bildirim</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
-  <p class="muted">Kartlar tüm yüklü kayıtları özetler; filtreler tabloyu değiştirir. Her kademe ayrı ölçülür; aynı sinyalin %2/%3/%5 kayıtları ayrı işlemler değildir. Dokunuş, stop sonrasında da gerçekleşebilir ve işlem kârı sayılmaz. Açık hedefler başarı/başarısızlık sayılmaz; erken dokunuşlar göründüğü için tamamlanmamış dönemden başarı oranı çıkarmayın. “Gönderildi” ilk sinyalin en az bir alıcıya teslimat kaydıdır; herkesin okuduğu anlamına gelmez. Tahmin yüzdesi %2/%3/%5 hedefine ulaşma olasılığı değildir. Sayfa yayın zamanında yenilenir; canlı fiyat akışı değildir.</p>
+  <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Strateji</th><th>Ham güç</th><th>Kalite/Güven</th><th>Geçmiş örnek</th><th>Aile</th><th>Sinyal fiyatı</th><th>Hedef / Stop</th><th>Dokunuş / Sonuç zamanı</th><th>Durum</th><th>İlk sinyal</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <details class="measurement-note muted"><summary>Nasıl okunmalı?</summary><p>Bildirim kapsamı hem karneleri hem sinyal listesini değiştirir. Coin, tür ve sonuç filtreleri yalnız sinyal listesini değiştirir. Özetler tablo satır sınırından önce hesaplanır. Aynı sinyalin %2/%3/%5 kayıtları ayrı işlemler değildir. Eksik sonuç veya takip süresi varsa ilgili grubun oranı gösterilmez. “Gönderildi” ilk sinyalin en az bir alıcıya teslimat kaydıdır; herkesin okuduğu anlamına gelmez. Geçmiş örnek yüzdesi %2/%3/%5 hedefine ulaşma olasılığı değildir. Sonraki mum açılışıyla yapılan simülasyon gerçek bir işlem değildir. Sayfa yayın zamanında yenilenir; canlı fiyat akışı değildir.</p></details>
   <footer class="muted">Bu sayfa araştırma/ileri-test sonuçlarını gösterir; emir veya kazanç garantisi değildir.</footer>
 </main>
 <script src="scalp.js" defer></script>

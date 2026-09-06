@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .measurement import deadline_ms, measurement_summary
 from .outcomes import load_ledger, pending_dir
 from .scalping import (
     SCALP_TARGET_TOUCH_PERCENTS,
@@ -20,6 +21,7 @@ from .scalping import (
 
 SCHEMA = "trade3-signal-dashboard-v1"
 SOURCE_STATUSES = frozenset({"fresh", "stale"})
+HISTORY_LIMIT = 20_000
 
 
 def build_dashboard_payload(
@@ -35,9 +37,13 @@ def build_dashboard_payload(
     if source_status not in SOURCE_STATUSES:
         raise ValueError("Dashboard veri durumu fresh veya stale olmali")
     current = now or datetime.now(UTC)
+    now_ms = int(current.timestamp() * 1_000)
+    history_limit = max(HISTORY_LIMIT, limit)
     signals: list[dict[str, Any]] = []
-    regular_settled = load_ledger(settings.outcome_state_dir, limit=limit)
-    for row in regular_settled[-limit:]:
+    source_counts: list[int] = []
+    regular_settled = load_ledger(settings.outcome_state_dir, limit=history_limit)
+    source_counts.append(len(regular_settled))
+    for row in regular_settled:
         signals.append(
             {
                 "kind": "regular",
@@ -63,7 +69,9 @@ def build_dashboard_payload(
                 "notified": True,
             }
         )
-    for path in sorted(pending_dir(settings.outcome_state_dir).glob("*.json"))[-limit:]:
+    regular_pending = sorted(pending_dir(settings.outcome_state_dir).glob("*.json"))
+    source_counts.append(len(regular_pending))
+    for path in regular_pending[-history_limit:]:
         row = _read_json(path)
         if not row:
             continue
@@ -92,8 +100,9 @@ def build_dashboard_payload(
                 "notified": True,
             }
         )
-    scalp_pending = load_pending_scalp_targets(settings.scalp_state_dir, limit=limit)
-    for row in scalp_pending[-limit:]:
+    scalp_pending = load_pending_scalp_targets(settings.scalp_state_dir, limit=history_limit)
+    source_counts.append(len(scalp_pending))
+    for row in scalp_pending:
         for percent in SCALP_TARGET_TOUCH_PERCENTS:
             if percent in row.get("outcome_recorded_percents", []):
                 continue
@@ -125,8 +134,9 @@ def build_dashboard_payload(
                     "qualityPercentile": _number(row.get("quality_percentile")),
                 }
             )
-    scalp_rows = load_scalp_target_ledger(settings.scalp_state_dir, limit=limit)
-    for row in scalp_rows[-limit:]:
+    scalp_rows = load_scalp_target_ledger(settings.scalp_state_dir, limit=history_limit)
+    source_counts.append(len(scalp_rows))
+    for row in scalp_rows:
         signals.append(
             {
                 "kind": "scalp-target",
@@ -141,8 +151,8 @@ def build_dashboard_payload(
                 "probabilityDown": row.get("probability_down", {}),
                 "sourcePrice": _number(row.get("source_price")),
                 "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
-                "status": "HEDEF ULAŞTI" if row.get("hit") is True else "HEDEF ULAŞMADI",
-                "success": row.get("hit") is True,
+                "status": "HEDEF ULAŞTI" if row.get("hit") is True else "HEDEF ULAŞMADI" if row.get("hit") is False else "VERİ EKSİK",
+                "success": row.get("hit") if type(row.get("hit")) is bool else None,
                 "netBps": None,
                 "targetPercent": _number(row.get("target_percent")),
                 "targetPrice": _number(row.get("target_price")),
@@ -156,7 +166,9 @@ def build_dashboard_payload(
                 "qualityPercentile": _number(row.get("quality_percentile")),
             }
         )
-    for row in load_pending_scalp_brackets(settings.scalp_state_dir, limit=limit)[-limit:]:
+    bracket_pending = load_pending_scalp_brackets(settings.scalp_state_dir, limit=history_limit)
+    source_counts.append(len(bracket_pending))
+    for row in bracket_pending:
         signals.append(
             {
                 "kind": "scalp-bracket",
@@ -172,6 +184,7 @@ def build_dashboard_payload(
                 "sourcePrice": _number(row.get("source_price")),
                 "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
                 "status": "TP/SL BEKLEMEDE",
+                "horizonHours": (_number(row.get("horizon_minutes")) or 0) / 60,
                 "success": None,
                 "netBps": None,
                 "targetPercent": (
@@ -192,7 +205,9 @@ def build_dashboard_payload(
                 ),
             }
         )
-    for row in load_scalp_bracket_ledger(settings.scalp_state_dir, limit=limit)[-limit:]:
+    bracket_rows = load_scalp_bracket_ledger(settings.scalp_state_dir, limit=history_limit)
+    source_counts.append(len(bracket_rows))
+    for row in bracket_rows:
         signals.append(
             {
                 "kind": "scalp-bracket",
@@ -208,6 +223,11 @@ def build_dashboard_payload(
                 "sourcePrice": _number(row.get("source_price")),
                 "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
                 "status": str(row.get("resolution", "SONUÇ")),
+                "horizonHours": (_number(row.get("horizon_minutes")) or 0) / 60,
+                "touchTimeMs": _integer(row.get("exit_time_ms")),
+                "entryPrice": _number(row.get("entry_price")),
+                "targetPrice": _number(row.get("target_price")),
+                "stopPrice": _number(row.get("stop_price")),
                 "success": row.get("resolution") == "TARGET",
                 "netBps": _number(row.get("net_bps")),
                 "targetPercent": (
@@ -231,8 +251,26 @@ def build_dashboard_payload(
                 "elapsedMinutes": _number(row.get("elapsed_minutes")),
             }
         )
+    # A durable append may precede removal of pending state during a restart.
+    # Prefer the settled evidence; never count both copies as separate trials.
+    unique: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for index, row in enumerate(signals):
+        key = (row["kind"], row["signalId"] or index, row.get("targetPercent"))
+        previous = unique.get(key)
+        if previous is None or previous["success"] is None or row["success"] is not None:
+            unique[key] = row
+    signals = list(unique.values())
+    for row in signals:
+        if row["kind"] not in {"scalp-target", "scalp-bracket"}:
+            continue
+        deadline = deadline_ms(row)
+        row["deadlineTimeMs"] = deadline
+        row["cohortMatured"] = deadline <= now_ms if deadline is not None else None
+        if row["success"] is None and deadline is not None and deadline <= now_ms:
+            row["status"] = "VERİ EKSİK"
+    history_complete = all(count < history_limit for count in source_counts)
+    measurements = measurement_summary(signals, now_ms=now_ms, history_complete=history_complete)
     signals.sort(key=lambda row: int(row.get("sourceTimeMs") or 0), reverse=True)
-    signals = signals[:limit]
     latest_signal_ms = max(
         (int(row["sourceTimeMs"]) for row in signals if row.get("sourceTimeMs")),
         default=None,
@@ -255,6 +293,9 @@ def build_dashboard_payload(
         "generatedAtUtc": current.isoformat(timespec="seconds").replace("+00:00", "Z"),
         "sourceStatus": source_status,
         "latestSignalAtUtc": _milliseconds_to_utc_text(latest_signal_ms),
+        "measurements": measurements,
+        "displayedCount": min(len(signals), limit),
+        "historyLimitReached": not history_complete,
         "summary": {
             "signalCount": len(signals),
             "settledCount": sum(row["success"] is not None for row in signals),
@@ -263,16 +304,12 @@ def build_dashboard_payload(
             "settledScalpTargetCount": len(settled_scalp_targets),
             "pendingScalpTargetCount": len(pending_scalp_targets),
             "scalpTargetHits": hit_count,
-            "scalpTargetHitRate": (
-                hit_count / len(settled_scalp_targets)
-                if settled_scalp_targets
-                else None
-            ),
+            # Deprecated pooled rates mixed horizons and early wins. Keep the
+            # keys nullable for old clients; use measurements.audiences instead.
+            "scalpTargetHitRate": None,
             "notifiedScalpTargetCount": len(notified),
             "notifiedScalpTargetHits": notified_hit_count,
-            "notifiedScalpTargetHitRate": (
-                notified_hit_count / len(notified) if notified else None
-            ),
+            "notifiedScalpTargetHitRate": None,
             "targetLevels": {
                 str(int(level)): {
                     "hits": sum(r["success"] is True for r in scalp_targets if r.get("targetPercent") == level),
@@ -284,13 +321,9 @@ def build_dashboard_payload(
             "scalpBracketCount": len(scalp_brackets),
             "settledScalpBracketCount": len(settled_scalp_brackets),
             "scalpBracketWins": bracket_wins,
-            "scalpBracketWinRate": (
-                bracket_wins / len(settled_scalp_brackets)
-                if settled_scalp_brackets
-                else None
-            ),
+            "scalpBracketWinRate": None,
         },
-        "signals": signals,
+        "signals": signals[:limit],
     }
 
 
@@ -345,7 +378,7 @@ def _number(value: Any) -> float | None:
 def _integer(value: Any) -> int | None:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
