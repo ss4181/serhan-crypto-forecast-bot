@@ -189,7 +189,7 @@ class TargetTouchTests(unittest.TestCase):
     def test_long_targets_are_reported_once_even_after_barrier_settlement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            closes = [ENTRY] * 3 + [ENTRY * 1.02, ENTRY * 1.03] + [ENTRY] * 8
+            closes = [ENTRY] * 3 + [ENTRY * 1.02, ENTRY * 1.06] + [ENTRY] * 8
             write_candles(root / "data", closes, highs=closes)
             park_signal(root / "outcomes", "YUKARI")
             # The ordinary 1% barrier has already settled, but the larger
@@ -213,8 +213,9 @@ class TargetTouchTests(unittest.TestCase):
                     (SOURCE_CLOSE_MS + STEP_MS * 6) / 1000, tz=timezone.utc
                 ),
             )
-            self.assertEqual([event["target_percent"] for event in remaining], [3.0])
+            self.assertEqual([event["target_percent"] for event in remaining], [3.0, 5.0])
             mark_target_touch_delivered(root / "outcomes", "a" * 64, 3.0)
+            mark_target_touch_delivered(root / "outcomes", "a" * 64, 5.0)
             self.assertEqual(
                 pending_target_touches(root / "outcomes", root / "data"), []
             )

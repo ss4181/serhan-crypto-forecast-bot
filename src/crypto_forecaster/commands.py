@@ -806,7 +806,7 @@ def format_explanations() -> str:
             "  1 bps = %0,01; maliyet sonrasi hareket pozitif degilse avantaj yoktur.",
             "• Arastirma parantezi: volatilite ve maliyete gore dinamik scalp hedefi/stopudur.",
             "  Giris, sinyalden sonraki ilk mum acilisidir; hedef ve stop ayni mumdaysa temkinli olarak stop yazilir.",
-            "• %2/%3 bildirimi: scalp hedefi degil, varsayilan 24 saatlik daha genis momentum kilometre tasidir.",
+            "• %2/%3/%5: sinyal fiyatindan, sinyal yonundeki dokunus seviyeleri. Scalp izleme suresi varsayilan 24 saat.",
             "  Her kademe sinyal basina bir kez bildirilir; hedefe ulasmak garanti veya emir degildir.",
             "",
             "🧪 SCALP AILELERI (ARASTIRMA)",

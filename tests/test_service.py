@@ -167,8 +167,8 @@ class MessageTests(unittest.TestCase):
     def test_trade_tier_message_leads_with_net_expectancy(self) -> None:
         text = format_prediction(sample_prediction())
         self.assertIn("ISLEM ADAYI", text)
-        self.assertIn("+6.00 bps/sinyal", text)
-        self.assertIn("20.0 bps gidis-donus", text)
+        self.assertIn("Net beklenti: %+0.06", text)
+        self.assertLess(len(text), 600)
 
     def test_observation_tier_states_why_it_cannot_trade(self) -> None:
         text = format_prediction(
@@ -183,8 +183,8 @@ class MessageTests(unittest.TestCase):
 
     def test_touch_probabilities_are_not_sold_as_target_and_stop(self) -> None:
         text = format_prediction(sample_prediction())
-        self.assertIn("Ikisi de ayni mumda gorulur: %22.0", text)
-        self.assertIn("hedef/stop cifti degildir", text)
+        self.assertNotIn("0.5 ATR", text)
+        self.assertNotIn("Stop:", text)
 
     def test_digest_lists_every_model_even_when_none_can_trade(self) -> None:
         predictions = [
@@ -203,9 +203,8 @@ class MessageTests(unittest.TestCase):
         for symbol in ("BTCUSDT", "ETHUSDT"):
             for label in ("5 dakika", "15 dakika", "1 saat"):
                 self.assertIn(f"{symbol} {label}", text)
-        self.assertIn("yukari %64.0 / asagi %36.0", text)
-        self.assertIn("medyan kapanis $60,020.00 (+0.03%)", text)
-        self.assertLessEqual(len(text), 4096)
+        self.assertIn("↑ %64 | ↓ %36", text)
+        self.assertLess(len(text), 1200)
 
     def test_target_touch_message_shows_direction_and_price_levels(self) -> None:
         text = format_target_touch(

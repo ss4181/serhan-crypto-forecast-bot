@@ -11,6 +11,7 @@ from typing import Any
 from .config import Settings
 from .outcomes import load_ledger, pending_dir
 from .scalping import (
+    SCALP_TARGET_TOUCH_PERCENTS,
     load_pending_scalp_brackets,
     load_pending_scalp_targets,
     load_scalp_bracket_ledger,
@@ -93,32 +94,37 @@ def build_dashboard_payload(
         )
     scalp_pending = load_pending_scalp_targets(settings.scalp_state_dir, limit=limit)
     for row in scalp_pending[-limit:]:
-        signals.append(
-            {
-                "kind": "scalp-target",
-                "signalId": str(row.get("setup_id", "")),
-                "symbol": str(row.get("spot_symbol", "")),
-                "interval": "5m",
-                "direction": str(row.get("direction", "")),
-                "tier": "KURULUM",
-                "score": _number(row.get("score")),
-                "families": row.get("families", []),
-                "probabilityUp": row.get("probability_up", {}),
-                "probabilityDown": row.get("probability_down", {}),
-                "sourcePrice": _number(row.get("source_price")),
-                "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
-                "status": "BEKLEMEDE",
-                "success": None,
-                "netBps": None,
-                "targetPercent": None,
-                "notified": bool(row.get("notification_sent", False)),
-                "strategy": str(row.get("strategy_label", "")),
-                "confidence": str(row.get("confidence", "")),
-                "successProbability": _number(row.get("success_probability")),
-                "expectedNetBps": _number(row.get("expected_net_bps")),
-                "qualityPercentile": _number(row.get("quality_percentile")),
-            }
-        )
+        for percent in SCALP_TARGET_TOUCH_PERCENTS:
+            if percent in row.get("outcome_recorded_percents", []):
+                continue
+            signals.append(
+                {
+                    "kind": "scalp-target",
+                    "signalId": str(row.get("setup_id", "")),
+                    "symbol": str(row.get("spot_symbol", "")),
+                    "interval": "5m",
+                    "direction": str(row.get("direction", "")),
+                    "tier": "KURULUM",
+                    "score": _number(row.get("score")),
+                    "families": row.get("families", []),
+                    "probabilityUp": row.get("probability_up", {}),
+                    "probabilityDown": row.get("probability_down", {}),
+                    "sourcePrice": _number(row.get("source_price")),
+                    "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+                    "status": "BEKLEMEDE",
+                    "success": None,
+                    "netBps": None,
+                    "targetPercent": percent,
+                    "targetPrice": float(row["source_price"]) * (1 + (1 if row["direction"] == "YUKARI" else -1) * percent / 100),
+                    "horizonHours": int(row["horizon_ms"]) / 3_600_000,
+                    "notified": bool(row.get("notification_sent", False)),
+                    "strategy": str(row.get("strategy_label", "")),
+                    "confidence": str(row.get("confidence", "")),
+                    "successProbability": _number(row.get("success_probability")),
+                    "expectedNetBps": _number(row.get("expected_net_bps")),
+                    "qualityPercentile": _number(row.get("quality_percentile")),
+                }
+            )
     scalp_rows = load_scalp_target_ledger(settings.scalp_state_dir, limit=limit)
     for row in scalp_rows[-limit:]:
         signals.append(
@@ -139,6 +145,9 @@ def build_dashboard_payload(
                 "success": row.get("hit") is True,
                 "netBps": None,
                 "targetPercent": _number(row.get("target_percent")),
+                "targetPrice": _number(row.get("target_price")),
+                "touchTimeMs": _integer(row.get("touch_close_time_ms")),
+                "horizonHours": (_number(row.get("horizon_ms")) or 0) / 3_600_000,
                 "notified": bool(row.get("notification_sent", False)),
                 "strategy": str(row.get("strategy_label", "")),
                 "confidence": str(row.get("confidence", "")),
@@ -264,6 +273,14 @@ def build_dashboard_payload(
             "notifiedScalpTargetHitRate": (
                 notified_hit_count / len(notified) if notified else None
             ),
+            "targetLevels": {
+                str(int(level)): {
+                    "hits": sum(r["success"] is True for r in scalp_targets if r.get("targetPercent") == level),
+                    "misses": sum(r["success"] is False for r in scalp_targets if r.get("targetPercent") == level),
+                    "pending": sum(r["success"] is None for r in scalp_targets if r.get("targetPercent") == level),
+                }
+                for level in SCALP_TARGET_TOUCH_PERCENTS
+            },
             "scalpBracketCount": len(scalp_brackets),
             "settledScalpBracketCount": len(settled_scalp_brackets),
             "scalpBracketWins": bracket_wins,

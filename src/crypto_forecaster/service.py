@@ -269,143 +269,40 @@ def _retimed(settings: Settings, cached: Prediction, current_ms: int) -> Predict
 
 
 def format_prediction(prediction: Prediction) -> str:
-    icon = "🟢" if prediction.direction == "YUKARI" else "🔴"
-    direction_icon = "📈" if prediction.direction == "YUKARI" else "📉"
-    source_close = _utc_text(prediction.source_close_time_ms)
-    target_close = _utc_text(prediction.target_close_time_ms)
-    remaining_minutes = max(
-        0.0, (prediction.target_close_time_ms - prediction.evaluated_at_ms) / 60000
-    )
     metrics = prediction.backtest
-    target_sign = "+" if prediction.direction == "YUKARI" else "-"
-    target_2_price = prediction.source_price * (
-        1.02 if prediction.direction == "YUKARI" else 0.98
-    )
-    target_3_price = prediction.source_price * (
-        1.03 if prediction.direction == "YUKARI" else 0.97
-    )
-    indicator_lines = [
-        f"• {item.name}: {item.display_value} — {item.direction_effect}"
-        for item in prediction.indicators
+    tier = "ISLEM ADAYI" if prediction.eligible else "GOZLEM"
+    lines = [
+        f"{'🟢' if prediction.direction == 'YUKARI' else '🔴'} {prediction.symbol} • {prediction.direction} • {prediction.interval}",
+        f"{tier} • Sinyal: ${prediction.source_price:,.2f}",
+        f"↑ %{prediction.probability_up * 100:.1f} | ↓ %{prediction.probability_down * 100:.1f}",
+        f"Net beklenti: %{metrics.net_edge_bps / 100:+.2f} • BT isabet %{metrics.signal_accuracy * 100:.0f} (n={metrics.signal_count})",
+        f"⏱ {_utc_text(prediction.target_close_time_ms)}",
     ]
-    if prediction.eligible:
-        header = "ISLEM ADAYI"
-        status = "Maliyet sonrasi olculmus pozitif beklentisi olan tek tier."
-    else:
-        header = "GOZLEM"
-        status = "ISLEM ADAYI DEGIL: " + "; ".join(prediction.ineligible_reasons)
-    message = "\n".join(
-        [
-            f"{icon} {header} | {prediction.symbol} | {INTERVAL_LABELS[prediction.interval]} | {prediction.direction}",
-            "",
-            "📌 DURUM",
-            f"• Durum: {status}",
-            f"• Güven yönü: {direction_icon} {prediction.direction} | %{prediction.confidence * 100:.1f}",
-            "",
-            "⏱ ZAMAN VE FİYAT",
-            f"• Sinyal zamani: {source_close}",
-            f"• Tahmin edilen kapanis: {target_close} ({remaining_minutes:.1f} dk kaldi)",
-            f"• Referans fiyat (son kapali mum): ${prediction.source_price:,.2f}",
-            f"• Yon olasiligi: YUKARI %{prediction.probability_up * 100:.1f} | ASAGI %{prediction.probability_down * 100:.1f}",
-            "",
-            "🎯 HEDEF TANIMI (uclu bariyer)",
-            f"• Yon = fiyatin once hangi tarafa ±{metrics.barrier_bps_median:.0f} bps "
-            f"hareket ettigi; en fazla {metrics.barrier_horizon_candles} mum beklenir",
-            f"• Bu hedef {metrics.round_trip_cost_bps:.1f} bps gidis-donus maliyetinin "
-            "en az iki kati secilir, yani kazanan islem masrafini fazlasiyla karsilar",
-            f"• Gecmiste sinyallerin %{metrics.resolved_fraction * 100:.0f}'i bariyere ulasti; "
-            f"kalani sure dolunca piyasadan kapandi",
-            f"• Genis hedef izleme: {target_sign}2% ${target_2_price:,.2f} | "
-            f"{target_sign}3% ${target_3_price:,.2f}; dokununca ayri bildirim gelir",
-            "",
-            "💹 MALIYET SONRASI BEKLENTI (bu tahminin tek gecerli olcusu)",
-            f"• Olculen net beklenti: {metrics.net_edge_bps:+.2f} bps/sinyal "
-            f"({metrics.round_trip_cost_bps:.1f} bps gidis-donus maliyeti dusulmus)",
-            f"• Gun bloklu %95 aralik: {metrics.net_edge_ci95_low:+.2f} – {metrics.net_edge_ci95_high:+.2f} bps",
-            f"• Ortalama kazanc {metrics.average_win_bps:+.1f} bps / ortalama kayip "
-            f"{metrics.average_loss_bps:+.1f} bps",
-            "",
-            "📍 FIYAT SENARYOLARI (benzer kalibre edilmis gecmis durumlar)",
-            f"• ${prediction.target_up_price:,.2f} (+0.5 ATR) gorulme: %{prediction.target_up_touch_probability * 100:.1f}",
-            f"• ${prediction.target_down_price:,.2f} (-0.5 ATR) gorulme: %{prediction.target_down_touch_probability * 100:.1f}",
-            f"• Ikisi de ayni mumda gorulur: %{prediction.touch_both_probability * 100:.1f} — "
-            "hangisinin once geldigi mum verisinden bilinemez, bu bir hedef/stop cifti degildir",
-            f"• Kapanis icin %80 aralik: ${prediction.close_range_low:,.2f} – ${prediction.close_range_high:,.2f}",
-            f"• Senaryo medyan kapanisi: ${prediction.close_range_median:,.2f} (benzer n={prediction.scenario_count})",
-            "",
-            "📊 WALK-FORWARD BACKTEST (tamamen OOS)",
-            f"• Yuksek guven yon isabeti: %{metrics.signal_accuracy * 100:.1f} "
-            f"(n={metrics.signal_count}, {metrics.signal_days} ayri gun)",
-            f"• 6 model icin aile-duzeltilmis %95 GA: %{metrics.signal_familywise_ci95_low * 100:.1f}–%{metrics.signal_familywise_ci95_high * 100:.1f}",
-            f"• Tum mum yon dogrulugu: %{metrics.accuracy * 100:.1f} | taban: %{metrics.baseline_accuracy * 100:.1f}",
-            f"• Sinyal kapsami: %{metrics.signal_coverage * 100:.1f} | Brier: {metrics.brier_score:.4f} | ECE: %{metrics.expected_calibration_error * 100:.1f}",
-            "",
-            "🧩 SINYALI EN COK ETKILEYEN BELIRTECLER",
-            *indicator_lines,
-            "",
-            "⚠️ Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir. Olasiliklar garanti degildir.",
-        ]
-    )
-    if len(message) > 4096:
-        raise ValueError("Telegram mesaji 4096 karakteri asti")
-    return message
+    if not prediction.eligible:
+        lines.append(f"ISLEM ADAYI DEGIL: {_first_reason(prediction.ineligible_reasons)}")
+    lines.append("Araştırma • Ayrıntılar: karne / açıklamalar.")
+    return "\n".join(lines)
 
 
 def format_observation_digest(
     predictions: list[Prediction], *, now: datetime | None = None
 ) -> str:
-    """One message covering every model, including the ones that cannot trade.
-
-    Keeps all six models visible in Telegram without dressing a
-    negative-expectancy forecast up as something actionable.
-    """
     if not predictions:
         raise ValueError("Gozlem raporu icin tahmin yok")
     current = now or datetime.now(timezone.utc)
-    stamp = local_text(int(current.timestamp() * 1000), with_seconds=False)
-    tradeable = [item for item in predictions if item.eligible]
     lines = [
-        f"🔎 GOZLEM RAPORU | {len(predictions)} model | {stamp}",
-        "",
-        "📌 OZET",
-        "Her modelin o anki durumu; ISLEM ADAYI olmayanlar da burada gorunur.",
-        "",
-        f"📍 Islem adayi: {len(tradeable)} / {len(predictions)}",
-        "",
+        f"📊 MODEL ÖZETİ • {local_text(int(current.timestamp() * 1000), with_seconds=False)}",
+        f"Islem adayi: {sum(p.eligible for p in predictions)} / {len(predictions)}",
     ]
     for item in predictions:
-        metrics = item.backtest
-        mark = "🟢" if item.eligible else "▫️"
-        lines.append(
-            f"{mark} {item.symbol} {INTERVAL_LABELS[item.interval]} — {item.direction} "
-            f"| ${item.source_price:,.2f}"
-        )
-        lines.append(
-            f"    📊 Yon olasiligi: yukari %{item.probability_up * 100:.1f} / "
-            f"asagi %{item.probability_down * 100:.1f}"
-        )
-        median_move_pct = (item.close_range_median / item.source_price - 1.0) * 100.0
-        lines.append(
-            f"    🎯 medyan kapanis ${item.close_range_median:,.2f} "
-            f"({median_move_pct:+.2f}%) | ufuk {INTERVAL_LABELS[item.interval]}"
-        )
-        lines.append(
-            f"    💹 net beklenti {metrics.net_edge_bps:+.2f} bps "
-            f"({metrics.net_edge_ci95_low:+.1f} / {metrics.net_edge_ci95_high:+.1f}) | "
-            f"isabet %{metrics.signal_accuracy * 100:.1f} (n={metrics.signal_count})"
-        )
-        if not item.eligible:
-            lines.append(f"    ⛔ engel: {_first_reason(item.ineligible_reasons)}")
-    lines.extend(
-        [
+        lines.extend([
             "",
-            "⚠️ Yalnizca arastirma bildirimidir; yatirim tavsiyesi veya emir degildir.",
-        ]
-    )
-    message = "\n".join(lines)
-    if len(message) > 4096:
-        raise ValueError("Telegram mesaji 4096 karakteri asti")
-    return message
+            f"{item.symbol} {INTERVAL_LABELS[item.interval]} • {item.direction} • ${item.source_price:,.2f}",
+            f"↑ %{item.probability_up * 100:.0f} | ↓ %{item.probability_down * 100:.0f} • "
+            f"Net %{item.backtest.net_edge_bps / 100:+.2f} • {'ADAY' if item.eligible else 'GÖZLEM'}",
+        ])
+    lines.append("\nAraştırma • Ayrıntılar: karne / açıklamalar.")
+    return "\n".join(lines)
 
 
 def _first_reason(reasons: tuple[str, ...]) -> str:
@@ -617,17 +514,11 @@ def format_target_touch(event: dict[str, object]) -> str:
     tier = str(event.get("tier", "GOZLEM"))
     message = "\n".join(
         [
-            f"🎯 HEDEF FIYATA ULASILDI | {symbol} | {interval}",
-            "",
-            f"{direction_icon} Yon: {direction} ({tier})",
-            f"📍 Sinyal fiyati: ${float(event['source_price']):,.2f}",
-            f"🕒 Sinyal zamani: {_utc_text(int(event['source_close_time_ms']))}",
-            f"✅ Hedef kademe: {signed_percent}",
-            f"🎯 Hedef fiyat: ${float(event['target_price']):,.2f}",
-            f"💹 Dokunulan fiyat: ${float(event['touch_price']):,.2f}",
-            f"🕒 Dokunma zamani: {_utc_text(int(event['touch_close_time_ms']))}",
-            "",
-            "ℹ️ Bu, sinyalin yonunde fiyat hedefinin goruldugunu bildirir; emir veya garanti degildir.",
+            f"🎯 HEDEF FIYATA ULASILDI • {symbol} • {signed_percent}",
+            f"{direction_icon} {direction} • {interval} • {tier}",
+            f"${float(event['source_price']):,.2f} → ${float(event['target_price']):,.2f}",
+            f"Mum: ${float(event['touch_price']):,.2f} • {_utc_text(int(event['touch_close_time_ms']))}",
+            "Dokunuş kaydı • gerçekleşmiş işlem kârı değildir.",
         ]
     )
     if len(message) > 4096:

@@ -278,6 +278,26 @@ rejimi ve uygun canlı spread birlikteyse **KURULUM** olarak gösterilir. Bu iki
 etiket de araştırmadır. En yüksek puanlı en fazla beş kayıt tek kompakt Telegram
 özetinde gösterilir, 89 ayrı mesaj gönderilmez.
 
+### Kısa bildirimler ve %2/%3/%5 dokunuşları
+
+Telegram scalp bildirimi her coin için yön, sinyal fiyatı, stratejinin sabit
+ufkundaki yukarı/aşağı yüzdeleri, net beklenti, güven ve üç hedef fiyatını gösterir.
+Tekrarlanan aile tabloları otomatik mesajda yer almaz; karne ve açıklamalar menüsü
+ayrıntıları sunar. `CRYPTO_SCALP_TOP_K` coin sayısıdır; seçilen coinin tüm aileleri
+birlikte korunur. BTC/ETH model özetleri ve hedef mesajları da kısaltılmıştır.
+
+Scalp %2/%3/%5 seviyeleri sinyal fiyatından sinyal yönünde hesaplanır. Dokunuş,
+kapanmış 5m mumun yüksek/düşük fiyatından ilk tespit edildiğinde karnesine yazılır;
+24 saatin dolması beklenmez. Telegram gönderilemese bile sonuç korunur ve tekrar
+denenir. Her kademe bir kez bildirilir. Süre sonunda dokunulmamış hedef ancak
+mum verisi eksiksizse başarısız sayılır. Açık eski takipler de %5'i izler; kapanmış
+eski sinyallere geriye dönük %5 sonucu uydurulmaz.
+
+Dashboard %2/%3/%5 için dokunan, süresi dolan ve bekleyen sayılarını ayrı gösterir.
+Sayfa GitHub Pages yayınıyla yenilenir (mevcut program üç saatte bir); bot ise her
+tarama döngüsünde dokunuşları kontrol eder. Kısa ufuktaki yön yüzdeleri %2/%3/%5
+hedefe dokunma olasılığı değildir.
+
 Mesajdaki eski puan artık **ham güç** adıyla gösterilir; bir olasılık veya
 beklenen getiri değildir. Bot aile/rejim içindeki geçmiş ham güç dağılımını da
 tutarak aileleri karşılaştırılabilir bir yüzdeliğe çevirir. Yeterli ileri veri

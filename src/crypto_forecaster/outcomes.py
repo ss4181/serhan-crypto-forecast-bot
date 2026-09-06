@@ -29,7 +29,7 @@ PENDING_SCHEMA = "signal-outcome-pending-v2"
 LEDGER_SCHEMA = "signal-outcome-v2"
 SETTLEMENT_GRACE_DAYS = 7
 TARGET_PENDING_SCHEMA = "signal-target-pending-v1"
-TARGET_TOUCH_PERCENTS = (2.0, 3.0)
+TARGET_TOUCH_PERCENTS = (2.0, 3.0, 5.0)
 
 
 def pending_dir(state_dir: Path) -> Path:

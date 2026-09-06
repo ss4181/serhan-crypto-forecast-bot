@@ -41,16 +41,19 @@
     <div class="card">Toplam<span class="value" id="total">-</span></div>
     <div class="card">Sonuçlanan<span class="value" id="settled">-</span></div>
     <div class="card">Bekleyen<span class="value" id="pending">-</span></div>
-    <div class="card">Scalp %2/%3<span class="value" id="scalp-rate">-</span></div>
+    <div class="card">%2 dokunuş<span class="value" id="target-2">-</span></div>
+    <div class="card">%3 dokunuş<span class="value" id="target-3">-</span></div>
+    <div class="card">%5 dokunuş<span class="value" id="target-5">-</span></div>
     <div class="card">Dinamik TP/SL<span class="value" id="bracket-rate">-</span></div>
     <div class="card">Bildirim filtresi<span class="value" id="notified-rate">-</span></div>
   </section>
   <div class="controls">
     <input id="search" placeholder="Coin ara (BTCUSDT)">
-    <select id="kind"><option value="">Tümü</option><option value="regular">Normal model</option><option value="scalp-target">%2/%3 kilometre taşı</option><option value="scalp-bracket">Dinamik TP/SL</option></select>
-    <select id="status"><option value="">Tüm durumlar</option><option value="TARGET">Hedef önce</option><option value="STOP">Stop önce</option><option value="TIME_EXIT">Süre sonu</option><option value="TP/SL BEKLEMEDE">TP/SL beklemede</option><option value="HEDEF ULAŞTI">%2/%3 ulaştı</option><option value="HEDEF ULAŞMADI">%2/%3 ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option></select>
+    <select id="kind"><option value="">Tümü</option><option value="regular">Normal model</option><option value="scalp-target">%2/%3/%5 kilometre taşı</option><option value="scalp-bracket">Dinamik TP/SL</option></select>
+    <select id="status"><option value="">Tüm durumlar</option><option value="TARGET">Hedef önce</option><option value="STOP">Stop önce</option><option value="TIME_EXIT">Süre sonu</option><option value="TP/SL BEKLEMEDE">TP/SL beklemede</option><option value="HEDEF ULAŞTI">%2/%3/%5 ulaştı</option><option value="HEDEF ULAŞMADI">%2/%3/%5 ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option></select>
   </div>
-  <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Strateji</th><th>Ham güç</th><th>Kalite/Güven</th><th>Tahmin</th><th>Aile</th><th>Hedef / Stop</th><th>Durum</th><th>Bildirim</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Strateji</th><th>Ham güç</th><th>Kalite/Güven</th><th>Tahmin</th><th>Aile</th><th>Sinyal fiyatı</th><th>Hedef / Stop</th><th>Dokunma zamanı</th><th>Durum</th><th>Bildirim</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <p class="muted">Her kademe ayrı ölçülür. Açık hedefler başarı/başarısızlık sayılmaz. Sayfa verisi yayın zamanında yenilenir; canlı fiyat akışı değildir.</p>
   <footer class="muted">Bu sayfa araştırma/ileri-test sonuçlarını gösterir; emir veya kazanç garantisi değildir.</footer>
 </main>
 <script>
@@ -66,11 +69,30 @@
       const direction = `<span class="${x.direction.includes('YUKARI') ? 'up' : 'down'}">${x.direction || '-'}</span>`;
       const stateClass = x.success === true ? 'hit' : x.success === false ? 'miss' : 'pending';
       const families = Array.isArray(x.families) ? x.families.join('+') : '-';
-      const type = x.kind === 'scalp-bracket' ? 'Dinamik TP/SL' : x.kind === 'scalp-target' ? '%2/%3' : 'Model';
+      const type = x.kind === 'scalp-bracket' ? 'Dinamik TP/SL' : x.kind === 'scalp-target' ? '%2/%3/%5' : 'Model';
       const quality = x.qualityPercentile == null ? (x.confidence || '-') : `%${(x.qualityPercentile * 100).toFixed(0)} / ${x.confidence || '-'}`;
       const forecast = x.successProbability == null ? '-' : `%${(x.successProbability * 100).toFixed(1)} / ${x.expectedNetBps == null ? '-' : fmt.format(x.expectedNetBps) + ' bps'}`;
       const levels = x.targetPercent == null ? '-' : `${x.targetPercent}%${x.stopPercent == null ? '' : ' / ' + x.stopPercent + '%'}`;
-      return `<tr><td>${time}</td><td>${type}</td><td>${x.symbol}</td><td>${direction}</td><td>${x.strategy || '-'}</td><td>${x.score == null ? '-' : fmt.format(x.score)}</td><td>${quality}</td><td>${forecast}</td><td>${families}</td><td>${levels}</td><td class="${stateClass}">${x.status}</td><td>${x.notified ? 'Gönderildi' : 'Sessiz'}</td><td>${x.netBps == null ? '-' : fmt.format(x.netBps)}</td></tr>`;
+      return `<tr><td>${time}</td><td>${type}</td><td>${x.symbol}</td><td>${direction}</td><td>${x.strategy || '-'}</td><td>${x.score == null ? '-' : fmt.format(x.score)}</td><td>${quality}</td><td>${forecast}</td><td>${families}</td><td>${x.sourcePrice == null ? '-' : Number(x.sourcePrice).toLocaleString('en-US', {maximumSignificantDigits: 8})}</td><td>${levels}${x.targetPrice == null ? '' : ' → <td class="${stateClass}">${x.status}</td><td>${x.notified ? 'Gönderildi' : 'Sessiz'}</td><td>${x.netBps == null ? '-' : fmt.format(x.netBps)}</td></tr>`;
+    }).join('') || '<tr><td colspan="15">Kayıt yok.</td></tr>';
+  }
+  fetch('scalp-data.json', { cache: 'no-store' }).then(r => r.json()).then(x => {
+    data = x; const s = x.summary || {}, status = x.sourceStatus || 'unknown';
+    const sourceLabel = status === 'fresh' ? 'Güncel veri' : status === 'stale' ? 'Önbellek — Binance yenilemesi başarısız' : 'Henüz veri üretilmedi';
+    const badge = el('freshness'); badge.className = `freshness ${status}`; badge.textContent = sourceLabel;
+    el('updated').textContent = `Sayfa yayını: ${x.generatedAtUtc || '-'} • son sinyal: ${x.latestSignalAtUtc || '-'} • kayıt: ${s.signalCount || 0}`;
+    el('total').textContent = s.signalCount ?? 0; el('settled').textContent = s.settledCount ?? 0; el('pending').textContent = s.pendingCount ?? 0;
+    [2,3,5].forEach(level => {
+      const v = (s.targetLevels || {})[String(level)];
+      el('target-' + level).textContent = v ? `${v.hits} dokundu / ${v.misses} süresi doldu / ${v.pending} bekliyor` : 'Veri yok';
+    }); el('bracket-rate').textContent = pct(s.scalpBracketWinRate); el('notified-rate').textContent = pct(s.notifiedScalpTargetHitRate); render();
+  }).catch(() => { el('updated').textContent = 'Dashboard verisi henüz yayınlanmadı.'; el('freshness').textContent = 'Veri alınamadı'; render(); });
+  ['search','kind','status'].forEach(id => el(id).addEventListener('input', render));
+</script>
+</body>
+</html>
+
+ + Number(x.targetPrice).toLocaleString('en-US', {maximumSignificantDigits: 8})}</td><td>${x.touchTimeMs ? new Date(x.touchTimeMs).toLocaleString('tr-TR', {timeZone: 'Europe/Istanbul'}) : '-'}</td><td class="${stateClass}">${x.status}</td><td>${x.notified ? 'Gönderildi' : 'Sessiz'}</td><td>${x.netBps == null ? '-' : fmt.format(x.netBps)}</td></tr>`;
     }).join('') || '<tr><td colspan="13">Kayıt yok.</td></tr>';
   }
   fetch('scalp-data.json', { cache: 'no-store' }).then(r => r.json()).then(x => {

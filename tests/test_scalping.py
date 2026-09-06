@@ -366,13 +366,10 @@ class DigestTests(unittest.TestCase):
         )
         report = ScalpScanReport(manifest.version, 89, 89, 0, (), (item,), START_MS)
         text = format_scalp_observation_digest(report, manifest=manifest, top_k=1)
-        self.assertIn("Beklenen ufuk: 15/30/60 dk", text)
-        self.assertIn("Piyasa: Binance USD-M perp", text)
-        self.assertIn("Güncel mark: $100.12", text)
-        self.assertIn("24s kapalı mum getirisi: +11.14%", text)
-        self.assertIn("Yükselen sırası: 1/89", text)
-        self.assertIn("1s hacim / önceki 24s medyanı: 5.81x", text)
-        self.assertIn("Funding: +0.99 bps", text)
+        self.assertIn("Sinyal: $100", text)
+        self.assertIn("Yön olasılığı: veri yok", text)
+        self.assertNotIn("Funding", text)
+        self.assertLess(len(text), 500)
 
     def test_digest_is_top_k_and_explicitly_non_actionable(self) -> None:
         manifest = load_trade1_universe()
@@ -385,8 +382,8 @@ class DigestTests(unittest.TestCase):
         self.assertIn("F2", text)
         self.assertIn("F3", text)
         self.assertNotIn("F1 hacim", text)
-        self.assertIn("Sinyal fiyati: $100", text)
-        self.assertIn("ISLEM ADAYI DEGILDIR", text)
+        self.assertIn("Sinyal: $100", text)
+        self.assertIn("Araştırma", text)
         self.assertNotIn("\n   perp ", text)
         self.assertLess(text.count("\n"), 30)
         self.assertLessEqual(len(text), 4096)
@@ -422,8 +419,8 @@ class DigestTests(unittest.TestCase):
         text = format_scalp_observation_digest(
             report, manifest=manifest, top_k=5, ledger=rows
         )
-        self.assertIn("Boğa devamı LONG", text)
-        self.assertIn("Net başarı olasılığı", text)
+        self.assertIn("YUKARI", text)
+        self.assertIn("Net beklenti", text)
         self.assertLessEqual(len(text), 4096)
 
     def test_digest_shows_settled_up_down_probability_and_expected_move(self) -> None:
@@ -455,12 +452,10 @@ class DigestTests(unittest.TestCase):
         text = format_scalp_observation_digest(
             report, manifest=manifest, top_k=1, ledger=rows
         )
-        self.assertIn("F1 BT 15/30/60dk", text)
-        self.assertIn("Yukari olasiligi: %50/%50/%50", text)
-        self.assertIn("Asagi olasiligi: %50/%50/%50", text)
-        self.assertIn("Yön özeti (yerleşmiş BT): KARIŞIK", text)
-        self.assertIn("Medyan hareket: +5.0/+10.0/+15.0 bps", text)
-        self.assertIn("Medyan net hareket: -7.0/-2.0/+3.0 bps", text)
+        self.assertIn("↑ %50 | ↓ %50", text)
+        self.assertIn("KARIŞIK", text)
+        self.assertNotIn("F1 BT", text)
+        self.assertLess(len(text), 500)
 
     def test_setup_direction_is_explicitly_bearish_when_families_agree(self) -> None:
         items = (observation(family="B1"), observation(family="F3"))
@@ -623,6 +618,7 @@ class DigestTests(unittest.TestCase):
             source_price = float(items[0].price)
             frame.loc[event_index + 1, "low"] = source_price * 0.965
             frame.loc[event_index + 1, "close"] = source_price * 0.98
+            frame.loc[event_index + 3, "low"] = source_price * 0.94
             frame.to_csv(scalp_cache_path(data_dir, "BTCUSDT"), index=False)
             self.assertEqual(
                 record_scalp_target_setups(
@@ -642,9 +638,9 @@ class DigestTests(unittest.TestCase):
             events = pending_scalp_target_touches(state_dir, data_dir, now=now)
             self.assertEqual({event["target_percent"] for event in events}, {2.0, 3.0})
             text = format_scalp_target_touch(events[0])
-            self.assertIn("Yön özeti: AŞAĞI", text)
-            self.assertIn("BT yukarı olasılığı", text)
-            self.assertIn("BT aşağı olasılığı", text)
+            self.assertIn("AŞAĞI", text)
+            self.assertIn("HEDEFE DOKUNDU", text)
+            self.assertLess(len(text), 300)
 
             class Notifier:
                 def __init__(self) -> None:
@@ -670,6 +666,22 @@ class DigestTests(unittest.TestCase):
             pending = load_pending_scalp_targets(state_dir)
             self.assertEqual(len(pending), 1)
             self.assertEqual(pending[0]["delivered_percents"], [2.0, 3.0])
+            self.assertEqual(len(load_scalp_target_ledger(state_dir)), 2)
+            later = datetime.fromtimestamp(
+                (items[0].bar_close_time_ms + 20 * 60_000) / 1000, tz=timezone.utc
+            )
+            deliveries = deliver_scalp_target_touches(
+                Settings(scalp_state_dir=state_dir, scalp_data_dir=data_dir),
+                notifier=notifier,
+                now=later,
+            )
+            self.assertEqual([event["target_percent"] for event, _ in deliveries], [5.0])
+            self.assertEqual(len(load_scalp_target_ledger(state_dir)), 3)
+            self.assertEqual(load_pending_scalp_targets(state_dir), [])
+            self.assertEqual(deliver_scalp_target_touches(
+                Settings(scalp_state_dir=state_dir, scalp_data_dir=data_dir),
+                notifier=notifier, now=later,
+            ), [])
 
     def test_mixed_or_radar_setup_is_not_target_tracked(self) -> None:
         manifest = load_trade1_universe()
@@ -815,7 +827,7 @@ class DigestTests(unittest.TestCase):
             state_dir = root / "state"
             data_dir = root / "data"
             data_dir.mkdir()
-            frame = market_frame()
+            frame = market_frame(620)
             event_index = int(frame.index[frame["close_time_ms"] == items[0].bar_close_time_ms][0])
             source_price = float(items[0].price)
             frame.loc[event_index + 1, "low"] = source_price * 0.975
@@ -836,10 +848,10 @@ class DigestTests(unittest.TestCase):
                 tz=timezone.utc,
             )
             outcomes = settle_scalp_target_outcomes(state_dir, data_dir, now=now)
-            self.assertEqual(len(outcomes), 2)
+            self.assertEqual(len(outcomes), 3)
             self.assertTrue(all(row["notification_sent"] is False for row in outcomes))
             self.assertTrue(any(row["target_percent"] == 2.0 and row["hit"] for row in outcomes))
-            self.assertEqual(len(load_scalp_target_ledger(state_dir)), 2)
+            self.assertEqual(len(load_scalp_target_ledger(state_dir)), 3)
 
     def test_sent_setup_promotes_existing_shadow_trackers(self) -> None:
         manifest = load_trade1_universe()
@@ -969,6 +981,74 @@ class DigestTests(unittest.TestCase):
 
 
 class ForwardLedgerTests(unittest.TestCase):
+    def test_top_k_keeps_all_confirmations_for_each_coin(self) -> None:
+        items = (
+            observation(family="B1", score=3),
+            replace(observation(family="B1", score=2), spot_symbol="ETHUSDT", perpetual_symbol="ETHUSDT"),
+            observation(family="F3", score=1),
+        )
+        report = ScalpScanReport("v", 2, 2, 0, (), items, START_MS)
+        self.assertEqual({i.family for i in report.top(1)}, {"B1", "F3"})
+        self.assertEqual({i.perpetual_symbol for i in report.top(1)}, {"BTCUSDT"})
+
+    def test_early_long_hits_persist_and_failed_delivery_can_retry(self) -> None:
+        from crypto_forecaster.scalping import mark_scalp_target_touch_delivered
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state, data = root / "state", root / "data"
+            pending = state / "target_pending"
+            pending.mkdir(parents=True)
+            data.mkdir()
+            frame = market_frame(620)
+            source_ms = int(frame.iloc[300]["close_time_ms"])
+            record = {
+                "schema": "scalp-target-pending-v1", "setup_id": "long",
+                "spot_symbol": "BTCUSDT", "perpetual_symbol": "BTCUSDT",
+                "direction": "YUKARI", "source_price": 100,
+                "bar_close_time_ms": source_ms, "horizon_ms": 86_400_000,
+                "notification_sent": True, "delivered_percents": [],
+            }
+            (pending / "long.json").write_text(json.dumps(record), encoding="utf-8")
+            frame.loc[301, "high"] = 106
+            frame.to_csv(scalp_cache_path(data, "BTCUSDT"), index=False)
+            now = datetime.fromtimestamp((source_ms + STEP_MS) / 1000, tz=timezone.utc)
+            settled = settle_scalp_target_outcomes(state, data, now=now)
+            self.assertEqual({r["target_percent"] for r in settled}, {2, 3, 5})
+            self.assertTrue(all(r["hit"] for r in settled))
+            mark_scalp_target_touch_delivered(state, "long", 2)
+            self.assertEqual(
+                {r["target_percent"] for r in pending_scalp_target_touches(state, data, now=now)},
+                {3, 5},
+            )
+            self.assertEqual(settle_scalp_target_outcomes(state, data, now=now), [])
+            mark_scalp_target_touch_delivered(state, "long", 3)
+            self.assertTrue((pending / "long.json").exists())
+            mark_scalp_target_touch_delivered(state, "long", 5)
+            self.assertFalse((pending / "long.json").exists())
+
+    def test_missing_candles_do_not_become_target_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state, data = root / "state", root / "data"
+            pending = state / "target_pending"
+            pending.mkdir(parents=True)
+            data.mkdir()
+            frame = market_frame()
+            source_ms = int(frame.iloc[300]["close_time_ms"])
+            record = {
+                "schema": "scalp-target-pending-v1", "setup_id": "gap",
+                "spot_symbol": "BTCUSDT", "perpetual_symbol": "BTCUSDT",
+                "direction": "YUKARI", "source_price": 100,
+                "bar_close_time_ms": source_ms, "horizon_ms": 86_400_000,
+                "notification_sent": False,
+            }
+            (pending / "gap.json").write_text(json.dumps(record), encoding="utf-8")
+            frame.to_csv(scalp_cache_path(data, "BTCUSDT"), index=False)
+            now = datetime.fromtimestamp((source_ms + 86_400_001) / 1000, tz=timezone.utc)
+            self.assertEqual(settle_scalp_target_outcomes(state, data, now=now), [])
+            self.assertTrue((pending / "gap.json").exists())
+
     def test_observation_is_settled_at_fixed_15_30_60_minute_time_exits(self) -> None:
         manifest = load_trade1_universe()
         item = observation()
