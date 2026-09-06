@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+import numpy as np
 import pandas as pd
 
 from .config import (
@@ -484,6 +485,8 @@ def _validate_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if result.empty:
         return _empty_frame()
     price_columns = ["open", "high", "low", "close"]
+    if not np.isfinite(result.to_numpy()).all():
+        raise MarketDataError("Sonlu olmayan piyasa verisi (NaN/Infinity)")
     if (result[price_columns] <= 0).any().any() or (result["volume"] < 0).any():
         raise MarketDataError("Negatif veya sifir piyasa verisi")
     if (result["trade_count"] < 0).any() or (result["quote_volume"] < 0).any():

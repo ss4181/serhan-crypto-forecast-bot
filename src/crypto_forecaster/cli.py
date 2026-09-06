@@ -683,7 +683,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
     if delivery is not None:
         detail = f" ({delivery.detail})" if delivery.detail else ""
         print(f"Scalp Telegram: {delivery.status}{detail}")
-        if delivery.status in {"SENT", "DEDUPLICATED"}:
+        if delivery.status in {"SENT", "DEDUPLICATED", "PARTIAL"}:
             tracked = record_scalp_target_setups(
                 settings.scalp_state_dir,
                 notification_report,

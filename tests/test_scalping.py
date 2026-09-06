@@ -769,7 +769,7 @@ class DigestTests(unittest.TestCase):
             }
             for family in ("B1", "F3")
             for horizon in (15, 30, 60)
-            for sample in range(20)
+            for sample in range(40)
         ]
         filtered = filter_scalp_notification_report(
             report,

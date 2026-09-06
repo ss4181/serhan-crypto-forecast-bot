@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -870,6 +871,7 @@ def settle_scalp_target_outcomes(
     grace_ms = SCALP_SETTLEMENT_GRACE_DAYS * 24 * 60 * 60 * 1000
     frames: dict[str, pd.DataFrame] = {}
     settled: list[dict[str, Any]] = []
+    acknowledgements: list[tuple[Path, dict[str, Any], bool]] = []
     for path in sorted(directory.glob("*.json")):
         record = _read_scalp_target_record(path)
         if record is None:
@@ -944,10 +946,16 @@ def settle_scalp_target_outcomes(
             recorded.add(percent)
         record["outcome_recorded_percents"] = sorted(recorded)
         delivered = {float(value) for value in record.get("delivered_percents", [])}
-        if all(level in recorded for level in SCALP_TARGET_TOUCH_PERCENTS) and (
+        remove = all(level in recorded for level in SCALP_TARGET_TOUCH_PERCENTS) and (
             not bool(record.get("notification_sent", True))
             or hit_levels.issubset(delivered)
-        ):
+        )
+        acknowledgements.append((path, record, remove))
+    if settled:
+        _append_scalp_target_ledger(state_dir, settled)
+    # Commit evidence first. A failed write must leave the pending work intact.
+    for path, record, remove in acknowledgements:
+        if remove:
             path.unlink(missing_ok=True)
         else:
             path.write_text(
@@ -955,8 +963,6 @@ def settle_scalp_target_outcomes(
                 + "\n",
                 encoding="utf-8",
             )
-    if settled:
-        _append_scalp_target_ledger(state_dir, settled)
     return settled
 
 
@@ -1054,6 +1060,7 @@ def settle_scalp_bracket_outcomes(
     grace_ms = SCALP_SETTLEMENT_GRACE_DAYS * 24 * 60 * 60 * 1000
     frames: dict[str, pd.DataFrame] = {}
     settled: list[dict[str, Any]] = []
+    completed_paths: list[Path] = []
     for path in sorted(directory.glob("*.json")):
         record = _read_scalp_bracket_record(path)
         if record is None:
@@ -1078,9 +1085,11 @@ def settle_scalp_bracket_outcomes(
         if outcome is None:
             continue
         settled.append(outcome)
-        path.unlink(missing_ok=True)
+        completed_paths.append(path)
     if settled:
         _append_scalp_bracket_ledger(state_dir, settled)
+    for path in completed_paths:
+        path.unlink(missing_ok=True)
     return settled
 
 
@@ -1426,7 +1435,9 @@ def scalp_setup_assessment(
 
     by_horizon: dict[int, tuple[float, float, int, int]] = {}
     for horizon in SCALP_BACKTEST_HORIZONS:
-        directed_net: list[float] = []
+        # Multiple detectors can describe the same market move. Count it once,
+        # using the least favourable net value if their cost estimates differ.
+        net_by_event: dict[tuple[object, ...], float] = {}
         days: set[str] = set()
         for item in item_tuple:
             family_rows = [
@@ -1434,6 +1445,7 @@ def scalp_setup_assessment(
                 for row in row_tuple
                 if str(row.get("family", "")) == item.family
                 and _scalp_row_has_numbers(row)
+                and int(row["horizon_minutes"]) == horizon
             ]
             for row in _scalp_candidate_rows(item, family_rows):
                 if int(row.get("horizon_minutes", 0)) != horizon:
@@ -1445,13 +1457,19 @@ def scalp_setup_assessment(
                     cost = float(item.estimated_cost_bps)
                 net = gross - cost if direction == "YUKARI" else -gross - cost
                 if math.isfinite(net):
-                    directed_net.append(net)
+                    key = (
+                        row.get("perpetual_symbol", item.perpetual_symbol),
+                        row.get("bar_close_time_ms", row.get("exit_time_ms")),
+                        horizon,
+                    )
+                    net_by_event[key] = min(net_by_event.get(key, net), net)
                 try:
                     exit_ms = int(row.get("exit_time_ms", 0))
                     if exit_ms > 0:
                         days.add(datetime.fromtimestamp(exit_ms / 1000, tz=UTC).date().isoformat())
                 except (OSError, OverflowError, TypeError, ValueError):
                     pass
+        directed_net = list(net_by_event.values())
         if directed_net:
             wins = sum(value > 0.0 for value in directed_net)
             # A weak beta prior avoids displaying 0%/100% from tiny samples.
@@ -1736,6 +1754,7 @@ def settle_scalp_observations(
     grace_ms = SCALP_SETTLEMENT_GRACE_DAYS * 24 * 60 * 60 * 1000
     frames: dict[str, pd.DataFrame] = {}
     settled: list[dict[str, Any]] = []
+    completed_paths: list[Path] = []
     for path in sorted(directory.glob("*.json")):
         record = _read_pending(path)
         if record is None:
@@ -1757,9 +1776,11 @@ def settle_scalp_observations(
                 path.unlink(missing_ok=True)
             continue
         settled.extend(rows)
-        path.unlink(missing_ok=True)
+        completed_paths.append(path)
     if settled:
         _append_scalp_ledger(state_dir, settled)
+    for path in completed_paths:
+        path.unlink(missing_ok=True)
     return settled
 
 
@@ -2280,6 +2301,12 @@ def _time_exit_outcomes(
     if event_index + 1 >= len(frame) or required_index >= len(frame):
         return None
     entry_price = float(frame.iloc[event_index + 1]["open"])
+    expected_times = int(record["bar_close_time_ms"]) + np.arange(
+        1, max(horizons) // 5 + 1
+    ) * SCALP_STEP_MS
+    actual_times = frame.iloc[event_index + 1 : required_index + 1]["close_time_ms"]
+    if not np.array_equal(actual_times.to_numpy(), expected_times):
+        return None
     cost = float(record["round_trip_cost_bps"])
     results: list[dict[str, Any]] = []
     for horizon in horizons:
@@ -2412,6 +2439,19 @@ def _first_touch_bracket(
 ) -> dict[str, Any] | None:
     if window.empty:
         return None
+    # Never infer an entry, first touch or timeout across a missing candle.
+    # A known touch before a later gap can still be settled safely.
+    source_ms = int(record["bar_close_time_ms"])
+    expected_ms = source_ms + SCALP_STEP_MS
+    prefix_length = 0
+    for close_time in window["close_time_ms"]:
+        if int(close_time) != expected_ms:
+            break
+        prefix_length += 1
+        expected_ms += SCALP_STEP_MS
+    window = window.iloc[:prefix_length]
+    if window.empty:
+        return None
     entry_price = float(window.iloc[0]["open"])
     direction = str(record["direction"])
     long_side = direction == "YUKARI"
@@ -2452,7 +2492,8 @@ def _first_touch_bracket(
             exit_position = position
             break
     if resolution is None:
-        if not deadline_reached:
+        deadline_ms = source_ms + int(record["horizon_minutes"]) * 60_000
+        if not deadline_reached or int(window.iloc[-1]["close_time_ms"]) != deadline_ms:
             return None
         resolution = "TIME_EXIT"
         exit_price = float(window.iloc[-1]["close"])
@@ -2648,28 +2689,53 @@ def _bracket_ledger_path(state_dir: Path) -> Path:
 
 
 def _append_scalp_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with _ledger_path(state_dir).open("a", encoding="utf-8", newline="\n") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    _append_outcomes_once(_ledger_path(state_dir), rows, ("signal_id", "horizon_minutes"))
 
 
 def _append_scalp_target_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with _target_ledger_path(state_dir).open(
-        "a", encoding="utf-8", newline="\n"
-    ) as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    _append_outcomes_once(_target_ledger_path(state_dir), rows, ("setup_id", "target_percent"))
 
 
 def _append_scalp_bracket_ledger(state_dir: Path, rows: list[dict[str, Any]]) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with _bracket_ledger_path(state_dir).open(
-        "a", encoding="utf-8", newline="\n"
-    ) as handle:
+    _append_outcomes_once(_bracket_ledger_path(state_dir), rows, ("setup_id",))
+
+
+def _append_outcomes_once(
+    path: Path, rows: list[dict[str, Any]], keys: tuple[str, ...]
+) -> None:
+    """Single-writer write-ahead append, replay-safe after a restart.
+
+    The service is the sole writer. This is not a multi-process transaction;
+    concurrent workers require a database/lock instead.
+    """
+    existing: set[tuple[Any, ...]] = set()
+    truncated_tail = False
+    if path.exists():
+        with path.open("rb") as handle:
+            if handle.seek(0, os.SEEK_END):
+                handle.seek(-1, os.SEEK_END)
+                truncated_tail = handle.read(1) != b"\n"
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                    if isinstance(row, dict) and all(key in row for key in keys):
+                        existing.add(tuple(row[key] for key in keys))
+                except json.JSONDecodeError:
+                    continue
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        # Isolate a possibly truncated last line without deleting evidence.
+        if truncated_tail:
+            handle.write("\n")
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+            key = tuple(row[field] for field in keys)
+            if key in existing:
+                continue
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n")
+            existing.add(key)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _aggregate_scalp(rows: list[dict[str, Any]]) -> dict[str, Any]:

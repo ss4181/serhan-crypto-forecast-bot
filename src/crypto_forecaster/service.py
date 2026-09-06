@@ -444,7 +444,7 @@ def deliver_eligible(
             state_dir=settings.telegram_state_dir,
             reply_markup=telegram_channel_keyboard(),
         )
-        if delivery.status == "SENT":
+        if delivery.status in {"SENT", "PARTIAL"}:
             _record(settings, prediction)
         deliveries.append((prediction, delivery))
     return deliveries
@@ -472,7 +472,7 @@ def deliver_observation_digest(
         state_dir=settings.telegram_state_dir,
         reply_markup=telegram_channel_keyboard(),
     )
-    if delivery.status == "SENT":
+    if delivery.status in {"SENT", "PARTIAL"}:
         for prediction in predictions:
             _record(settings, prediction)
     return delivery
@@ -756,6 +756,7 @@ def serve_forever(
                         if scalp_delivery is not None and scalp_delivery.status in {
                             "SENT",
                             "DEDUPLICATED",
+                            "PARTIAL",
                         }:
                             tracked = record_scalp_target_setups(
                                 settings.scalp_state_dir,

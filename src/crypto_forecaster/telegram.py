@@ -355,7 +355,7 @@ class TelegramNotifier:
         state_dir: Path,
     ) -> TelegramDelivery:
         results: list[tuple[int, TelegramDelivery]] = []
-        for recipient in self._direct_recipients():
+        for recipient in self._signal_recipients(signal_id, state_dir):
             result = self._deliver_single_once(
                 signal_id=signal_id,
                 text=text,
@@ -387,9 +387,8 @@ class TelegramNotifier:
         ]
         if successful:
             status = (
-                "DEDUPLICATED"
+                "PARTIAL" if failed else "DEDUPLICATED"
                 if all(result.status == "DEDUPLICATED" for result in successful)
-                and not failed
                 else "SENT"
             )
             detail = f"{len(successful)}/{len(results)} ozel teslimat"
@@ -401,6 +400,41 @@ class TelegramNotifier:
                 detail=detail,
             )
         return owner_result
+
+    def _signal_recipients(self, signal_id: str, state_dir: Path) -> tuple[int, ...]:
+        """Freeze this message's audience; always honour subsequent removals.
+
+        Re-checking all current members on every retry sends historical wins
+        again whenever a subscriber joins. The manifest is private local state.
+        """
+        current = self._direct_recipients()
+        path = state_dir / f"{signal_id}.audience.json"
+        if not path.exists():
+            state_dir.mkdir(parents=True, exist_ok=True)
+            # Preserve the audience of legacy messages with existing evidence.
+            legacy = {
+                int(p.name) for p in (state_dir / "direct").glob("*")
+                if p.name.isdigit() and (
+                    (p / f"{signal_id}.receipt.json").exists()
+                    or (p / f"{signal_id}.intent.json").exists()
+                )
+            }
+            recipients = sorted(legacy | {self._owner_id}) if legacy else list(current)
+            try:
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    json.dump({"signal_id": signal_id, "recipients": recipients}, handle)
+            except FileExistsError:
+                pass
+        payload = _read_state(path)
+        audience = payload.get("recipients")
+        if (
+            payload.get("signal_id") != signal_id
+            or not isinstance(audience, list)
+            or not all(type(value) is int and value > 0 for value in audience)
+        ):
+            raise TelegramError("Telegram alici listesi dogrulanamadi")
+        return tuple(value for value in current if value in audience)
 
     def _deliver_single_once(
         self,

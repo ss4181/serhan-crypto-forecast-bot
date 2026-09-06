@@ -45,8 +45,8 @@
     <div class="card">%2 dokunuş<span class="value" id="target-2">-</span></div>
     <div class="card">%3 dokunuş<span class="value" id="target-3">-</span></div>
     <div class="card">%5 dokunuş<span class="value" id="target-5">-</span></div>
-    <div class="card">Dinamik TP/SL<span class="value" id="bracket-rate">-</span></div>
-    <div class="card">Bildirim filtresi<span class="value" id="notified-rate">-</span></div>
+    <div class="card">Stop öncesi hedef<span class="value" id="bracket-rate">-</span></div>
+    <div class="card">Bildirimli dokunuşlar<span class="value" id="notified-rate">-</span></div>
   </section>
   <div class="controls">
     <input aria-label="Coin ara" id="search" placeholder="Coin ara (BTCUSDT)">
@@ -54,7 +54,7 @@
     <select aria-label="Sonuç" id="status"><option value="">Tüm durumlar</option><option value="TARGET">Hedef önce</option><option value="STOP">Stop önce</option><option value="TIME_EXIT">Süre sonu</option><option value="TP/SL BEKLEMEDE">TP/SL beklemede</option><option value="HEDEF ULAŞTI">%2/%3/%5 ulaştı</option><option value="HEDEF ULAŞMADI">%2/%3/%5 ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option></select>
   </div>
   <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Strateji</th><th>Ham güç</th><th>Kalite/Güven</th><th>Tahmin</th><th>Aile</th><th>Sinyal fiyatı</th><th>Hedef / Stop</th><th>Dokunma zamanı</th><th>Durum</th><th>Bildirim</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
-  <p class="muted">Her kademe ayrı ölçülür. Açık hedefler başarı/başarısızlık sayılmaz. Sayfa verisi yayın zamanında yenilenir; canlı fiyat akışı değildir.</p>
+  <p class="muted">Kartlar tüm yüklü kayıtları özetler; filtreler tabloyu değiştirir. Her kademe ayrı ölçülür; aynı sinyalin %2/%3/%5 kayıtları ayrı işlemler değildir. Dokunuş, stop sonrasında da gerçekleşebilir ve işlem kârı sayılmaz. Açık hedefler başarı/başarısızlık sayılmaz; erken dokunuşlar göründüğü için tamamlanmamış dönemden başarı oranı çıkarmayın. “Gönderildi” ilk sinyalin en az bir alıcıya teslimat kaydıdır; herkesin okuduğu anlamına gelmez. Tahmin yüzdesi %2/%3/%5 hedefine ulaşma olasılığı değildir. Sayfa yayın zamanında yenilenir; canlı fiyat akışı değildir.</p>
   <footer class="muted">Bu sayfa araştırma/ileri-test sonuçlarını gösterir; emir veya kazanç garantisi değildir.</footer>
 </main>
 <script src="scalp.js" defer></script>

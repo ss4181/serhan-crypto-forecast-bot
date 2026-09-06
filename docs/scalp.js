@@ -75,8 +75,8 @@ async function load() {
       const v = (s.targetLevels || {})[String(level)];
       el("target-" + level).textContent = v ? `${number(v.hits)} dokundu · ${number(v.misses)} süresi doldu · ${number(v.pending)} bekliyor` : "Veri yok";
     }
-    el("bracket-rate").textContent = pct(s.scalpBracketWinRate);
-    el("notified-rate").textContent = pct(s.notifiedScalpTargetHitRate);
+    el("bracket-rate").textContent = `${number(s.scalpBracketWins)} / ${number(s.settledScalpBracketCount)} sonuç`;
+    el("notified-rate").textContent = `${number(s.notifiedScalpTargetHits)} / ${number(s.notifiedScalpTargetCount)} kademe (2/3/5)`;
     render();
   } catch (error) {
     el("updated").textContent = "Veri yüklenemedi. Sayfayı yenileyin veya daha sonra tekrar deneyin.";
