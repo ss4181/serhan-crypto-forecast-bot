@@ -164,6 +164,9 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
+      - name: Verify dashboard before publishing
+        run: node tests/dashboard_ui.cjs
+
       - name: Upload dashboard artifact
         uses: actions/upload-pages-artifact@v3
         with:
