@@ -818,3 +818,24 @@ ve bildirim eşikleri bu arayüz güncellemesinde değiştirilmemiştir.
 
 JSON'daki eski toplu oran alanları artık `null` döner. Yeni tüketiciler
 `measurements.audiences` altındaki seviye/ufuk/kapsam gruplarını kullanmalıdır.
+
+## Sinyal gelmiyorsa (9 Eylül 2026)
+
+Scalp taramasının çalışması her taramada bildirim gönderileceği anlamına gelmez.
+Telegram **Durum** düğmesi ve mevcut günlük özet artık son scalp taramasını,
+taze piyasa sayısını, bildirime uygun coin/mum sayısını, ilk elenme nedenlerini
+ve o taramanın teslimat durumunu gösterir. Filtreyi geçmeyen aday için Telegram
+gönderimi denenmez. “Aday yok”, “kısmi teslimat”, “belirsiz teslimat” ve gönderim
+hatası birbirinden ayrılır; 15 dakikadan eski durum kaydı uyarıyla gösterilir.
+Bu kayıt canlı servis sağlık garantisi veya 24 saatlik toplam değildir.
+
+Ham skor eşiği (sunucudaki 1,5 denemesi) tek başına bildirim şartı değildir.
+Her durumda çoklu teyit ve net yön gerekir. Yeterli geçmiş örnek varsa ham skor
+yerine aile/rejim içi kalite, net-pozitif sonuç oranı ve net beklenti filtreleri
+uygulanır. Bu oran **%2 hedefe dokunma olasılığı değildir**.
+
+Günlükte `Scalp bildirim filtresi` satırı her coin/mumu ilk elendiği kapıda
+bir kez sayar; iki strateji ailesi aynı coini iki aday yapmaz. Durum dosyası
+`state/scalp/notification_status.json` atomik yazılır, kişisel veri içermez ve
+teslimat defterinin yerine geçmez. Durum yazımı başarısız olursa geçerli sinyal
+gönderimi durdurulmaz. Bu değişiklik strateji veya bildirim eşiklerini gevşetmez.

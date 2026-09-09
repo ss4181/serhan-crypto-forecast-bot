@@ -594,12 +594,15 @@ def filter_scalp_notification_report(
     minimum_direction_probability: float | None = None,
     minimum_expected_net_bps: float | None = None,
     minimum_calibration_samples: int = 0,
+    diagnostics: dict[str, int] | None = None,
 ) -> ScalpScanReport:
     """Keep only exact-direction, high-score multi-family setups for Telegram.
 
     The original report is deliberately left untouched for shadow scoring and
     the GitHub dashboard.  This filtered copy controls only what is sent to the
-    channel, so muted candidates remain measurable.
+    channel, so muted candidates remain measurable. Optional diagnostics count
+    each symbol once, at its first failing gate (or as eligible), without
+    changing the decision. The supplied dictionary is replaced on every call.
     """
     try:
         threshold = float(minimum_score)
@@ -607,6 +610,13 @@ def filter_scalp_notification_report(
         raise ValueError("Scalp bildirim skoru sayi olmali") from None
     if not math.isfinite(threshold) or threshold < 0.0:
         raise ValueError("Scalp bildirim skoru negatif veya sonsuz olamaz")
+    if diagnostics is not None:
+        diagnostics.clear()
+
+    def count(reason: str) -> None:
+        if diagnostics is not None:
+            diagnostics[reason] = diagnostics.get(reason, 0) + 1
+
     ledger_rows = tuple(ledger)
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in report.observations:
@@ -617,36 +627,46 @@ def filter_scalp_notification_report(
             len({item.family for item in items}) < 2
             or not any(item.alert_tier == "KURULUM" for item in items)
         ):
+            count("no_setup")
             continue
         assessment = scalp_setup_assessment(items, ledger_rows)
         if assessment.direction not in {"YUKARI", "AŞAĞI"}:
+            count("direction_unclear")
             continue
         calibrated = assessment.sample_count >= max(int(minimum_calibration_samples), 0)
         if calibrated and minimum_calibration_samples > 0:
             if (
                 assessment.success_probability is None
                 or assessment.expected_net_bps is None
-                or assessment.success_probability
-                < float(minimum_direction_probability or 0.0)
-                or assessment.expected_net_bps < float(minimum_expected_net_bps or 0.0)
             ):
+                count("calibration_missing")
+                continue
+            if assessment.success_probability < float(minimum_direction_probability or 0.0):
+                count("probability_low")
+                continue
+            if assessment.expected_net_bps < float(minimum_expected_net_bps or 0.0):
+                count("expected_net_low")
                 continue
             if (
                 minimum_quality_percentile is not None
                 and assessment.quality_percentile is None
                 and max(item.score for item in items) < threshold
             ):
+                count("score_low")
                 continue
             if (
                 minimum_quality_percentile is not None
                 and assessment.quality_percentile is not None
                 and assessment.quality_percentile < float(minimum_quality_percentile)
             ):
+                count("quality_low")
                 continue
         elif max(item.score for item in items) < threshold:
             # Until a family/regime has a minimally useful forward sample, keep
             # the old detector-strength gate as an explicitly temporary fallback.
+            count("score_low")
             continue
+        count("eligible")
         eligible_symbols.add(symbol)
     return replace(
         report,

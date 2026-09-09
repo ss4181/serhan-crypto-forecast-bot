@@ -30,6 +30,7 @@ from .data import BinanceMarketDataClient, load_cache, update_cache
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
+from .notification_status import format_notification_status, write_notification_status
 from .openinterest import OpenInterestError, update_open_interest
 from .outcomes import (
     format_scorecard,
@@ -43,6 +44,7 @@ from .outcomes import (
 from .research import research_all
 from .scalping import (
     SCALP_STEP_MS,
+    ScalpScanReport,
     deliver_scalp_bracket_wins,
     deliver_scalp_target_touches,
     deliver_scalp_observations,
@@ -468,7 +470,7 @@ def deliver_observation_digest(
     client = notifier or TelegramNotifier(state_dir=settings.telegram_state_dir)
     delivery = client.deliver_once(
         signal_id=signal_id,
-        text=format_observation_digest(predictions, now=current),
+        text=format_runtime_status(settings, predictions, now=current),
         state_dir=settings.telegram_state_dir,
         reply_markup=telegram_channel_keyboard(),
     )
@@ -560,6 +562,31 @@ def deliver_target_touches(
     return deliveries
 
 
+def format_runtime_status(
+    settings: Settings, predictions: list[Prediction], *, now: datetime,
+) -> str:
+    text = format_observation_digest(predictions, now=now)
+    if settings.scalp_observation_enabled:
+        return format_notification_status(settings, now=now) + "\n\n" + text
+    return text
+
+
+def _save_notification_check(
+    settings: Settings, report: ScalpScanReport, counts: dict[str, int],
+    status: str, progress: Callable[[str], None],
+) -> None:
+    # Diagnostics must not suppress a valid alert if the status file cannot be
+    # written. The last snapshot will become visibly stale instead.
+    try:
+        write_notification_status(
+            settings.scalp_state_dir, evaluated_at_ms=report.evaluated_at_ms,
+            fresh=report.fresh, attempted=report.attempted,
+            counts=counts, delivery_status=status,
+        )
+    except (OSError, ValueError) as error:
+        progress(f"Scalp bildirim durum kaydi yazilamadi: {type(error).__name__}")
+
+
 def answer_commands(
     settings: Settings,
     predictions: list[Prediction],
@@ -571,7 +598,7 @@ def answer_commands(
     current = now or datetime.now(timezone.utc)
     return poll_and_answer(
         settings,
-        status_text=lambda: format_observation_digest(predictions, now=current),
+        status_text=lambda: format_runtime_status(settings, predictions, now=current),
         performance_text=lambda days: format_scorecard(
             scorecard(load_ledger(settings.outcome_state_dir), days=days, now=current)
         ),
@@ -732,6 +759,7 @@ def serve_forever(
                         f"{len(scalp_settled)} sonuc"
                     )
                     if is_primary():
+                        notification_counts: dict[str, int] = {}
                         scalp_notification_report = filter_scalp_notification_report(
                             scalp_report,
                             minimum_score=settings.scalp_minimum_alert_score,
@@ -740,11 +768,30 @@ def serve_forever(
                             minimum_direction_probability=settings.scalp_minimum_direction_probability,
                             minimum_expected_net_bps=settings.scalp_minimum_expected_net_bps,
                             minimum_calibration_samples=settings.scalp_minimum_calibration_samples,
+                            diagnostics=notification_counts,
                         )
-                        scalp_delivery = deliver_scalp_observations(
-                            settings,
-                            scalp_notification_report,
-                            manifest=scalp_manifest,
+                        reason_text = ", ".join(
+                            f"{key}={value}" for key, value in notification_counts.items()
+                            if key != "eligible"
+                        ) or "elenen yok"
+                        progress(
+                            f"Scalp bildirim filtresi: {notification_counts.get('eligible', 0)}/"
+                            f"{sum(notification_counts.values())} uygun; {reason_text}"
+                        )
+                        initial_status = "PENDING" if scalp_notification_report.observations else "NO_CANDIDATE"
+                        _save_notification_check(settings, scalp_report, notification_counts, initial_status, progress)
+                        try:
+                            scalp_delivery = deliver_scalp_observations(
+                                settings,
+                                scalp_notification_report,
+                                manifest=scalp_manifest,
+                            )
+                        except (OSError, RuntimeError, TypeError, ValueError):
+                            _save_notification_check(settings, scalp_report, notification_counts, "ERROR", progress)
+                            raise
+                        _save_notification_check(
+                            settings, scalp_report, notification_counts,
+                            scalp_delivery.status if scalp_delivery is not None else initial_status, progress,
                         )
                         if (
                             scalp_delivery is not None
