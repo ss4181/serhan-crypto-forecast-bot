@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -51,7 +52,7 @@ def park_signal(state_dir: Path, direction: str, signal_id: str = "a" * 64) -> N
         signal_id=signal_id,
         symbol="BTCUSDT",
         interval="5m",
-        tier="GOZLEM",
+        tier="ISLEM",
         direction=direction,
         probability=0.62,
         source_price=ENTRY,
@@ -186,6 +187,43 @@ class ScorecardTests(unittest.TestCase):
 
 
 class TargetTouchTests(unittest.TestCase):
+    def test_observation_digest_does_not_create_target_watcher(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_delivery(
+                root / "outcomes", signal_id="g" * 64, symbol="BTCUSDT",
+                interval="5m", tier="GOZLEM", direction="YUKARI",
+                probability=.62, source_price=ENTRY,
+                source_close_time_ms=SOURCE_CLOSE_MS,
+                target_close_time_ms=SOURCE_CLOSE_MS + STEP_MS,
+                delivered_at_ms=SOURCE_CLOSE_MS + 500,
+                barrier_bps=BARRIER_BPS, horizon_ms=HORIZON_MS,
+            )
+            self.assertEqual(
+                list((root / "outcomes" / "target_pending").glob("*.json")), []
+            )
+
+    def test_legacy_observation_target_watcher_is_removed_without_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_delivery(
+                root / "outcomes", signal_id="g" * 64, symbol="BTCUSDT",
+                interval="5m", tier="ISLEM", direction="YUKARI",
+                probability=.62, source_price=ENTRY,
+                source_close_time_ms=SOURCE_CLOSE_MS,
+                target_close_time_ms=SOURCE_CLOSE_MS + STEP_MS,
+                delivered_at_ms=SOURCE_CLOSE_MS + 500,
+                barrier_bps=BARRIER_BPS, horizon_ms=HORIZON_MS,
+            )
+            path = root / "outcomes" / "target_pending" / ("g" * 64 + ".json")
+            payload = json.loads(path.read_text())
+            payload["tier"] = "GOZLEM"
+            path.write_text(json.dumps(payload))
+            self.assertEqual(
+                pending_target_touches(root / "outcomes", root / "data"), []
+            )
+            self.assertFalse(path.exists())
+
     def test_long_targets_are_reported_once_even_after_barrier_settlement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

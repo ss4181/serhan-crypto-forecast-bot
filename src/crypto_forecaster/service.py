@@ -476,7 +476,7 @@ def deliver_observation_digest(
     )
     if delivery.status in {"SENT", "PARTIAL"}:
         for prediction in predictions:
-            _record(settings, prediction)
+            _record(settings, prediction, track_target_touches=False)
     return delivery
 
 
@@ -516,7 +516,7 @@ def format_target_touch(event: dict[str, object]) -> str:
     tier = str(event.get("tier", "GOZLEM"))
     message = "\n".join(
         [
-            f"🎯 HEDEF FIYATA ULASILDI • {symbol} • {signed_percent}",
+            f"🎯 HEDEF FIYATA ULASILDI • YÜZDE HEDEF • {symbol} • {signed_percent}",
             f"{direction_icon} {direction} • {interval} • {tier}",
             f"${float(event['source_price']):,.2f} → ${float(event['target_price']):,.2f}",
             f"Mum: ${float(event['touch_price']):,.2f} • {_utc_text(int(event['touch_close_time_ms']))}",
@@ -534,7 +534,7 @@ def deliver_target_touches(
     notifier: TelegramNotifier | None = None,
     now: datetime | None = None,
 ) -> list[tuple[dict[str, object], TelegramDelivery]]:
-    """Send each signal's +/−2% and +/−3% touch at most once."""
+    """Send each actionable signal's +/−2%, +/−3% and +/−5% touch at most once."""
     events = pending_target_touches(
         settings.outcome_state_dir, settings.data_dir, now=now
     )
@@ -616,7 +616,9 @@ def answer_commands(
     )
 
 
-def _record(settings: Settings, prediction: Prediction) -> None:
+def _record(
+    settings: Settings, prediction: Prediction, *, track_target_touches: bool = True
+) -> None:
     record_delivery(
         settings.outcome_state_dir,
         signal_id=prediction.signal_id,
@@ -631,6 +633,7 @@ def _record(settings: Settings, prediction: Prediction) -> None:
         delivered_at_ms=prediction.evaluated_at_ms,
         barrier_bps=settings.barrier_target_bps,
         horizon_ms=int(settings.barrier_horizon_hours * 60 * 60 * 1000),
+        track_target_touches=track_target_touches,
     )
 
 

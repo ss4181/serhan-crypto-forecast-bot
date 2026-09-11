@@ -60,6 +60,7 @@ def record_delivery(
     delivered_at_ms: int,
     barrier_bps: float,
     horizon_ms: int,
+    track_target_touches: bool = True,
 ) -> Path:
     directory = pending_dir(state_dir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -87,7 +88,20 @@ def record_delivery(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n",
             encoding="utf-8",
         )
-    _record_target_delivery(state_dir, payload)
+    elif track_target_touches and str(payload.get("tier", "")) == "ISLEM":
+        # Upgrade an observation record if a later timing pass sends the real
+        # operation notification for the same candle.
+        existing = _read_record(path)
+        if existing is not None and str(existing.get("tier", "")) != "ISLEM":
+            existing.update(payload)
+            path.write_text(
+                json.dumps(existing, ensure_ascii=False, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+    # Observation digests are not trades. Only an actual ISLEM delivery may
+    # create the separate +/−2%, +/−3% and +/−5% target watcher.
+    if track_target_touches and str(payload.get("tier", "")) == "ISLEM":
+        _record_target_delivery(state_dir, payload)
     return path
 
 
@@ -97,7 +111,7 @@ def pending_target_touches(
     *,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Find newly touched +/-2% and +/-3% levels without changing their state.
+    """Find newly touched +/-2%, +/-3% and +/-5% levels without changing their state.
 
     The normal triple-barrier record may settle much earlier than these larger
     informational levels.  A separate, tiny tracker therefore survives that
@@ -108,7 +122,7 @@ def pending_target_touches(
     # does not create a blind spot at the rollout boundary.
     for pending_path in pending_dir(state_dir).glob("*.json"):
         pending_record = _read_record(pending_path)
-        if pending_record is not None:
+        if pending_record is not None and str(pending_record.get("tier", "")) == "ISLEM":
             _record_target_delivery(state_dir, pending_record)
     directory = target_pending_dir(state_dir)
     if not directory.exists():
@@ -120,6 +134,11 @@ def pending_target_touches(
     for path in sorted(directory.glob("*.json")):
         record = _read_target_record(path)
         if record is None:
+            path.unlink(missing_ok=True)
+            continue
+        # Remove legacy observation rows created by the old digest path. They
+        # were never actionable signals and must not emit target messages.
+        if str(record.get("tier", "")) != "ISLEM":
             path.unlink(missing_ok=True)
             continue
         source_ms = int(record["source_close_time_ms"])

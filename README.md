@@ -839,3 +839,8 @@ bir kez sayar; iki strateji ailesi aynı coini iki aday yapmaz. Durum dosyası
 `state/scalp/notification_status.json` atomik yazılır, kişisel veri içermez ve
 teslimat defterinin yerine geçmez. Durum yazımı başarısız olursa geçerli sinyal
 gönderimi durdurulmaz. Bu değişiklik strateji veya bildirim eşiklerini gevşetmez.
+
+Model özeti (`GÖZLEM`) işlem bildirimi değildir ve %2/%3/%5 hedef takipçisi
+oluşturmaz. Düzenli hedef dokunuşu yalnızca gerçekten gönderilmiş `ISLEM`
+sinyalinden sonra izlenir. Scalp yüzde hedefleri kendi ayrı defterinde tutulur;
+eski gözlem kayıtları ilk kontrolde silinir.
