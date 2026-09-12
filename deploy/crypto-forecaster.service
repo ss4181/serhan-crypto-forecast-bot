@@ -16,9 +16,11 @@ WorkingDirectory=/opt/crypto-forecaster
 # Real values live here, never in the repo.  Created by install.sh with 0600.
 EnvironmentFile=/etc/crypto-forecaster.env
 
-# Poll every 60 s: the tightest notification window is the first 40 % of a 5 m
-# candle (120 s), so a one minute cycle always lands inside it.
-ExecStart=/opt/crypto-forecaster/.venv/bin/python -u run.py serve --days 365 --poll-seconds 60
+# Poll every 20 s so the post-close scalp pass starts promptly even after a
+# longer model/data cycle; the refresh fan-out remains bounded and read-only.
+# Check frequently enough to start the post-close scalp pass promptly.  The
+# refresh fan-out remains bounded and read-only.
+ExecStart=/opt/crypto-forecaster/.venv/bin/python -u run.py serve --days 365 --poll-seconds 20
 
 Restart=always
 RestartSec=15

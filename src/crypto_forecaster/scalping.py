@@ -13,6 +13,7 @@ import json
 import math
 import os
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -402,19 +403,32 @@ def refresh_and_scan_scalp_universe(
     frames: dict[str, pd.DataFrame] = {}
     errors: list[str] = []
     output = progress or (lambda _message: None)
-    for entry in selected:
-        try:
-            frames[entry.perpetual_symbol] = update_market_cache(
-                scalp_cache_path(settings.scalp_data_dir, entry.perpetual_symbol),
-                entry.perpetual_symbol,
-                SCALP_INTERVAL,
-                days=settings.scalp_cache_days,
-                client=market_client,
-                now=now,
-                warn=output,
-            )
-        except (MarketDataError, OSError, TypeError, ValueError) as error:
-            errors.append(f"{entry.spot_symbol}: {error}")
+
+    def refresh_one(entry: UniverseEntry) -> tuple[UniverseEntry, pd.DataFrame]:
+        frame = update_market_cache(
+            scalp_cache_path(settings.scalp_data_dir, entry.perpetual_symbol),
+            entry.perpetual_symbol,
+            SCALP_INTERVAL,
+            days=settings.scalp_cache_days,
+            client=market_client,
+            now=now,
+            warn=output,
+        )
+        return entry, frame
+
+    # Each market is an independent public-data request.  A bounded pool
+    # shortens the post-close refresh window without changing the scan,
+    # thresholds, or ordering of the strategy itself.
+    worker_count = min(max(int(settings.scalp_refresh_workers), 1), len(selected) or 1)
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futures = {pool.submit(refresh_one, entry): entry for entry in selected}
+        for future in as_completed(futures):
+            entry = futures[future]
+            try:
+                _, frame = future.result()
+                frames[entry.perpetual_symbol] = frame
+            except (MarketDataError, OSError, TypeError, ValueError) as error:
+                errors.append(f"{entry.spot_symbol}: {error}")
     snapshots: dict[str, FuturesMarketSnapshot] = {}
     try:
         snapshots = market_client.fetch_futures_market_snapshots()

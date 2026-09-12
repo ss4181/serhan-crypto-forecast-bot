@@ -704,23 +704,29 @@ def serve_forever(
                         f"{delivery.status}{_detail_suffix(delivery)}"
                     )
             record_open_interest(settings, now=now)
-            if scalp_manifest is not None and now_ms >= next_scalp_scan_ms:
+            # The regular BTC/ETH work above can cross a five-minute boundary.
+            # Re-read the clock immediately before the scalp pass so a stale
+            # loop-start timestamp cannot make a fresh candle wait another
+            # polling interval.
+            scalp_now = datetime.now(timezone.utc)
+            scalp_now_ms = int(scalp_now.timestamp() * 1000)
+            if scalp_manifest is not None and scalp_now_ms >= next_scalp_scan_ms:
                 try:
                     scalp_report = refresh_and_scan_scalp_universe(
                         settings,
                         manifest=scalp_manifest,
                         entries=scalp_entries,
-                        now=now,
+                        now=scalp_now,
                         progress=progress,
                     )
                     scalp_settled = settle_scalp_observations(
                         settings.scalp_state_dir,
                         settings.scalp_data_dir,
-                        now=now,
+                        now=scalp_now,
                     )
                     if is_primary():
                         scalp_target_deliveries = deliver_scalp_target_touches(
-                            settings, now=now
+                            settings, now=scalp_now
                         )
                         for event, delivery in scalp_target_deliveries:
                             progress(
@@ -831,7 +837,7 @@ def serve_forever(
                     scalp_target_settled = settle_scalp_target_outcomes(
                         settings.scalp_state_dir,
                         settings.scalp_data_dir,
-                        now=now,
+                        now=scalp_now,
                     )
                     if scalp_target_settled:
                         progress(
@@ -840,7 +846,7 @@ def serve_forever(
                     scalp_bracket_settled = settle_scalp_bracket_outcomes(
                         settings.scalp_state_dir,
                         settings.scalp_data_dir,
-                        now=now,
+                        now=scalp_now,
                     )
                     if scalp_bracket_settled:
                         progress(
@@ -858,7 +864,9 @@ def serve_forever(
                     # BTC/ETH service down or trigger its exponential backoff.
                     progress(f"Scalp gozlem hatasi: {error}")
                 finally:
-                    next_scalp_scan_ms = _next_scalp_scan_ms(now_ms)
+                    next_scalp_scan_ms = _next_scalp_scan_ms(
+                        int(datetime.now(timezone.utc).timestamp() * 1000)
+                    )
             if research_due(settings, now=now):
                 progress("Haftalik walk-forward arastirma ve model yenileme basladi")
                 research_all(settings, progress=progress)

@@ -166,6 +166,14 @@ class Settings:
     scalp_cache_days: int = field(
         default_factory=lambda: _environment_int("CRYPTO_SCALP_CACHE_DAYS", 3, 2, 30)
     )
+    # Refreshing the independent 5m caches serially adds a full request round
+    # trip for every market after each candle closes.  Keep the fan-out small
+    # and configurable so public Binance requests remain polite.
+    scalp_refresh_workers: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_REFRESH_WORKERS", 8, 1, 16
+        )
+    )
     scalp_maximum_bar_age_minutes: int = field(
         default_factory=lambda: _environment_int(
             "CRYPTO_SCALP_MAXIMUM_BAR_AGE_MINUTES", 15, 5, 60

@@ -72,6 +72,7 @@ for private_state in members.json pending_members.json; do
 done
 
 echo "==> Servis yeniden baslatiliyor"
+systemctl daemon-reload
 systemctl restart "$SERVICE"
 sleep 3
 systemctl --no-pager --lines=10 status "$SERVICE"
