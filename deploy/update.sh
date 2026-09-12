@@ -61,6 +61,11 @@ if ! "$APP_DIR/.venv/bin/python" -m unittest discover -s "$APP_DIR/tests" -t "$A
 fi
 
 chown -R "$BOT_USER":"$BOT_USER" "$APP_DIR"
+# Keep the installed unit in sync with the checked-out release.  Without this
+# explicit install, changing deploy/crypto-forecaster.service would only update
+# the copy under /opt and systemd would continue running the old command.
+install -m 644 "$SOURCE_DIR/deploy/crypto-forecaster.service" \
+  "/etc/systemd/system/crypto-forecaster.service"
 # Membership state contains Telegram identifiers.  Older releases may have
 # created it with 0755/0644 defaults, so every update repairs those permissions
 # before the service starts.
