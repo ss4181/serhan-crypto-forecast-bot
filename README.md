@@ -271,6 +271,46 @@ Rejim etiketi BTC/ETH'nin kalıcı dört haftalık yönü, 50 günlük EMA konum
 ve 89 piyasanın 48 saatlik trend genişliğinden üretilir. Bu etiket mevcut
 F1/F2/F3 kayıtlarını silmez; yalnız B1/B2/B3 hipotezlerini koşullandırır.
 
+Canlı primary tarayıcıda **teyitli rejim v1** uygulanır:
+
+- **BULL'a giriş:** en az %60 genişlik, BTC/ETH için dört trend oyunun en az
+  üçü ve pozitif kalıcı dört haftalık yön; üç ardışık, ayrı 5m kapanışta korunmalı.
+  Dört oy, iki coin için ayrı ayrı fiyatın 50 günlük EMA üzerinde olması ve
+  EMA'nın bir hafta öncesinden yüksek olmasıdır. Kalıcı yön, BTC/ETH'nin ortalama
+  dört haftalık getirisinin hem şimdi hem bir hafta önce pozitif olmasıdır.
+- **BULL'da kalma:** ana trend koşulları sürerken genişlik %50–%60 bandına inse
+  de durum korunur. Genişlik <%50 veya ana trend koşulları bozulursa iki ardışık
+  kapanışta BULL'dan çıkılır. OFF/TRANSITION arasında değişen zayıflık da bu iki
+  kapanışa dahildir; sayaç sıfırlanmaz.
+- **Acil çıkış:** genişlik <%35 veya trend teyidi en fazla 1/4 ise tek kapanışta
+  çıkılır. Bu etiket tek başına SHORT sinyali değildir.
+- **Veri koruması:** evrenin en az %90'ı (ayarlı kapsam daha yüksekse o oran)
+  aynı son kapalı 5m muma, BTC ve ETH de son kapalı saatlik muma sahip olmalı.
+  Eksik veri veya atlanan 5m taraması durumunda UNKNOWN olur; yeniden teyit gerekir.
+  Aynı mumdaki tekrarlar, eski mumlar veya uygulamanın yeniden başlaması teyit
+  sayısını yapay biçimde artırmaz. İlk açılış eski bir geçiş gibi bildirilmez.
+
+Varsayılan giriş `CRYPTO_SCALP_BULL_BREADTH=0.60`; normal çıkış eşiği girişten
+10 yüzde puan aşağıdır (alt sınır %35). Giriş teyidi üç 5m mumdur; ilk olumlu
+okumadan itibaren iki ek kapanış, yaklaşık 10 dakika gerektirir. Normal çıkışta
+ilk olumsuz okumadan sonra bir ek kapanış, yaklaşık 5 dakika beklenir.
+
+Karar ve bekleyen geçiş bildirimi `state/scalp/regime_status.json` içinde atomik
+saklanır. Telegram'a yalnız değişimde kısa bir **REJİM** bildirimi gider; mevcut
+üyelik ve alıcı bazlı tekilleştirme kuralları aynen geçerlidir. Kesin reddedilen
+ve kısmi gönderimler aynı kimlikle yeniden denenir; belirsiz teslimat aynı alıcıya
+tekrarlanmaz. 15 dakikadan eski geçişler gönderilmez. **Durum** menüsü mevcut rejimi
+ve bekleyen teyit sayısını gösterir. Rejim değişikliği mevcut %2/%3/%5 hedeflerini
+kapatmaz. `scalp-observe --send` de teyitli politikayı kullanır; bildirimsiz araştırma
+taramaları kalıcı canlı durum dosyasını değiştirmez.
+
+Bu eşikler kârlılık için optimize edilmiş bir model veya başarı olasılığı
+değildir; eşik çevresindeki gidip gelmeleri azaltan işletim kararıdır. Son 14
+günlük 4.032 taramanın ham etiket tekrarında 3-giriş/2-çıkış teyidi değişim sayısını
+130'dan 60'a indirmiştir. Bu yalnız etiket teyidi karşılaştırmasıdır; %60/%50 bant
+kuralının veya yeni politikanın getiri backtesti değildir. Yeni politika ayrı bir
+ileri-test dönemi olarak değerlendirilmelidir; geçmiş karneler yeniden yazılmaz.
+
 Bu ailelerin üçü de tarihsel 30-coin testinde üretim kapısını geçemedi. Bu
 bu yüzden kodda otomatik işlem terfisi yoktur: bütün mesajlar açıkça **İŞLEM
 ADAYI DEĞİL** yazar. Tek aile **RADAR**; aynı sembolde en az iki aile, aktif boğa

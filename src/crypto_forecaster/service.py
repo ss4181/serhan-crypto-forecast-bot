@@ -41,6 +41,7 @@ from .outcomes import (
     scorecard,
     settle_pending,
 )
+from .regime import deliver_regime_change, format_regime_status
 from .research import research_all
 from .scalping import (
     SCALP_STEP_MS,
@@ -567,7 +568,10 @@ def format_runtime_status(
 ) -> str:
     text = format_observation_digest(predictions, now=now)
     if settings.scalp_observation_enabled:
-        return format_notification_status(settings, now=now) + "\n\n" + text
+        return "\n\n".join((
+            format_regime_status(settings, now=now),
+            format_notification_status(settings, now=now), text,
+        ))
     return text
 
 
@@ -718,7 +722,16 @@ def serve_forever(
                         entries=scalp_entries,
                         now=scalp_now,
                         progress=progress,
+                        track_regime=is_primary(),
                     )
+                    # A Telegram failure here must not prevent signal or target
+                    # processing. The persisted event is retried on the next pass.
+                    try:
+                        regime_delivery = deliver_regime_change(settings)
+                        if regime_delivery is not None:
+                            progress(f"Scalp rejim Telegram: {regime_delivery.status}{_detail_suffix(regime_delivery)}")
+                    except (OSError, RuntimeError, TypeError, ValueError) as error:
+                        progress(f"Scalp rejim bildirimi hatasi: {error}")
                     scalp_settled = settle_scalp_observations(
                         settings.scalp_state_dir,
                         settings.scalp_data_dir,

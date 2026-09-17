@@ -32,6 +32,7 @@ from .data import (
     load_cache,
     update_market_cache,
 )
+from .regime import update_regime
 from .telegram import (
     TelegramDelivery,
     TelegramNotifier,
@@ -396,6 +397,7 @@ def refresh_and_scan_scalp_universe(
     client: BinanceMarketDataClient | None = None,
     now: datetime | None = None,
     progress: Callable[[str], None] | None = None,
+    track_regime: bool = False,
 ) -> ScalpScanReport:
     manifest = manifest or load_trade1_universe()
     selected = entries if entries is not None else manifest.selected_entries()
@@ -442,6 +444,7 @@ def refresh_and_scan_scalp_universe(
         errors=errors,
         now=now,
         snapshots=snapshots,
+        track_regime=track_regime,
     )
 
 
@@ -451,6 +454,7 @@ def scan_cached_scalp_universe(
     manifest: UniverseManifest | None = None,
     entries: tuple[UniverseEntry, ...] | None = None,
     now: datetime | None = None,
+    track_regime: bool = False,
 ) -> ScalpScanReport:
     manifest = manifest or load_trade1_universe()
     selected = entries if entries is not None else manifest.selected_entries()
@@ -471,6 +475,7 @@ def scan_cached_scalp_universe(
         errors=errors,
         now=now,
         snapshots={},
+        track_regime=track_regime,
     )
 
 
@@ -1991,6 +1996,7 @@ def _scan_frames(
     errors: list[str],
     now: datetime | None,
     snapshots: dict[str, FuturesMarketSnapshot],
+    track_regime: bool = False,
 ) -> ScalpScanReport:
     current = (now or datetime.now(UTC)).astimezone(UTC)
     current_ms = int(current.timestamp() * 1000)
@@ -2009,11 +2015,36 @@ def _scan_frames(
         latest_close = int(frame["close_time_ms"].iloc[-1])
         if current_ms - latest_close <= maximum_age_ms and latest_close <= current_ms:
             provisional_fresh[entry.perpetual_symbol] = frame
+    expected_close = current_ms // SCALP_STEP_MS * SCALP_STEP_MS - 1
+    if track_regime:
+        # Confirmation requires this specific completed candle, not a mix of
+        # older caches that happen to pass the more permissive scan age gate.
+        regime_frames = {
+            symbol: frame for symbol, frame in provisional_fresh.items()
+            if int(frame["close_time_ms"].iloc[-1]) == expected_close
+        }
+        hourly_close = current_ms // 3_600_000 * 3_600_000 - 1
+        major_frames = {
+            symbol: frame for symbol, frame in major_frames.items()
+            if not frame.empty and int(frame["close_time_ms"].iloc[-1]) == hourly_close
+        }
+    else:
+        regime_frames = provisional_fresh
     regime = evaluate_bull_regime(
-        provisional_fresh,
-        major_frames,
+        regime_frames, major_frames,
         breadth_threshold=settings.scalp_bull_breadth_threshold,
     )
+    if track_regime:
+        universe_key = sha256((manifest.version + "|" + "|".join(
+            sorted(entry.perpetual_symbol for entry in entries)
+        )).encode("utf-8")).hexdigest()
+        regime = update_regime(
+            settings, regime, bar_close_ms=expected_close,
+            evaluated_at_ms=current_ms,
+            healthy=(bool(entries) and len(major_frames) == 2 and
+                     regime.eligible_markets / len(entries) >= max(0.90, settings.scalp_minimum_coverage)),
+            universe_key=universe_key,
+        )
     for entry in entries:
         frame = frames.get(entry.perpetual_symbol)
         if frame is None or frame.empty:

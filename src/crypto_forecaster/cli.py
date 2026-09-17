@@ -15,6 +15,7 @@ from .data import BinanceMarketDataClient, MarketDataError, update_cache
 from .dashboard import dashboard_payload_text, write_dashboard_payload
 from .hub import post_snapshot, write_snapshot
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
+from .regime import deliver_regime_change
 from .research import research_all
 from .scalping import (
     deliver_scalp_bracket_wins,
@@ -600,10 +601,14 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
     entries = manifest.selected_entries()
     report = (
         refresh_and_scan_scalp_universe(
-            settings, manifest=manifest, entries=entries, progress=print
+            settings, manifest=manifest, entries=entries, progress=print,
+            track_regime=send and is_primary(),
         )
         if refresh
-        else scan_cached_scalp_universe(settings, manifest=manifest, entries=entries)
+        else scan_cached_scalp_universe(
+            settings, manifest=manifest, entries=entries,
+            track_regime=send and is_primary(),
+        )
     )
     settled = settle_scalp_observations(
         settings.scalp_state_dir, settings.scalp_data_dir
@@ -661,6 +666,12 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
     if not _telegram_configured():
         print("Telegram tanimli/primary degil; scalp gozlemi gonderilmedi.")
         return
+    try:
+        regime_delivery = deliver_regime_change(settings)
+        if regime_delivery is not None:
+            print(f"Scalp rejim Telegram: {regime_delivery.status}")
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        print(f"Scalp rejim bildirimi hatasi: {error}", file=sys.stderr)
     target_deliveries = deliver_scalp_target_touches(settings)
     for event, target_delivery in target_deliveries:
         detail = f" ({target_delivery.detail})" if target_delivery.detail else ""
