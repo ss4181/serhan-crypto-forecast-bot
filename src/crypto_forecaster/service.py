@@ -58,6 +58,7 @@ from .scalping import (
     record_scalp_target_setups,
     refresh_and_scan_scalp_universe,
     scalp_scorecard,
+    scalp_setup_assessment,
     settle_scalp_observations,
     settle_scalp_bracket_outcomes,
     settle_scalp_target_outcomes,
@@ -578,6 +579,7 @@ def format_runtime_status(
 def _save_notification_check(
     settings: Settings, report: ScalpScanReport, counts: dict[str, int],
     status: str, progress: Callable[[str], None],
+    candidates: tuple[dict[str, object], ...] = (),
 ) -> None:
     # Diagnostics must not suppress a valid alert if the status file cannot be
     # written. The last snapshot will become visibly stale instead.
@@ -586,6 +588,10 @@ def _save_notification_check(
             settings.scalp_state_dir, evaluated_at_ms=report.evaluated_at_ms,
             fresh=report.fresh, attempted=report.attempted,
             counts=counts, delivery_status=status,
+            regime_state=report.regime.state if report.regime else "UNKNOWN",
+            radar_count=len(report.observations),
+            setup_count=len({item.perpetual_symbol for item in report.observations if item.alert_tier == "KURULUM"}),
+            candidates=candidates,
         )
     except (OSError, ValueError) as error:
         progress(f"Scalp bildirim durum kaydi yazilamadi: {type(error).__name__}")
@@ -618,6 +624,36 @@ def answer_commands(
         notifier=notifier,
         now=current,
     )
+
+
+def _scalp_status_candidates(
+    report: ScalpScanReport,
+    ledger: list[dict[str, object]] | tuple[dict[str, object], ...] = (),
+) -> tuple[dict[str, object], ...]:
+    grouped: dict[str, list] = {}
+    for item in report.observations:
+        grouped.setdefault(item.perpetual_symbol, []).append(item)
+    result: list[dict[str, object]] = []
+    # Direction is calculated from the same observations used by the sender.
+    # The status writer receives only already-filtered candidates, so this is
+    # intentionally a compact view and never a second notification gate.
+    for items in grouped.values():
+        assessment = scalp_setup_assessment(items, ledger)
+        item = max(items, key=lambda value: value.score)
+        if assessment.direction not in {"YUKARI", "AŞAĞI"}:
+            continue
+        result.append({
+            "symbol": item.spot_symbol,
+            "direction": assessment.direction,
+            "price": item.price,
+            "score": max(value.score for value in items),
+            "families": "+".join(value.family for value in items),
+            "horizon": assessment.horizon_minutes,
+            "sample_count": assessment.sample_count,
+            "success_probability": assessment.success_probability,
+            "expected_net_bps": assessment.expected_net_bps,
+        })
+    return tuple(result[:5])
 
 
 def _record(
@@ -782,15 +818,19 @@ def serve_forever(
                     )
                     if is_primary():
                         notification_counts: dict[str, int] = {}
+                        scalp_ledger = load_scalp_ledger(settings.scalp_state_dir)
                         scalp_notification_report = filter_scalp_notification_report(
                             scalp_report,
                             minimum_score=settings.scalp_minimum_alert_score,
-                            ledger=load_scalp_ledger(settings.scalp_state_dir),
+                            ledger=scalp_ledger,
                             minimum_quality_percentile=settings.scalp_minimum_quality_percentile,
                             minimum_direction_probability=settings.scalp_minimum_direction_probability,
                             minimum_expected_net_bps=settings.scalp_minimum_expected_net_bps,
                             minimum_calibration_samples=settings.scalp_minimum_calibration_samples,
                             diagnostics=notification_counts,
+                        )
+                        status_candidates = _scalp_status_candidates(
+                            scalp_notification_report, scalp_ledger
                         )
                         reason_text = ", ".join(
                             f"{key}={value}" for key, value in notification_counts.items()
@@ -801,7 +841,10 @@ def serve_forever(
                             f"{sum(notification_counts.values())} uygun; {reason_text}"
                         )
                         initial_status = "PENDING" if scalp_notification_report.observations else "NO_CANDIDATE"
-                        _save_notification_check(settings, scalp_report, notification_counts, initial_status, progress)
+                        _save_notification_check(
+                            settings, scalp_report, notification_counts, initial_status,
+                            progress, status_candidates,
+                        )
                         try:
                             scalp_delivery = deliver_scalp_observations(
                                 settings,
@@ -809,11 +852,15 @@ def serve_forever(
                                 manifest=scalp_manifest,
                             )
                         except (OSError, RuntimeError, TypeError, ValueError):
-                            _save_notification_check(settings, scalp_report, notification_counts, "ERROR", progress)
+                            _save_notification_check(
+                                settings, scalp_report, notification_counts, "ERROR",
+                                progress, status_candidates,
+                            )
                             raise
                         _save_notification_check(
                             settings, scalp_report, notification_counts,
-                            scalp_delivery.status if scalp_delivery is not None else initial_status, progress,
+                            scalp_delivery.status if scalp_delivery is not None else initial_status,
+                            progress, status_candidates,
                         )
                         if (
                             scalp_delivery is not None

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 import unittest
+from importlib.resources import files
+from pathlib import Path
 from unittest.mock import patch
 
 from crypto_forecaster.universe import load_trade1_universe
@@ -47,6 +51,18 @@ class Trade1UniverseTests(unittest.TestCase):
     def test_a_symbol_outside_the_frozen_universe_is_refused(self) -> None:
         with self.assertRaises(ValueError):
             load_trade1_universe().selected_entries("TRUMPUSDT")
+
+    def test_a_non_binance_manifest_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = files("crypto_forecaster").joinpath(
+                "resources/trade1_universe_v1.json"
+            )
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            payload["exchange"] = "hyperliquid"
+            target = Path(directory) / "manifest.json"
+            target.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_trade1_universe(target)
 
 
 if __name__ == "__main__":

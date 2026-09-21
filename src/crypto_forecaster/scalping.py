@@ -565,7 +565,7 @@ def format_scalp_observation_digest(
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in shown:
         grouped.setdefault(item.perpetual_symbol, []).append(item)
-    lines = [f"🧪 TRADE3 • {local_text(report.evaluated_at_ms, with_seconds=False)}"]
+    lines = [f"🧪 TRADE3 • BINANCE USD-M PERP • {local_text(report.evaluated_at_ms, with_seconds=False)}"]
     for items in grouped.values():
         item = items[0]
         assessment = scalp_setup_assessment(items, rows)
@@ -1171,9 +1171,9 @@ def load_pending_scalp_brackets(
 
 def format_scalp_bracket_result(event: dict[str, Any]) -> str:
     return "\n".join([
-        f"✅ SCALP HEDEFİ • {event['spot_symbol']} • {event['direction']}",
-        f"Gerçekçi giriş: {_format_signal_price(float(event['entry_price']))} → "
-        f"{_format_signal_price(float(event['target_price']))}",
+        f"✅ BINANCE USD-M SCALP HEDEFİ • {event['spot_symbol']} • {event['direction']}",
+        (f"Gerçekçi giriş: {_format_signal_price(float(event['entry_price']))} → "
+         f"{_format_signal_price(float(event['target_price']))}"),
         f"Net %{float(event['net_bps']) / 100:+.2f} • {float(event['elapsed_minutes']):.0f} dk",
         "İlk hedef/stop simülasyonu • %2/%3/%5 takibinden ayrıdır.",
     ])
@@ -1272,9 +1272,9 @@ def format_scalp_target_touch(event: dict[str, Any]) -> str:
     direction = str(event["direction"])
     elapsed = max(0, (int(event["touch_close_time_ms"]) - int(event["bar_close_time_ms"])) / 60_000)
     return "\n".join([
-        f"🎯 {event['spot_symbol']} • %{float(event['target_percent']):g} HEDEFE DOKUNDU",
-        f"{direction} • {_format_signal_price(float(event['source_price']))} → "
-        f"{_format_signal_price(float(event['target_price']))}",
+        f"🎯 BINANCE USD-M • {event['spot_symbol']} • %{float(event['target_percent']):g} HEDEFE DOKUNDU",
+        (f"{direction} • {_format_signal_price(float(event['source_price']))} → "
+         f"{_format_signal_price(float(event['target_price']))}"),
         f"⏱ {elapsed:.0f} dk • {local_text(int(event['touch_close_time_ms']), with_seconds=False)}",
         "Mum içi dokunuş • gerçekleşmiş işlem kârı değildir.",
     ])

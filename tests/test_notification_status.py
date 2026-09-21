@@ -8,20 +8,27 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from test_scalping import observation
+from test_service import sample_prediction
+
 from crypto_forecaster.config import Settings
 from crypto_forecaster.notification_status import (
-    REASONS, format_notification_status, write_notification_status,
+    REASONS,
+    format_notification_status,
+    write_notification_status,
 )
 from crypto_forecaster.scalping import (
-    ScalpScanReport, ScalpSetupAssessment, filter_scalp_notification_report,
+    ScalpScanReport,
+    ScalpSetupAssessment,
+    filter_scalp_notification_report,
 )
 from crypto_forecaster.service import (
-    _save_notification_check, answer_commands, deliver_observation_digest,
+    _save_notification_check,
+    answer_commands,
+    deliver_observation_digest,
     format_runtime_status,
 )
 from crypto_forecaster.telegram import TelegramDelivery
-from test_scalping import observation
-from test_service import sample_prediction
 
 NOW = datetime(2026, 9, 9, 12, tzinfo=UTC)
 STAMP = int(NOW.timestamp() * 1000)
@@ -42,8 +49,10 @@ class NotificationStatusTests(unittest.TestCase):
         )
 
     def write(self, counts=None, status="NO_CANDIDATE", **overrides):
-        values = dict(evaluated_at_ms=STAMP, fresh=89, attempted=89,
-                      counts=counts or {"no_setup": 2}, delivery_status=status)
+        values = {
+            "evaluated_at_ms": STAMP, "fresh": 89, "attempted": 89,
+            "counts": counts or {"no_setup": 2}, "delivery_status": status,
+        }
         values.update(overrides)
         write_notification_status(self.settings.scalp_state_dir, **values)
 
@@ -64,9 +73,12 @@ class NotificationStatusTests(unittest.TestCase):
                 counts = {"old_scan": 42}
                 report = replace(self.report, observations=items)
                 with patch("crypto_forecaster.scalping.scalp_setup_assessment", return_value=replace(self.assessment, **overrides)):
-                    args = dict(minimum_score=10, minimum_quality_percentile=.60,
-                                minimum_direction_probability=.55, minimum_expected_net_bps=0,
-                                minimum_calibration_samples=30)
+                    args = {
+                        "minimum_score": 10, "minimum_quality_percentile": .60,
+                        "minimum_direction_probability": .55,
+                        "minimum_expected_net_bps": 0,
+                        "minimum_calibration_samples": 30,
+                    }
                     before = filter_scalp_notification_report(report, **args)
                     after = filter_scalp_notification_report(report, diagnostics=counts, **args)
                 self.assertEqual(before, after)
@@ -97,6 +109,30 @@ class NotificationStatusTests(unittest.TestCase):
         self.assertIn("≥%55", text)
         self.assertNotIn("KAYIT ESKİ", text)
 
+    def test_status_shows_binance_source_regime_and_current_candidates(self):
+        write_notification_status(
+            self.settings.scalp_state_dir,
+            evaluated_at_ms=STAMP,
+            fresh=89,
+            attempted=89,
+            counts={"eligible": 1},
+            delivery_status="SENT",
+            regime_state="BULL",
+            radar_count=4,
+            setup_count=2,
+            candidates=({
+                "symbol": "SOLUSDT", "direction": "YUKARI", "price": 142.5,
+                "score": 2.4, "families": "B1+F3", "horizon": 60,
+                "success_probability": .68, "expected_net_bps": 7.5,
+            },),
+        )
+        text = format_notification_status(self.settings, now=NOW)
+        self.assertIn("Binance USD-M PERP", text)
+        self.assertIn("Rejim: BOĞA", text)
+        self.assertIn("Radar 4 • Kurulum 2", text)
+        self.assertIn("SOLUSDT • YUKARI", text)
+        self.assertIn("Telegram teslimatı tamamlandı", text)
+
     def test_old_snapshot_does_not_claim_current_service_health(self):
         self.write()
         self.assertIn("KAYIT ESKİ", format_notification_status(self.settings, now=NOW + timedelta(minutes=16)))
@@ -126,9 +162,8 @@ class NotificationStatusTests(unittest.TestCase):
     def test_atomic_write_failure_preserves_previous_status_and_cleans_temp(self):
         self.write()
         previous = (self.settings.scalp_state_dir / "notification_status.json").read_bytes()
-        with patch("crypto_forecaster.notification_status.os.replace", side_effect=OSError("disk")):
-            with self.assertRaises(OSError):
-                self.write({"eligible": 1}, "SENT")
+        with patch("crypto_forecaster.notification_status.os.replace", side_effect=OSError("disk")), self.assertRaises(OSError):
+            self.write({"eligible": 1}, "SENT")
         self.assertEqual((self.settings.scalp_state_dir / "notification_status.json").read_bytes(), previous)
         self.assertEqual(list(self.settings.scalp_state_dir.glob("*.tmp")), [])
 

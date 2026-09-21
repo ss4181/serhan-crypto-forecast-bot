@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import re
+from dataclasses import dataclass
 from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 
@@ -73,6 +73,11 @@ def load_trade1_universe(path: Path | None = None) -> UniverseManifest:
 def _parse_manifest(payload: Any) -> UniverseManifest:
     if not isinstance(payload, dict) or payload.get("schema") != UNIVERSE_SCHEMA:
         raise ValueError("Trade1 evren manifesti semasi gecersiz")
+    # The scalp observer is intentionally Binance-only.  Rejecting a manifest
+    # from another venue prevents an exchange-specific symbol list (for example
+    # a Hyperliquid universe) from silently entering Binance cache paths.
+    if payload.get("exchange") != "binance" or payload.get("quote_asset") != "USDT":
+        raise ValueError("Scalp evreni yalniz Binance USDT piyasasini kabul eder")
     version = _text(payload.get("version"), "evren surumu")
     source = _text(payload.get("source"), "evren kaynagi")
     groups = payload.get("groups")

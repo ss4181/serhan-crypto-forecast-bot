@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .config import Settings, local_text
 
@@ -35,13 +38,50 @@ DELIVERIES = {
 def write_notification_status(
     state_dir: Path, *, evaluated_at_ms: int, fresh: int, attempted: int,
     counts: dict[str, int], delivery_status: str,
+    regime_state: str = "UNKNOWN", radar_count: int = 0,
+    setup_count: int = 0, candidates: Iterable[dict[str, Any]] = (),
 ) -> None:
     """Atomically replace operational state; no recipients or secrets are stored."""
+    candidate_rows: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        symbol = str(candidate.get("symbol", "")).strip().upper()
+        direction = str(candidate.get("direction", "")).strip().upper()
+        try:
+            price = float(candidate.get("price"))
+            score = float(candidate.get("score"))
+        except (TypeError, ValueError):
+            continue
+        if (not symbol or direction not in {"YUKARI", "AŞAĞI"}
+                or not math.isfinite(price) or price <= 0
+                or not math.isfinite(score)):
+            continue
+        row: dict[str, Any] = {
+            "symbol": symbol, "direction": direction,
+            "price": price, "score": score,
+            "families": str(candidate.get("families", "")),
+        }
+        for key in ("horizon", "sample_count"):
+            value = candidate.get(key)
+            if type(value) is int and value >= 0:
+                row[key] = value
+        for key in ("success_probability", "expected_net_bps"):
+            value = candidate.get(key)
+            if type(value) in (int, float) and math.isfinite(value):
+                row[key] = float(value)
+        candidate_rows.append(row)
+        if len(candidate_rows) >= 5:
+            break
     payload = {
         "schema": SCHEMA, "evaluated_at_ms": evaluated_at_ms,
         "fresh": fresh, "attempted": attempted,
         "counts": {key: int(counts.get(key, 0)) for key in (*REASONS, "eligible")},
         "delivery_status": delivery_status if delivery_status in DELIVERIES else "ERROR",
+        "regime_state": regime_state if regime_state in {"BULL", "TRANSITION", "OFF", "UNKNOWN"} else "UNKNOWN",
+        "radar_count": max(int(radar_count), 0),
+        "setup_count": max(int(setup_count), 0),
+        "candidates": candidate_rows,
     }
     state_dir.mkdir(parents=True, exist_ok=True)
     temporary: str | None = None
@@ -85,16 +125,42 @@ def format_notification_status(settings: Settings, *, now: datetime | None = Non
         coverage = f"{row['fresh']}/{row['attempted']} taze piyasa"
         if row["attempted"] <= 0 or row["fresh"] / row["attempted"] < settings.scalp_minimum_coverage:
             coverage += " ⚠️ kapsam yetersiz"
+        regime_labels = {"BULL": "BOĞA", "TRANSITION": "GEÇİŞ", "OFF": "KAPALI", "UNKNOWN": "VERİ YETERSİZ"}
+        regime = regime_labels.get(row.get("regime_state"), "VERİ YETERSİZ")
+        radar = row.get("radar_count", 0)
+        setups = row.get("setup_count", 0)
+        if type(radar) is not int or radar < 0:
+            radar = 0
+        if type(setups) is not int or setups < 0:
+            setups = 0
+        candidates = row.get("candidates", [])
+        if not isinstance(candidates, list):
+            candidates = []
+        candidate_lines: list[str] = []
+        for candidate in candidates[:5]:
+            if not isinstance(candidate, dict):
+                continue
+            try:
+                candidate_lines.append(
+                    f"{candidate['symbol']} • {candidate['direction']} • "
+                    f"{float(candidate['price']):g} • skor {float(candidate['score']):.2f}"
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
         return "\n".join([
             "📡 SCALP BİLDİRİM DURUMU" + (" ⚠️ KAYIT ESKİ" if stale else ""),
             f"Son tarama: {stamp}",
-            f"{coverage} • {counts['eligible']}/{total} coin/mum bildirime uygun",
+            f"Kaynak: Binance USD-M PERP • Rejim: {regime}",
+            f"{coverage} • Radar {radar} • Kurulum {setups}",
+            f"Bu taramada: {counts['eligible']}/{total} coin/mum bildirime uygun",
             "İlk elenme nedeni: " + ("; ".join(rejected) if rejected else "yok"),
             "Son taramada: " + delivery,
+            "Güncel uygun adaylar: " + ("yok" if not candidate_lines else "") ,
+            *candidate_lines,
             f"Az örnekte ham skor ≥{settings.scalp_minimum_alert_score:g}; yön/teyit yine gerekli.",
-            f"Yeterli örnekte: kalite ≥%{settings.scalp_minimum_quality_percentile * 100:g}, "
+            (f"Yeterli örnekte: kalite ≥%{settings.scalp_minimum_quality_percentile * 100:g}, "
             f"net-pozitif oran ≥%{settings.scalp_minimum_direction_probability * 100:g}, "
-            f"net beklenti ≥{settings.scalp_minimum_expected_net_bps:g} bps.",
+            f"net beklenti ≥{settings.scalp_minimum_expected_net_bps:g} bps."),
         ])
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError):
         return "📡 Scalp bildirim durum kaydı henüz yok veya okunamıyor; servis günlüğünü kontrol edin."
