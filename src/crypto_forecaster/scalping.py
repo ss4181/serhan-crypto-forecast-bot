@@ -26,9 +26,11 @@ import pandas as pd
 
 from .config import Settings, local_text, validate_market_symbol
 from .data import (
+    BinanceKlineStream,
     BinanceMarketDataClient,
     FuturesMarketSnapshot,
     MarketDataError,
+    append_closed_kline_cache,
     load_cache,
     update_market_cache,
 )
@@ -396,6 +398,7 @@ def refresh_and_scan_scalp_universe(
     manifest: UniverseManifest | None = None,
     entries: tuple[UniverseEntry, ...] | None = None,
     client: BinanceMarketDataClient | None = None,
+    kline_stream: BinanceKlineStream | None = None,
     now: datetime | None = None,
     progress: Callable[[str], None] | None = None,
     track_regime: bool = False,
@@ -408,6 +411,19 @@ def refresh_and_scan_scalp_universe(
     output = progress or (lambda _message: None)
 
     def refresh_one(entry: UniverseEntry) -> tuple[UniverseEntry, pd.DataFrame]:
+        if kline_stream is not None:
+            latest = kline_stream.latest_closed(entry.perpetual_symbol)
+            if latest is not None:
+                try:
+                    return entry, append_closed_kline_cache(
+                        scalp_cache_path(settings.scalp_data_dir, entry.perpetual_symbol),
+                        latest,
+                        days=settings.scalp_cache_days,
+                        now=now,
+                    )
+                except (MarketDataError, OSError, TypeError, ValueError):
+                    # A missing cache or a gap means REST must backfill it.
+                    pass
         frame = update_market_cache(
             scalp_cache_path(settings.scalp_data_dir, entry.perpetual_symbol),
             entry.perpetual_symbol,

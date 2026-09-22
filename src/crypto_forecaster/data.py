@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import math
 from pathlib import Path
+from threading import Event, Lock, Thread
 import time
 from typing import Callable
 from urllib.error import HTTPError, URLError
@@ -13,6 +14,11 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
+
+try:  # Optional at import time so REST-only/offline tests still work.
+    import websocket
+except ImportError:  # pragma: no cover - exercised on minimal REST installs
+    websocket = None  # type: ignore[assignment]
 
 from .config import (
     INTERVAL_MILLISECONDS,
@@ -28,6 +34,7 @@ MARKET_ENDPOINTS = {
     "futures": ("https://fapi.binance.com", "/fapi/v1/klines", 1500),
     "spot": ("https://data-api.binance.vision", "/api/v3/klines", 1000),
 }
+BINANCE_FUTURES_WS_ENDPOINT = "wss://fstream.binance.com/stream"
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 CSV_COLUMNS = (
     "open_time_ms",
@@ -61,6 +68,244 @@ class FuturesMarketSnapshot:
     mark_price: float | None = None
     index_price: float | None = None
     funding_rate_bps: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ClosedKline:
+    """One closed Binance WebSocket kline in the cache's column shape."""
+
+    symbol: str
+    open_time_ms: int
+    close_time_ms: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    quote_volume: float
+    trade_count: int
+    taker_buy_base: float
+
+    def as_row(self) -> list[object]:
+        return [
+            self.open_time_ms,
+            self.open,
+            self.high,
+            self.low,
+            self.close,
+            self.volume,
+            self.close_time_ms,
+            self.quote_volume,
+            self.trade_count,
+            self.taker_buy_base,
+        ]
+
+
+def parse_closed_kline_message(payload: str | bytes | dict[str, object]) -> ClosedKline | None:
+    """Parse a combined-stream Binance kline event, ignoring open candles."""
+    if isinstance(payload, bytes):
+        try:
+            payload = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(payload, str):
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+    else:
+        decoded = payload
+    if not isinstance(decoded, dict):
+        return None
+    data = decoded.get("data", decoded)
+    if not isinstance(data, dict) or data.get("e") != "kline":
+        return None
+    kline = data.get("k")
+    if not isinstance(kline, dict) or kline.get("x") is not True:
+        return None
+    try:
+        symbol = validate_market_symbol(str(kline["s"]))
+        interval = str(kline["i"])
+        if interval != "5m":
+            return None
+        return ClosedKline(
+            symbol=symbol,
+            open_time_ms=_integer(kline["t"], "open time"),
+            close_time_ms=_integer(kline["T"], "close time"),
+            open=_positive_float(kline["o"], "open"),
+            high=_positive_float(kline["h"], "high"),
+            low=_positive_float(kline["l"], "low"),
+            close=_positive_float(kline["c"], "close"),
+            volume=_nonnegative_float(kline["v"], "volume"),
+            quote_volume=_nonnegative_float(kline["q"], "quote volume"),
+            trade_count=_integer(kline["n"], "trade count"),
+            taker_buy_base=_nonnegative_float(kline["V"], "taker buy volume"),
+        )
+    except (KeyError, TypeError, ValueError, MarketDataError):
+        return None
+
+
+class BinanceKlineStream:
+    """Read-only combined Binance futures kline stream with reconnects."""
+
+    def __init__(
+        self,
+        symbols: tuple[str, ...] | list[str],
+        *,
+        interval: str = "5m",
+        timeout_seconds: float = 20.0,
+        reconnect_seconds: float = 5.0,
+        connector: Callable[[str, float], object] | None = None,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> None:
+        chosen = tuple(dict.fromkeys(validate_market_symbol(symbol) for symbol in symbols))
+        if not chosen:
+            raise ValueError("WebSocket icin en az bir Binance sembolu gerekli")
+        if interval != "5m":
+            raise ValueError("Scalp WebSocket yalnizca 5m destekliyor")
+        if timeout_seconds <= 0 or reconnect_seconds <= 0:
+            raise ValueError("WebSocket zaman ayari pozitif olmali")
+        self.symbols = chosen
+        self.interval = interval
+        self.timeout_seconds = timeout_seconds
+        self.reconnect_seconds = reconnect_seconds
+        self._using_default_connector = connector is None
+        self._connector = connector or self._default_connector
+        self._status_callback = status_callback
+        self._latest: dict[str, ClosedKline] = {}
+        self._lock = Lock()
+        self._stop = Event()
+        self._thread: Thread | None = None
+        self._socket: object | None = None
+        self._connected = False
+
+    @property
+    def connected(self) -> bool:
+        with self._lock:
+            return self._connected
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        if websocket is None and self._using_default_connector:
+            raise MarketDataError("WebSocket icin websocket-client kurulumu gerekli")
+        self._stop.clear()
+        self._thread = Thread(target=self._run, name="binance-kline-stream", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        with self._lock:
+            socket = self._socket
+        if socket is not None:
+            try:
+                socket.close()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=min(self.timeout_seconds, 3.0))
+
+    def latest_closed(self, symbol: str) -> ClosedKline | None:
+        symbol = validate_market_symbol(symbol)
+        with self._lock:
+            return self._latest.get(symbol)
+
+    def _stream_url(self) -> str:
+        streams = "/".join(
+            f"{symbol.lower()}@kline_{self.interval}" for symbol in self.symbols
+        )
+        return f"{BINANCE_FUTURES_WS_ENDPOINT}?streams={streams}"
+
+    def _emit_status(self, status: str) -> None:
+        if self._status_callback is not None:
+            try:
+                self._status_callback(status)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _default_connector(url: str, timeout_seconds: float) -> object:
+        if websocket is None:
+            raise MarketDataError("WebSocket icin websocket-client kurulumu gerekli")
+        return websocket.create_connection(  # type: ignore[no-any-return]
+            url,
+            timeout=timeout_seconds,
+            enable_multithread=True,
+        )
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            socket: object | None = None
+            try:
+                socket = self._connector(self._stream_url(), self.timeout_seconds)
+                with self._lock:
+                    self._socket = socket
+                    self._connected = True
+                self._emit_status("baglandi")
+                while not self._stop.is_set():
+                    raw = socket.recv()  # type: ignore[attr-defined]
+                    if raw is None:
+                        break
+                    event = parse_closed_kline_message(raw)
+                    if event is not None:
+                        with self._lock:
+                            self._latest[event.symbol] = event
+            except Exception:
+                # REST refresh remains the source of truth while the stream
+                # reconnects; this thread must never take down the service.
+                pass
+            finally:
+                was_connected = self.connected
+                with self._lock:
+                    self._connected = False
+                    self._socket = None
+                if was_connected:
+                    self._emit_status("baglanti koptu; REST yedek devrede")
+                if socket is not None:
+                    try:
+                        socket.close()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+            self._stop.wait(self.reconnect_seconds)
+
+
+def append_closed_kline_cache(
+    path: Path,
+    kline: ClosedKline,
+    *,
+    days: int,
+    now: datetime | None = None,
+) -> pd.DataFrame:
+    """Append one contiguous closed stream candle, or fail for REST fallback."""
+    if days < 1:
+        raise ValueError("Gun sayisi en az 1 olmali")
+    if not path.exists():
+        raise MarketDataError("WebSocket onbellegi yok; REST ile doldurulmali")
+    existing = load_cache(path)
+    if existing.empty:
+        raise MarketDataError("WebSocket onbellegi bos; REST ile doldurulmali")
+    step_ms = INTERVAL_MILLISECONDS["5m"]
+    latest_open = int(existing["open_time_ms"].iloc[-1])
+    if kline.open_time_ms < latest_open:
+        return existing
+    if kline.open_time_ms == latest_open:
+        return existing
+    if kline.open_time_ms != latest_open + step_ms:
+        raise MarketDataError("WebSocket mum akisinda bosluk var; REST ile tamamlanmali")
+    fetched = _rows_to_frame([kline.as_row()], closed_before_ms=kline.close_time_ms + 1)
+    combined = _validate_frame(pd.concat([existing, fetched], ignore_index=True))
+    requested_start = int(
+        ((now or _utc_now()).astimezone(timezone.utc) - timedelta(days=days)).timestamp()
+        * 1000
+    )
+    combined = combined[combined["open_time_ms"] >= requested_start].reset_index(drop=True)
+    combined = _trim_to_contiguous_tail(combined, step_ms)
+    if combined.empty or int(combined["open_time_ms"].iloc[-1]) != kline.open_time_ms:
+        raise MarketDataError("WebSocket mum onbellegi dogrulanamadi")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(path, index=False, encoding="utf-8", lineterminator="\n")
+    return combined
 
 
 def _utc_now() -> datetime:

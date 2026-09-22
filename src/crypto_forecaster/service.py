@@ -26,7 +26,13 @@ from .commands import (
     load_pending_members,
     poll_and_answer,
 )
-from .data import BinanceMarketDataClient, load_cache, update_cache
+from .data import (
+    BinanceKlineStream,
+    BinanceMarketDataClient,
+    MarketDataError,
+    load_cache,
+    update_cache,
+)
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
@@ -704,6 +710,7 @@ def serve_forever(
     cache = PredictionCache()
     scalp_manifest: UniverseManifest | None = None
     scalp_entries = ()
+    kline_stream: BinanceKlineStream | None = None
     next_scalp_scan_ms = 0
     if settings.scalp_observation_enabled:
         scalp_manifest = load_trade1_universe()
@@ -711,6 +718,18 @@ def serve_forever(
         progress(
             f"Deneysel scalp gozlemi acik: {len(scalp_entries)} piyasa, evren {scalp_manifest.version}"
         )
+        try:
+            kline_stream = BinanceKlineStream(
+                tuple(entry.perpetual_symbol for entry in scalp_entries),
+                status_callback=lambda status: progress(
+                    f"Scalp Binance WebSocket: {status}"
+                ),
+            )
+            kline_stream.start()
+            progress("Scalp Binance WebSocket kline akisi baslatildi; REST yedek acik")
+        except (MarketDataError, OSError, TypeError, ValueError) as error:
+            kline_stream = None
+            progress(f"Scalp WebSocket acilamadi; REST yedek kullanilacak: {error}")
     # Nothing to download for a series whose next candle has not closed yet.
     next_close_ms: dict[tuple[str, str], int] = {}
     while True:
@@ -757,6 +776,7 @@ def serve_forever(
                         settings,
                         manifest=scalp_manifest,
                         entries=scalp_entries,
+                        kline_stream=kline_stream,
                         now=scalp_now,
                         progress=progress,
                         track_regime=is_primary(),
@@ -976,6 +996,8 @@ def serve_forever(
                 post_snapshot(snapshot)
             consecutive_failures = 0
         except KeyboardInterrupt:
+            if kline_stream is not None:
+                kline_stream.stop()
             raise
         except Exception as error:  # a 24/7 loop must outlive a bad response
             consecutive_failures += 1

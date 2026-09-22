@@ -4,14 +4,19 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 import pandas as pd
 
 from crypto_forecaster.config import cache_path
 from crypto_forecaster.data import (
+    BinanceKlineStream,
+    ClosedKline,
     BinanceMarketDataClient,
     MarketDataError,
+    append_closed_kline_cache,
+    parse_closed_kline_message,
     update_cache,
     update_market_cache,
 )
@@ -83,6 +88,85 @@ class JsonResponse:
 
 
 class DataTests(unittest.TestCase):
+    def test_kline_stream_keeps_latest_closed_event(self) -> None:
+        payload = json.dumps({
+            "data": {
+                "e": "kline",
+                "k": {
+                    "s": "BTCUSDT", "i": "5m", "x": True,
+                    "t": START_MS, "T": START_MS + STEP_MS - 1,
+                    "o": "100", "h": "101", "l": "99", "c": "100.5",
+                    "v": "5", "q": "502.5", "n": 40, "V": "2.5",
+                },
+            }
+        })
+
+        class FakeSocket:
+            def __init__(self) -> None:
+                self.sent = False
+
+            def recv(self) -> str | None:
+                if self.sent:
+                    return None
+                self.sent = True
+                return payload
+
+            def close(self) -> None:
+                return None
+
+        stream = BinanceKlineStream(
+            ("BTCUSDT",),
+            connector=lambda _url, _timeout: FakeSocket(),
+            reconnect_seconds=0.01,
+        )
+        stream.start()
+        for _ in range(100):
+            if stream.latest_closed("BTCUSDT") is not None:
+                break
+            time.sleep(0.001)
+        stream.stop()
+        self.assertEqual(stream.latest_closed("BTCUSDT").close, 100.5)  # type: ignore[union-attr]
+
+    def test_combined_websocket_parser_accepts_only_closed_five_minute_candles(self) -> None:
+        payload = {
+            "stream": "btcusdt@kline_5m",
+            "data": {
+                "e": "kline",
+                "k": {
+                    "s": "BTCUSDT", "i": "5m", "x": True,
+                    "t": START_MS, "T": START_MS + STEP_MS - 1,
+                    "o": "100", "h": "101", "l": "99", "c": "100.5",
+                    "v": "5", "q": "502.5", "n": 40, "V": "2.5",
+                },
+            },
+        }
+        result = parse_closed_kline_message(payload)
+        self.assertIsInstance(result, ClosedKline)
+        assert result is not None
+        self.assertEqual(result.symbol, "BTCUSDT")
+        self.assertIsNone(
+            parse_closed_kline_message({"data": {"e": "kline", "k": {"x": False}}})
+        )
+
+    def test_websocket_candle_appends_contiguous_cache_and_rejects_gap(self) -> None:
+        opens = [START_MS + index * STEP_MS for index in range(12)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "BTCUSDT_5m_futures.csv"
+            frame(opens).to_csv(path, index=False)
+            now = datetime.fromtimestamp((opens[-1] + 2 * STEP_MS) / 1000, tz=timezone.utc)
+            next_kline = ClosedKline(
+                "BTCUSDT", opens[-1] + STEP_MS, opens[-1] + 2 * STEP_MS - 1,
+                100.0, 101.0, 99.0, 100.5, 5.0, 502.5, 40, 2.5,
+            )
+            appended = append_closed_kline_cache(path, next_kline, days=2, now=now)
+            self.assertEqual(len(appended), 13)
+            gap = ClosedKline(
+                "BTCUSDT", opens[-1] + 3 * STEP_MS, opens[-1] + 4 * STEP_MS - 1,
+                100.0, 101.0, 99.0, 100.5, 5.0, 502.5, 40, 2.5,
+            )
+            with self.assertRaises(MarketDataError):
+                append_closed_kline_cache(path, gap, days=2, now=now)
+
     def test_public_futures_snapshot_combines_spread_and_funding(self) -> None:
         payloads = iter(
             (

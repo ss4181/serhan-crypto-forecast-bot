@@ -765,18 +765,19 @@ yükü için fazlasıyla yeterlidir.
    workflow zaten `standby` varsayar. Sunucu devre dışı kalırsa bu değişkeni
    `primary` yaparak Actions'ı geçici gönderici hâline getirebilirsiniz.
 
-Tarama her 20 saniyede bir döner ama ağır işi tekrarlamaz: bir modelin girdisi
+Tarama her 10 saniyede bir döner ama ağır işi tekrarlamaz: bir modelin girdisi
 ancak yeni bir mum kapandığında değişir, o yüzden kapanış zamanı geçene kadar
 hem indirme hem belirteç hesabı atlanır. Kapanış anı tam olarak bilindiği için
 bu bir yaklaşıklık değil; `1h` modeli saatte bir, `5m` modeli beş dakikada bir
 hesaplanır. Küçük makinede fark büyük — altı model için tur süresi `2.8` saniye
 yerine milisaniyeler.
 
-Scalp tarafında 89 adet bağımsız 5m önbellek, Binance'in herkese açık uç
-noktalarını aşırı yüklememek için sınırlı paralellikte (`CRYPTO_SCALP_REFRESH_WORKERS`,
-varsayılan 8) yenilenir. Böylece mum kapanışı sonrası bildirim gecikmesi;
-planlı 20 saniyelik yoklama, veri yenileme süresi ve Telegram teslim süresinin
-toplamıdır. Eşikler ve sinyal mantığı bu hızlandırmadan etkilenmez.
+Scalp tarafında 89 adet bağımsız 5m önbellek, Binance birleşik WebSocket kline
+akışıyla kapalı mum gelir gelmez güncellenir. İlk kurulumda, WebSocket yeniden
+bağlanırken veya mum akışında boşluk varsa REST uç noktası (`CRYPTO_SCALP_REFRESH_WORKERS`,
+varsayılan 8) güvenli yedek olarak kullanılır. `CRYPTO_SCALP_CLOSE_DELAY_SECONDS`
+varsayılan 5 saniyedir; servis günlükte kapanıştan taramaya ve toplam yenileme
+süresini ayrı ölçer. Eşikler ve sinyal mantığı bu hızlandırmadan etkilenmez.
 
 Servis `Restart=always` ile çalışır, systemd sertleştirmesi altındadır
 (salt okunur kök dosya sistemi, capability yok, yalnızca kendi veri dizinlerine
