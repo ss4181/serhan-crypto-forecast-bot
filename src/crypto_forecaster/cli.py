@@ -659,6 +659,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
                 manifest=manifest,
                 top_k=settings.scalp_top_k,
                 ledger=load_scalp_ledger(settings.scalp_state_dir),
+                bracket_ledger=load_scalp_bracket_ledger(settings.scalp_state_dir),
             )
         )
     if not send:

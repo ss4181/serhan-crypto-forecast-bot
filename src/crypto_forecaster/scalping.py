@@ -550,18 +550,155 @@ def evaluate_bull_regime(
     )
 
 
+def _format_recent_rate(wins: int, total: int) -> str:
+    """Render a rolling success rate without hiding a small sample."""
+    if total <= 0:
+        return "veri yok"
+    return f"%{wins / total * 100:.0f} ({wins}/{total})"
+
+
+def _row_horizon(row: dict[str, Any]) -> int:
+    try:
+        return int(row.get("horizon_minutes", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _recent_scalp_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return the newest distinct settled rows, newest first."""
+    unique: dict[tuple[object, ...], dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            exit_ms = int(row.get("exit_time_ms", row.get("bar_close_time_ms", 0)))
+        except (TypeError, ValueError):
+            continue
+        if exit_ms <= 0:
+            continue
+        key = (
+            row.get("signal_id", row.get("setup_id", "")),
+            row.get("horizon_minutes", ""),
+            row.get("bar_close_time_ms", ""),
+        )
+        unique[key] = row
+    return sorted(
+        unique.values(),
+        key=lambda row: int(row.get("exit_time_ms", row.get("bar_close_time_ms", 0))),
+        reverse=True,
+    )[: max(int(limit), 0)]
+
+
+def _recent_directional_rate(
+    rows: Iterable[dict[str, Any]],
+    *,
+    direction: str,
+) -> tuple[int, int]:
+    """Count direction-aware net winners from already settled observations."""
+    wins = 0
+    total = 0
+    sign = 1.0 if direction == "YUKARI" else -1.0
+    for row in _recent_scalp_rows(rows):
+        try:
+            net = float(row["net_bps"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not math.isfinite(net):
+            continue
+        total += 1
+        wins += sign * net > 0.0
+    return wins, total
+
+
+def _recent_bracket_rate(
+    rows: Iterable[dict[str, Any]],
+    *,
+    strategy_label: str,
+    spot_symbol: str | None = None,
+    families: frozenset[str] | None = None,
+) -> tuple[int, int]:
+    """Count first-touch target wins for the requested strategy/setup."""
+    selected: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("strategy_label", "")) != strategy_label:
+            continue
+        if spot_symbol is not None and str(row.get("spot_symbol", "")) != spot_symbol:
+            continue
+        if families is not None:
+            row_families = frozenset(str(value) for value in row.get("families", ()))
+            if row_families != families:
+                continue
+        if str(row.get("resolution", "")) not in {"TARGET", "STOP", "TIME_EXIT"}:
+            continue
+        selected.append(row)
+    recent = _recent_scalp_rows(selected)
+    return sum(str(row.get("resolution")) == "TARGET" for row in recent), len(recent)
+
+
+def _recent_scalp_success(
+    items: Iterable[ScalpObservation],
+    *,
+    assessment: ScalpSetupAssessment,
+    ledger: Iterable[dict[str, Any]],
+    bracket_ledger: Iterable[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the notification's rolling strategy/family/setup score lines.
+
+    Family rates use the same fixed forward-test horizon and direction as the
+    displayed setup. Strategy/setup rates use the first-touch bracket ledger,
+    which is the only ledger that knows the complete multi-family setup.
+    """
+    item_tuple = tuple(items)
+    row_tuple = tuple(row for row in ledger if isinstance(row, dict))
+    horizon = assessment.horizon_minutes
+    family_rates: dict[str, tuple[int, int]] = {}
+    if assessment.direction in {"YUKARI", "AŞAĞI"} and horizon is not None:
+        for item in item_tuple:
+            family_rows = [
+                row
+                for row in row_tuple
+                if str(row.get("family", "")) == item.family
+                and str(row.get("regime_state", "UNKNOWN")) == item.regime_state
+                and _row_horizon(row) == int(horizon)
+            ]
+            # Match the assessment's symbol/regime fallback, then keep only the
+            # requested family so one event cannot inflate another family.
+            candidate_rows = _scalp_candidate_rows(item, family_rows)
+            family_rates[item.family] = _recent_directional_rate(
+                candidate_rows, direction=assessment.direction
+            )
+    bracket_tuple = tuple(row for row in bracket_ledger if isinstance(row, dict))
+    strategy_rate = _recent_bracket_rate(
+        bracket_tuple,
+        strategy_label=assessment.strategy_label,
+    )
+    setup_rate = _recent_bracket_rate(
+        bracket_tuple,
+        strategy_label=assessment.strategy_label,
+        spot_symbol=item_tuple[0].spot_symbol if item_tuple else None,
+        families=frozenset(item.family for item in item_tuple),
+    )
+    return {"strategy": strategy_rate, "families": family_rates, "setup": setup_rate}
+
+
 def format_scalp_observation_digest(
     report: ScalpScanReport,
     *,
     manifest: UniverseManifest,
     top_k: int,
     ledger: Iterable[dict[str, Any]] = (),
+    bracket_ledger: Iterable[dict[str, Any]] = (),
 ) -> str:
     """Compact coin cards; detailed family evidence remains in the scorecard."""
     shown = report.top(top_k)
     if not shown:
         raise ValueError("Scalp gozlem raporu icin kurulum yok")
     rows = tuple(ledger)
+    bracket_rows = tuple(bracket_ledger)
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in shown:
         grouped.setdefault(item.perpetual_symbol, []).append(item)
@@ -590,6 +727,22 @@ def format_scalp_observation_digest(
             )
         families = "+".join(i.family for i in items)
         lines.append(f"{families} • Güç {max(i.score for i in items):.2f}")
+        recent = _recent_scalp_success(
+            items,
+            assessment=assessment,
+            ledger=rows,
+            bracket_ledger=bracket_rows,
+        )
+        family_rates = ", ".join(
+            f"{family} {_format_recent_rate(*values)}"
+            for family, values in recent["families"].items()
+        )
+        lines.append(
+            f"📈 Son 10 başarı ({horizon}dk): "
+            f"strateji {_format_recent_rate(*recent['strategy'])} • "
+            f"aile {family_rates or 'veri yok'} • "
+            f"kurulum {_format_recent_rate(*recent['setup'])}"
+        )
         if assessment.direction in {"YUKARI", "AŞAĞI"}:
             sign = 1 if assessment.direction == "YUKARI" else -1
             levels = " | ".join(
@@ -708,6 +861,7 @@ def deliver_scalp_observations(
             f"en az %{settings.scalp_minimum_coverage * 100:.1f} olmali"
         )
     ledger = load_scalp_ledger(settings.scalp_state_dir)
+    bracket_ledger = load_scalp_bracket_ledger(settings.scalp_state_dir)
     filtered_report = filter_scalp_notification_report(
         report,
         minimum_score=settings.scalp_minimum_alert_score,
@@ -732,6 +886,7 @@ def deliver_scalp_observations(
             manifest=manifest,
             top_k=settings.scalp_top_k,
             ledger=ledger,
+            bracket_ledger=bracket_ledger,
         ),
         state_dir=settings.telegram_state_dir / "scalp",
         reply_markup=telegram_channel_keyboard(),

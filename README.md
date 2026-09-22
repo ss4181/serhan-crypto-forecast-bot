@@ -372,6 +372,13 @@ devamı aynı sonuç havuzunda değerlendirilmez. Bildirimde seçilen ufuk, net 
 olasılığı, beklenen net hareket, örnek sayısı, bağımsız gün sayısı ve güven düzeyi
 açıkça yer alır.
 
+Her coin kartındaki `Son 10 başarı` satırı üç ayrı ölçüm verir: `strateji`, ilgili
+stratejinin son 10 tamamlanmış ilk-dokunuş hedef/stop sonucu; `aile`, seçilen ufuk
+ve yöne göre ailenin son 10 maliyet-sonrası ileri-test sonucu; `kurulum`, o coin
+ve aynı aile birleşiminin son 10 ilk-dokunuş sonucu. Parantezdeki `kazanç/toplam`
+küçük örneklemi açıkça gösterir; `veri yok` henüz yerleşmiş sonuç bulunmadığı
+anlamına gelir ve başarı oranı uydurulmaz.
+
 Her net kurulum ayrıca maliyet ve son 24 adet 5m mumun tipik gerçek aralığına göre
 önceden belirlenen dinamik bir hedef/stop parantezine alınır. Giriş sinyalden
 sonraki ilk mumun açılışıdır; hedef ve stop aynı mumda görülürse sıra bilinmediği

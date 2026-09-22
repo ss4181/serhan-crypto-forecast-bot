@@ -457,6 +457,57 @@ class DigestTests(unittest.TestCase):
         self.assertNotIn("F1 BT", text)
         self.assertLess(len(text), 500)
 
+    def test_digest_shows_last_ten_strategy_family_and_setup_success(self) -> None:
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(
+                observation(family=family, score=2.8),
+                alert_tier="KURULUM",
+                regime_state="BULL",
+            )
+            for family in ("F1", "F3")
+        )
+        # The current setup is bearish in this fixture, so negative raw net
+        # movement is a direction-aware family win.
+        rows = [
+            {
+                "signal_id": f"{family}-{sample}",
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "BULL",
+                "horizon_minutes": 30,
+                "gross_bps": -30.0 if sample < 7 else 20.0,
+                "net_bps": -42.0 if sample < 7 else 8.0,
+                "exit_time_ms": START_MS + sample * 86_400_000,
+            }
+            for family in ("F1", "F3")
+            for sample in range(10)
+        ]
+        strategy = "Aşırı yükseliş geri çekilmesi SHORT"
+        bracket_rows = [
+            {
+                "setup_id": f"setup-{sample}",
+                "strategy_label": strategy,
+                "spot_symbol": "BTCUSDT",
+                "families": ["F1", "F3"],
+                "resolution": "TARGET" if sample < 6 else "STOP",
+                "exit_time_ms": START_MS + sample * 86_400_000,
+            }
+            for sample in range(10)
+        ]
+        report = ScalpScanReport(manifest.version, 89, 89, 0, (), items, START_MS)
+        text = format_scalp_observation_digest(
+            report,
+            manifest=manifest,
+            top_k=2,
+            ledger=rows,
+            bracket_ledger=bracket_rows,
+        )
+        self.assertIn("Son 10 başarı (30dk)", text)
+        self.assertIn("strateji %60 (6/10)", text)
+        self.assertIn("aile F1 %70 (7/10), F3 %70 (7/10)", text)
+        self.assertIn("kurulum %60 (6/10)", text)
+
     def test_setup_direction_is_explicitly_bearish_when_families_agree(self) -> None:
         items = (observation(family="B1"), observation(family="F3"))
         rows = [
