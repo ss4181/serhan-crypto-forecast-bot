@@ -175,6 +175,7 @@ class ScalpScanReport:
     evaluated_at_ms: int
     regime: BullRegime | None = None
     quoted: int = 0
+    newest_close_time_ms: int = 0
 
     @property
     def coverage(self) -> float:
@@ -2259,6 +2260,7 @@ def _scan_frames(
         evaluated_at_ms=current_ms,
         regime=regime,
         quoted=sum(entry.perpetual_symbol in snapshots for entry in entries),
+        newest_close_time_ms=max(fresh_close_times, default=0),
     )
 
 

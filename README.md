@@ -679,7 +679,7 @@ mum/sinyali ikinci kez göndermez. İlk kurulumda model eksik olduğu için ara�
 hemen başlar:
 
 ```powershell
-python run.py serve --days 365 --poll-seconds 20
+python run.py serve --days 365 --poll-seconds 10
 ```
 
 `serve` ağ hatasında ölmez; artan bekleme ile yeniden dener.

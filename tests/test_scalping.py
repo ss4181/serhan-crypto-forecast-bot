@@ -332,6 +332,7 @@ class DetectorTests(unittest.TestCase):
             )
         self.assertEqual(report.fresh, 2)
         self.assertEqual(report.observations, ())
+        self.assertEqual(report.newest_close_time_ms, int(current.iloc[-1]["close_time_ms"]))
 
 
 class DigestTests(unittest.TestCase):

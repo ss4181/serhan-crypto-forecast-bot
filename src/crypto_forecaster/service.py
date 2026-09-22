@@ -684,8 +684,8 @@ def serve_forever(
     poll_seconds: int,
     progress: Callable[[str], None] = print,
 ) -> None:
-    if poll_seconds < 20:
-        raise ValueError("Tarama araligi en az 20 saniye olmali")
+    if poll_seconds < 10:
+        raise ValueError("Tarama araligi en az 10 saniye olmali")
     # Older releases created these files with the process umask. Harden them
     # before any market refresh so private membership data is never left open
     # while a long first scan is running.
@@ -752,6 +752,7 @@ def serve_forever(
             scalp_now_ms = int(scalp_now.timestamp() * 1000)
             if scalp_manifest is not None and scalp_now_ms >= next_scalp_scan_ms:
                 try:
+                    scalp_scan_started = time.monotonic()
                     scalp_report = refresh_and_scan_scalp_universe(
                         settings,
                         manifest=scalp_manifest,
@@ -759,6 +760,22 @@ def serve_forever(
                         now=scalp_now,
                         progress=progress,
                         track_regime=is_primary(),
+                    )
+                    scalp_scan_elapsed_ms = int(
+                        (time.monotonic() - scalp_scan_started) * 1000
+                    )
+                    if scalp_report.newest_close_time_ms > 0:
+                        close_to_scan_ms = max(
+                            0,
+                            scalp_report.evaluated_at_ms
+                            - scalp_report.newest_close_time_ms,
+                        )
+                        latency_text = f"{close_to_scan_ms / 1000:.1f}s"
+                    else:
+                        latency_text = "ölçülemedi"
+                    progress(
+                        f"Scalp gecikme: kapanış→tarama {latency_text}; "
+                        f"yenileme+tarama {scalp_scan_elapsed_ms / 1000:.1f}s"
                     )
                     # A Telegram failure here must not prevent signal or target
                     # processing. The persisted event is retried on the next pass.
@@ -925,7 +942,8 @@ def serve_forever(
                     progress(f"Scalp gozlem hatasi: {error}")
                 finally:
                     next_scalp_scan_ms = _next_scalp_scan_ms(
-                        int(datetime.now(timezone.utc).timestamp() * 1000)
+                        int(datetime.now(timezone.utc).timestamp() * 1000),
+                        close_delay_seconds=settings.scalp_close_delay_seconds,
                     )
             if research_due(settings, now=now):
                 progress("Haftalik walk-forward arastirma ve model yenileme basladi")

@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--days", type=_positive_days, default=365)
     # Check frequently enough to start the post-close scalp pass promptly.
-    serve.add_argument("--poll-seconds", type=int, default=20)
+    serve.add_argument("--poll-seconds", type=int, default=10)
 
     cloud = subparsers.add_parser(
         "cloud-run",

@@ -174,6 +174,14 @@ class Settings:
             "CRYPTO_SCALP_REFRESH_WORKERS", 8, 1, 16
         )
     )
+    # Start the scalp pass shortly after Binance closes a 5m candle.  The
+    # service records the resulting close-to-scan latency so this can be tuned
+    # from evidence instead of guesswork.
+    scalp_close_delay_seconds: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_CLOSE_DELAY_SECONDS", 5, 2, 30
+        )
+    )
     scalp_maximum_bar_age_minutes: int = field(
         default_factory=lambda: _environment_int(
             "CRYPTO_SCALP_MAXIMUM_BAR_AGE_MINUTES", 15, 5, 60
