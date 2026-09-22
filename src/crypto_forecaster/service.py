@@ -787,7 +787,7 @@ def serve_forever(
                     if scalp_report.newest_close_time_ms > 0:
                         close_to_scan_ms = max(
                             0,
-                            scalp_report.evaluated_at_ms
+                            int(datetime.now(timezone.utc).timestamp() * 1000)
                             - scalp_report.newest_close_time_ms,
                         )
                         latency_text = f"{close_to_scan_ms / 1000:.1f}s"
