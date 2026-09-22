@@ -176,7 +176,7 @@ class Settings:
     )
     scalp_transition_minimum_expected_net_bps: float = field(
         default_factory=lambda: _environment_float(
-            "CRYPTO_SCALP_TRANSITION_MIN_EXPECTED_NET_BPS", 1.5, -100.0, 1_000.0
+            "CRYPTO_SCALP_TRANSITION_MIN_EXPECTED_NET_BPS", 150.0, -100.0, 1_000.0
         )
     )
     scalp_transition_minimum_calibration_samples: int = field(

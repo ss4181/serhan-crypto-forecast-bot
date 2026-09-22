@@ -891,7 +891,7 @@ class DigestTests(unittest.TestCase):
                 transition_minimum_score=3.0,
                 transition_minimum_quality_percentile=0.75,
                 transition_minimum_direction_probability=0.60,
-                transition_minimum_expected_net_bps=1.5,
+                transition_minimum_expected_net_bps=150.0,
                 transition_minimum_calibration_samples=50,
             )
         self.assertEqual(transition.observations, ())
