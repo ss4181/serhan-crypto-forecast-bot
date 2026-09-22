@@ -239,6 +239,14 @@ class BinanceKlineStream:
             socket: object | None = None
             try:
                 socket = self._connector(self._stream_url(), self.timeout_seconds)
+                # The timeout protects the initial handshake.  Once connected,
+                # leave recv() blocking so a quiet/filtered stream does not
+                # churn reconnects every 20 seconds; stop() closes the socket
+                # explicitly and still unblocks the thread.
+                try:
+                    socket.settimeout(None)  # type: ignore[attr-defined]
+                except (AttributeError, OSError):
+                    pass
                 with self._lock:
                     self._socket = socket
                     self._connected = True
