@@ -352,7 +352,7 @@ değişkeniyle açıkça belirtilir; bot API anahtarı istemez ve emir veremez.
 Bildirim kapısı rejime göre değişir. **BOĞA (BULL)** dönemi mevcut temel eşikleri
 kullanır. **GEÇİŞ (TRANSITION)** dönemi bildirimleri tamamen kapatılmaz, ancak
 yanlış pozitifleri azaltmak için aynı anda daha yüksek ham güç (varsayılan 3.0),
-kalite yüzdeliği (%75), yön başarısı (%60), net beklenti (5 bps) ve daha büyük
+kalite yüzdeliği (%75), yön başarısı (%60), net beklenti (1.5 bps) ve daha büyük
 ileri-test örneği (50) ister. Geçişteki değerler BULL eşiklerinden daha gevşek
 olamaz. **KAPALI/BİLİNMİYOR (OFF/UNKNOWN)** yalnızca gölge ölçümüne yazılır; Telegram
 kurulumu gönderilmez. Bu ayarlar `CRYPTO_SCALP_TRANSITION_*` değişkenleriyle
