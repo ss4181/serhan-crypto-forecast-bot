@@ -349,6 +349,16 @@ USD-M uç noktasından en iyi alış/satış ile funding bilgisini alır. Her g�
 maliyeti yazar. Hesaba özel komisyon imzalı istek gerektirdiği için ortam
 değişkeniyle açıkça belirtilir; bot API anahtarı istemez ve emir veremez.
 
+Bildirim kapısı rejime göre değişir. **BOĞA (BULL)** dönemi mevcut temel eşikleri
+kullanır. **GEÇİŞ (TRANSITION)** dönemi bildirimleri tamamen kapatılmaz, ancak
+yanlış pozitifleri azaltmak için aynı anda daha yüksek ham güç (varsayılan 3.0),
+kalite yüzdeliği (%75), yön başarısı (%60), net beklenti (5 bps) ve daha büyük
+ileri-test örneği (50) ister. Geçişteki değerler BULL eşiklerinden daha gevşek
+olamaz. **KAPALI/BİLİNMİYOR (OFF/UNKNOWN)** yalnızca gölge ölçümüne yazılır; Telegram
+kurulumu gönderilmez. Bu ayarlar `CRYPTO_SCALP_TRANSITION_*` değişkenleriyle
+değiştirilebilir. Ayarları düşürmek daha çok bildirim üretir, fakat geçiş
+döneminin kanıtlanmamış sinyallerini de artırır.
+
 Telegram scalp özeti her coin için dikey ve emoji destekli bir blok gösterir:
 **sinyal anındaki fiyat** ve varsa bildirim anındaki mark fiyatı, beklenen ufuk,
 Binance USD-M perp piyasası,

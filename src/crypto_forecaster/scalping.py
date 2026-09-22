@@ -783,6 +783,12 @@ def filter_scalp_notification_report(
     minimum_direction_probability: float | None = None,
     minimum_expected_net_bps: float | None = None,
     minimum_calibration_samples: int = 0,
+    transition_alerts_enabled: bool = True,
+    transition_minimum_score: float | None = None,
+    transition_minimum_quality_percentile: float | None = None,
+    transition_minimum_direction_probability: float | None = None,
+    transition_minimum_expected_net_bps: float | None = None,
+    transition_minimum_calibration_samples: int | None = None,
     diagnostics: dict[str, int] | None = None,
 ) -> ScalpScanReport:
     """Keep only exact-direction, high-score multi-family setups for Telegram.
@@ -806,6 +812,47 @@ def filter_scalp_notification_report(
         if diagnostics is not None:
             diagnostics[reason] = diagnostics.get(reason, 0) + 1
 
+    regime_state = report.regime.state if report.regime is not None else None
+    if regime_state in {"OFF", "UNKNOWN"}:
+        # A report with no confirmed broad-market regime is still retained in
+        # the shadow ledger, but it must never become a Telegram setup.
+        count("regime_silent")
+        return replace(report, observations=())
+    if regime_state == "TRANSITION" and not transition_alerts_enabled:
+        count("transition_disabled")
+        return replace(report, observations=())
+
+    active_threshold = threshold
+    active_quality_percentile = minimum_quality_percentile
+    active_direction_probability = minimum_direction_probability
+    active_expected_net_bps = minimum_expected_net_bps
+    active_calibration_samples = minimum_calibration_samples
+    if regime_state == "TRANSITION":
+        # Do not allow an environment override to make TRANSITION looser than
+        # the ordinary BULL gate.  This keeps the regime policy monotonic.
+        if transition_minimum_score is not None:
+            active_threshold = max(threshold, float(transition_minimum_score))
+        if transition_minimum_quality_percentile is not None:
+            active_quality_percentile = max(
+                float(minimum_quality_percentile or 0.0),
+                float(transition_minimum_quality_percentile),
+            )
+        if transition_minimum_direction_probability is not None:
+            active_direction_probability = max(
+                float(minimum_direction_probability or 0.0),
+                float(transition_minimum_direction_probability),
+            )
+        if transition_minimum_expected_net_bps is not None:
+            active_expected_net_bps = max(
+                float(minimum_expected_net_bps or 0.0),
+                float(transition_minimum_expected_net_bps),
+            )
+        if transition_minimum_calibration_samples is not None:
+            active_calibration_samples = max(
+                int(minimum_calibration_samples),
+                int(transition_minimum_calibration_samples),
+            )
+
     ledger_rows = tuple(ledger)
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in report.observations:
@@ -822,35 +869,35 @@ def filter_scalp_notification_report(
         if assessment.direction not in {"YUKARI", "AŞAĞI"}:
             count("direction_unclear")
             continue
-        calibrated = assessment.sample_count >= max(int(minimum_calibration_samples), 0)
-        if calibrated and minimum_calibration_samples > 0:
+        calibrated = assessment.sample_count >= max(int(active_calibration_samples), 0)
+        if calibrated and active_calibration_samples > 0:
             if (
                 assessment.success_probability is None
                 or assessment.expected_net_bps is None
             ):
                 count("calibration_missing")
                 continue
-            if assessment.success_probability < float(minimum_direction_probability or 0.0):
+            if assessment.success_probability < float(active_direction_probability or 0.0):
                 count("probability_low")
                 continue
-            if assessment.expected_net_bps < float(minimum_expected_net_bps or 0.0):
+            if assessment.expected_net_bps < float(active_expected_net_bps or 0.0):
                 count("expected_net_low")
                 continue
             if (
-                minimum_quality_percentile is not None
+                active_quality_percentile is not None
                 and assessment.quality_percentile is None
-                and max(item.score for item in items) < threshold
+                and max(item.score for item in items) < active_threshold
             ):
                 count("score_low")
                 continue
             if (
-                minimum_quality_percentile is not None
+                active_quality_percentile is not None
                 and assessment.quality_percentile is not None
-                and assessment.quality_percentile < float(minimum_quality_percentile)
+                and assessment.quality_percentile < float(active_quality_percentile)
             ):
                 count("quality_low")
                 continue
-        elif max(item.score for item in items) < threshold:
+        elif max(item.score for item in items) < active_threshold:
             # Until a family/regime has a minimally useful forward sample, keep
             # the old detector-strength gate as an explicitly temporary fallback.
             count("score_low")
@@ -887,6 +934,12 @@ def deliver_scalp_observations(
         minimum_direction_probability=settings.scalp_minimum_direction_probability,
         minimum_expected_net_bps=settings.scalp_minimum_expected_net_bps,
         minimum_calibration_samples=settings.scalp_minimum_calibration_samples,
+        transition_alerts_enabled=settings.scalp_transition_alerts_enabled,
+        transition_minimum_score=settings.scalp_transition_minimum_alert_score,
+        transition_minimum_quality_percentile=settings.scalp_transition_minimum_quality_percentile,
+        transition_minimum_direction_probability=settings.scalp_transition_minimum_direction_probability,
+        transition_minimum_expected_net_bps=settings.scalp_transition_minimum_expected_net_bps,
+        transition_minimum_calibration_samples=settings.scalp_transition_minimum_calibration_samples,
     )
     shown = filtered_report.top(settings.scalp_top_k) if filtered_report.observations else ()
     if not shown:
@@ -2290,7 +2343,7 @@ def _assign_alert_tiers(
     return [
         replace(item, alert_tier="KURULUM")
         if (
-            regime.state == "BULL"
+            regime.state in {"BULL", "TRANSITION"}
             and item.execution_eligible
             and len(families_by_symbol[item.perpetual_symbol]) >= 2
         )

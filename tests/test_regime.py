@@ -327,7 +327,7 @@ class ScannerRegimeTests(RegimeFixture, unittest.TestCase):
         first = self.report(0)
         self.assertEqual(first.regime.state, "TRANSITION")
         self.assertTrue(first.observations)
-        self.assertFalse(any(o.alert_tier == "KURULUM" for o in first.observations))
+        self.assertTrue(all(o.alert_tier == "KURULUM" for o in first.observations))
         self.report(1)
         third = self.report(2)
         self.assertEqual(third.regime.state, "BULL")

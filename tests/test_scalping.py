@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,7 @@ from crypto_forecaster.data import CSV_COLUMNS, FuturesMarketSnapshot
 from crypto_forecaster.scalping import (
     BullRegime,
     ScalpObservation,
+    ScalpSetupAssessment,
     ScalpScanReport,
     deliver_scalp_observations,
     deliver_scalp_target_touches,
@@ -854,6 +856,61 @@ class DigestTests(unittest.TestCase):
             ).observations,
             (),
         )
+
+    def test_transition_uses_stricter_gate_than_bull(self) -> None:
+        items = tuple(
+            replace(
+                observation(family=family, score=2.8),
+                alert_tier="KURULUM",
+                regime_state="TRANSITION",
+            )
+            for family in ("B1", "F3")
+        )
+        report = ScalpScanReport(
+            load_trade1_universe().version,
+            89,
+            89,
+            0,
+            (),
+            items,
+            START_MS,
+            regime=BullRegime("TRANSITION", 0.70, 0.50, 0.7, False, 89),
+        )
+        assessment = ScalpSetupAssessment(
+            "DIRECTIONAL_LONG", "Yönsel momentum LONG", "YUKARI", 60,
+            0.58, 8.0, 20, 10, 0.90, "ORTA"
+        )
+        with patch("crypto_forecaster.scalping.scalp_setup_assessment", return_value=assessment):
+            transition = filter_scalp_notification_report(
+                report,
+                minimum_score=2.5,
+                minimum_quality_percentile=0.60,
+                minimum_direction_probability=0.55,
+                minimum_expected_net_bps=0.0,
+                minimum_calibration_samples=30,
+                transition_minimum_score=3.0,
+                transition_minimum_quality_percentile=0.75,
+                transition_minimum_direction_probability=0.60,
+                transition_minimum_expected_net_bps=5.0,
+                transition_minimum_calibration_samples=50,
+            )
+        self.assertEqual(transition.observations, ())
+
+        bull = replace(report, regime=BullRegime("BULL", 0.95, 0.70, 1.0, True, 89))
+        bull_items = tuple(replace(item, regime_state="BULL") for item in items)
+        bull = replace(bull, observations=bull_items)
+        with patch("crypto_forecaster.scalping.scalp_setup_assessment", return_value=assessment):
+            self.assertEqual(
+                filter_scalp_notification_report(
+                    bull,
+                    minimum_score=2.5,
+                    minimum_quality_percentile=0.60,
+                    minimum_direction_probability=0.55,
+                    minimum_expected_net_bps=0.0,
+                    minimum_calibration_samples=30,
+                ).observations,
+                bull_items,
+            )
 
     def test_muted_setup_still_enters_shadow_target_ledger(self) -> None:
         manifest = load_trade1_universe()

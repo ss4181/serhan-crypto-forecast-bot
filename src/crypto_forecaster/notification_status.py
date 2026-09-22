@@ -161,6 +161,12 @@ def format_notification_status(settings: Settings, *, now: datetime | None = Non
             (f"Yeterli örnekte: kalite ≥%{settings.scalp_minimum_quality_percentile * 100:g}, "
             f"net-pozitif oran ≥%{settings.scalp_minimum_direction_probability * 100:g}, "
             f"net beklenti ≥{settings.scalp_minimum_expected_net_bps:g} bps."),
+            (f"Geçiş kapısı: {'açık' if settings.scalp_transition_alerts_enabled else 'kapalı'}; "
+             f"skor ≥{settings.scalp_transition_minimum_alert_score:g}, "
+             f"kalite ≥%{settings.scalp_transition_minimum_quality_percentile * 100:g}, "
+             f"yön ≥%{settings.scalp_transition_minimum_direction_probability * 100:g}, "
+             f"net ≥{settings.scalp_transition_minimum_expected_net_bps:g} bps, "
+             f"n ≥{settings.scalp_transition_minimum_calibration_samples}."),
         ])
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError):
         return "📡 Scalp bildirim durum kaydı henüz yok veya okunamıyor; servis günlüğünü kontrol edin."
