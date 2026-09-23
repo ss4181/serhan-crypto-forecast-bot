@@ -184,6 +184,42 @@ class Settings:
             "CRYPTO_SCALP_TRANSITION_MIN_CALIBRATION_SAMPLES", 50, 5, 10_000
         )
     )
+    # OFF remains silent by default. If an operator deliberately enables it,
+    # these stricter, separately tunable thresholds apply.
+    scalp_off_alerts_enabled: bool = field(
+        default_factory=lambda: _environment_bool("CRYPTO_SCALP_OFF_ALERTS", False)
+    )
+    scalp_off_minimum_alert_score: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_OFF_MIN_ALERT_SCORE", 4.0, 0.0, 10.0
+        )
+    )
+    scalp_off_minimum_quality_percentile: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_OFF_MIN_QUALITY_PERCENTILE", 0.90, 0.0, 1.0
+        )
+    )
+    scalp_off_minimum_direction_probability: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_OFF_MIN_DIRECTION_PROBABILITY", 0.65, 0.50, 1.0
+        )
+    )
+    scalp_off_minimum_expected_net_bps: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_OFF_MIN_EXPECTED_NET_BPS", 200.0, -100.0, 1_000.0
+        )
+    )
+    scalp_off_minimum_calibration_samples: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_OFF_MIN_CALIBRATION_SAMPLES", 100, 5, 10_000
+        )
+    )
+    # New detector families remain shadow-only until explicitly allow-listed.
+    scalp_live_families: tuple[str, ...] = field(
+        default_factory=lambda: _environment_csv(
+            "CRYPTO_SCALP_LIVE_FAMILIES", ("F1", "F2", "F3", "B1", "B2", "B3")
+        )
+    )
     # A volatility-aware first-touch bracket measures actual scalp quality.
     # The old +/-2% and +/-3% levels remain separate 24-hour milestones.
     scalp_bracket_horizon_minutes: int = field(
@@ -242,6 +278,60 @@ class Settings:
         default_factory=lambda: _environment_float(
             "CRYPTO_SCALP_MAXIMUM_SPREAD_BPS", 8.0, 0.1, 100.0
         )
+    )
+    scalp_minimum_quote_volume_24h_usdt: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MIN_QUOTE_VOLUME_24H_USDT", 5_000_000.0, 0.0, 1e12
+        )
+    )
+    scalp_maximum_abs_funding_bps: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MAX_ABS_FUNDING_BPS", 10.0, 0.0, 1_000.0
+        )
+    )
+    scalp_maximum_bar_volatility_bps: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_MAX_BAR_VOLATILITY_BPS", 250.0, 1.0, 10_000.0
+        )
+    )
+    # Notification deduplication is persisted only after a successful Telegram
+    # delivery. A score improvement can intentionally re-alert sooner.
+    scalp_same_direction_cooldown_minutes: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_COOLDOWN_MINUTES", 60, 0, 1_440
+        )
+    )
+    scalp_realert_score_delta: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_REALERT_SCORE_DELTA", 0.5, 0.0, 10.0
+        )
+    )
+    # Non-executing research guardrails. The daily limit is deliberately off
+    # until the operator chooses a notional/risk unit; these are not order APIs.
+    scalp_alert_kill_switch: bool = field(
+        default_factory=lambda: _environment_bool("CRYPTO_SCALP_ALERT_KILL_SWITCH", False)
+    )
+    scalp_maximum_concurrent_research_alerts: int = field(
+        default_factory=lambda: _environment_int(
+            "CRYPTO_SCALP_MAX_CONCURRENT_RESEARCH_ALERTS", 5, 1, 100
+        )
+    )
+    scalp_daily_research_loss_limit_bps: float = field(
+        default_factory=lambda: _environment_float(
+            "CRYPTO_SCALP_DAILY_RESEARCH_LOSS_LIMIT_BPS", 0.0, 0.0, 100_000.0
+        )
+    )
+    scalp_public_dashboard_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "CRYPTO_SCALP_PUBLIC_DASHBOARD_URL",
+            "https://ss4181.github.io/serhan-crypto-forecast-bot/scalp-data.json",
+        ).strip()
+    )
+    coin_query_history_days: int = field(
+        default_factory=lambda: _environment_int("CRYPTO_COIN_QUERY_HISTORY_DAYS", 180, 30, 730)
+    )
+    coin_query_model_refresh_days: int = field(
+        default_factory=lambda: _environment_int("CRYPTO_COIN_QUERY_MODEL_REFRESH_DAYS", 7, 1, 30)
     )
     scalp_bull_breadth_threshold: float = field(
         default_factory=lambda: _environment_float(
@@ -322,6 +412,16 @@ def _environment_bool(name: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} true/false olmali")
+
+
+def _environment_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    values = tuple(dict.fromkeys(value.strip().upper() for value in raw.split(",") if value.strip()))
+    if any(re.fullmatch(r"[A-Z][0-9]{1,2}", value) is None for value in values):
+        raise ValueError(f"{name} icindeki aile adi gecersiz")
+    return values
 
 
 def _environment_int(name: str, default: int, minimum: int, maximum: int) -> int:

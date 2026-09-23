@@ -16,6 +16,8 @@ BACKUP_DIR=/opt/crypto-forecaster.previous
 SERVICE=crypto-forecaster
 BOT_USER=botuser
 SOURCE_DIR=${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+BACKUP_READY=0
+DEPLOY_SUCCESS=0
 
 CODE_ONLY=(
   --exclude '.git' --exclude '.venv' --exclude 'data'
@@ -35,28 +37,51 @@ if [[ ! -x "$APP_DIR/.venv/bin/python" ]]; then
   exit 1
 fi
 
+install_release() {
+  if [[ -f "$APP_DIR/requirements.lock" ]]; then
+    "$APP_DIR/.venv/bin/python" -m pip install --quiet -r "$APP_DIR/requirements.lock"
+    "$APP_DIR/.venv/bin/python" -m pip install --quiet --no-deps --no-build-isolation -e "$APP_DIR"
+  else
+    # Backward-compatible rollback for the pre-lock release.
+    "$APP_DIR/.venv/bin/python" -m pip install --quiet -e "$APP_DIR"
+  fi
+}
+
 restore() {
   echo "==> Onceki surum geri yukleniyor"
   rsync -a --delete "${CODE_ONLY[@]}" "$BACKUP_DIR"/ "$APP_DIR"/
-  "$APP_DIR/.venv/bin/python" -m pip install --quiet -e "$APP_DIR"
+  install_release
   chown -R "$BOT_USER":"$BOT_USER" "$APP_DIR"
+  systemctl restart "$SERVICE"
+}
+
+finish_update() {
+  local exit_code=$?
+  trap - EXIT
+  if [[ $exit_code -ne 0 && $BACKUP_READY -eq 1 && $DEPLOY_SUCCESS -eq 0 ]]; then
+    if ! restore; then
+      echo "GERI DONUS BASARISIZ: onceki surum yeniden yuklenemedi." >&2
+    fi
+  fi
+  exit "$exit_code"
 }
 
 echo "==> Mevcut surum yedekleniyor"
 rm -rf "$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 rsync -a "${CODE_ONLY[@]}" "$APP_DIR"/ "$BACKUP_DIR"/
+BACKUP_READY=1
+trap finish_update EXIT
 
 echo "==> Yeni kod hazirlaniyor"
 # Safe while the service runs: Python already holds its modules in memory, so
 # swapping files only matters at the restart below.
 rsync -a --delete "${CODE_ONLY[@]}" "$SOURCE_DIR"/ "$APP_DIR"/
-"$APP_DIR/.venv/bin/python" -m pip install --quiet -e "$APP_DIR"
+install_release
 
 echo "==> Testler (yeni kod)"
 if ! "$APP_DIR/.venv/bin/python" -m unittest discover -s "$APP_DIR/tests" -t "$APP_DIR/tests" -q; then
-  echo "Testler basarisiz; degisiklik geri alindi, servis dokunulmadan calisiyor." >&2
-  restore
+  echo "Testler basarisiz; onceki surume geri donuluyor." >&2
   exit 1
 fi
 
@@ -81,3 +106,4 @@ systemctl daemon-reload
 systemctl restart "$SERVICE"
 sleep 3
 systemctl --no-pager --lines=10 status "$SERVICE"
+DEPLOY_SUCCESS=1

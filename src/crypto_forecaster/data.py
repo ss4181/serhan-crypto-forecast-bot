@@ -68,6 +68,7 @@ class FuturesMarketSnapshot:
     mark_price: float | None = None
     index_price: float | None = None
     funding_rate_bps: float | None = None
+    quote_volume_24h_usdt: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +176,7 @@ class BinanceKlineStream:
         self._latest: dict[str, ClosedKline] = {}
         self._lock = Lock()
         self._stop = Event()
+        self._closed_update = Event()
         self._thread: Thread | None = None
         self._socket: object | None = None
         self._connected = False
@@ -210,6 +212,15 @@ class BinanceKlineStream:
         symbol = validate_market_symbol(symbol)
         with self._lock:
             return self._latest.get(symbol)
+
+    def wait_for_closed_update(self, timeout: float) -> bool:
+        """Wake the service promptly when a closed candle arrives."""
+        if timeout < 0:
+            raise ValueError("WebSocket bekleme suresi negatif olamaz")
+        updated = self._closed_update.wait(timeout)
+        if updated:
+            self._closed_update.clear()
+        return updated
 
     def _stream_url(self) -> str:
         streams = "/".join(
@@ -259,6 +270,7 @@ class BinanceKlineStream:
                     if event is not None:
                         with self._lock:
                             self._latest[event.symbol] = event
+                        self._closed_update.set()
             except Exception:
                 # REST refresh remains the source of truth while the stream
                 # reconnects; this thread must never take down the service.
@@ -391,7 +403,8 @@ class BinanceMarketDataClient:
             raise ValueError("Anlik futures piyasa ozeti yalniz futures icindir")
         books = self._request_public_json("/fapi/v1/ticker/bookTicker")
         premiums = self._request_public_json("/fapi/v1/premiumIndex")
-        if not isinstance(books, list) or not isinstance(premiums, list):
+        volume_rows = self._request_public_json("/fapi/v1/ticker/24hr")
+        if not isinstance(books, list) or not isinstance(premiums, list) or not isinstance(volume_rows, list):
             raise MarketDataError("Binance anlik futures yaniti liste degil")
 
         premium_by_symbol: dict[str, tuple[float, float, float]] = {}
@@ -407,6 +420,17 @@ class BinanceMarketDataClient:
                 continue
             if math.isfinite(funding_bps):
                 premium_by_symbol[symbol] = (mark, index, funding_bps)
+
+        quote_volume_by_symbol: dict[str, float] = {}
+        for row in volume_rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                symbol = validate_market_symbol(str(row["symbol"]))
+                quote_volume = _nonnegative_float(row["quoteVolume"], "24h quote volume")
+            except (KeyError, TypeError, ValueError, MarketDataError):
+                continue
+            quote_volume_by_symbol[symbol] = quote_volume
 
         snapshots: dict[str, FuturesMarketSnapshot] = {}
         for row in books:
@@ -432,6 +456,7 @@ class BinanceMarketDataClient:
                 mark_price=premium[0] if premium else None,
                 index_price=premium[1] if premium else None,
                 funding_rate_bps=premium[2] if premium else None,
+                quote_volume_24h_usdt=quote_volume_by_symbol.get(symbol),
             )
         if not snapshots:
             raise MarketDataError("Binance anlik futures kotasyonu alinamadi")

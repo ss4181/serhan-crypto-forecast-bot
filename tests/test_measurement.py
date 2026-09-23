@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import unittest
 
 from crypto_forecaster.measurement import deadline_ms, measurement_summary
@@ -18,7 +16,7 @@ def cohort(rows, audience="notified", **options):
     return measurement_summary(rows, now_ms=NOW, **options)["audiences"][audience][0]
 
 
-class MeasurementTests(unittest.TestCase):
+class MeasurementSummaryTests(unittest.TestCase):
     def test_early_hits_do_not_inflate_the_completed_cohort(self):
         rows = [record(success=False), record(sourceTimeMs=NOW - HOUR)]
         c = cohort(rows)
@@ -86,3 +84,86 @@ class MeasurementTests(unittest.TestCase):
     def test_empty_history_has_empty_cohorts(self):
         result = measurement_summary([], now_ms=NOW)
         self.assertEqual(result["audiences"], {"all": [], "notified": [], "muted": []})
+
+    def test_cohorts_separate_direction_regime_and_strategy_with_wilson_interval(self):
+        records = [
+            {
+                "kind": "scalp-target",
+                "targetPercent": 2.0,
+                "horizonHours": 24,
+                "direction": direction,
+                "regimeState": regime,
+                "strategy": strategy,
+                "policyVersion": policy,
+                "sourceTimeMs": 1_700_000_000_000 + i * 86_400_000,
+                "deadlineTimeMs": 1_700_086_400_000 + i * 86_400_000,
+                "cohortMatured": True,
+                "success": i % 2 == 0,
+                "notified": True,
+            }
+            for i, (direction, regime, strategy, policy) in enumerate(
+                (
+                    ("YUKARI", "BULL", "A", "v1"),
+                    ("AŞAĞI", "TRANSITION", "B", "v1"),
+                    ("YUKARI", "BULL", "A", "v2"),
+                )
+            )
+        ]
+        result = measurement_summary(records, now_ms=1_800_000_000_000)
+        cohorts = result["audiences"]["notified"]
+        self.assertEqual(len(cohorts), 3)
+        self.assertEqual(
+            {
+                (row["direction"], row["regime"], row["strategy"], row["policyVersion"])
+                for row in cohorts
+            },
+            {
+                ("YUKARI", "BULL", "A", "v1"),
+                ("AŞAĞI", "TRANSITION", "B", "v1"),
+                ("YUKARI", "BULL", "A", "v2"),
+            },
+        )
+        self.assertTrue(all(len(row["hitRateWilson95"]) == 2 for row in cohorts))
+        self.assertTrue(all(row["distinctUtcDays"] == 1 for row in cohorts))
+
+    def test_missing_mature_outcome_disables_rate_and_interval(self):
+        result = measurement_summary(
+            [{
+                "kind": "scalp-bracket",
+                "horizonHours": 1,
+                "sourceTimeMs": 1_700_000_000_000,
+                "deadlineTimeMs": 1_700_003_600_000,
+                "cohortMatured": True,
+                "success": None,
+                "status": "VERİ EKSİK",
+                "notified": True,
+            }],
+            now_ms=1_800_000_000_000,
+        )
+        cohort = result["audiences"]["notified"][0]
+        self.assertIsNone(cohort["hitRate"])
+        self.assertIsNone(cohort["hitRateWilson95"])
+        self.assertEqual(cohort["unresolvedCount"], 1)
+
+    def test_rolling_windows_keep_realised_rate_and_wilson_interval(self):
+        rows = [{
+            "kind": "scalp-forward", "symbol": "SOLUSDT", "families": ["B3"],
+            "strategy": "B3", "direction": "UNKNOWN", "regimeState": "BULL",
+            "policyVersion": "p2", "horizonHours": 0.25,
+            "sourceTimeMs": 1_700_000_000_000 + i * 60_000,
+            "deadlineTimeMs": 1_700_000_900_000 + i * 60_000,
+            "cohortMatured": True, "success": i % 2 == 0,
+            "status": "NET POZİTİF" if i % 2 == 0 else "NET NEGATİF",
+            "notified": False,
+        } for i in range(12)]
+        result = measurement_summary(rows, now_ms=1_800_000_000_000)
+        cohort = next(x for x in result["audiences"]["muted"] if x["kind"] == "scalp-forward")
+        self.assertEqual((cohort["symbol"], cohort["family"]), ("SOLUSDT", "B3"))
+        self.assertEqual(cohort["rolling"]["10"]["count"], 10)
+        self.assertEqual(cohort["rolling"]["50"]["count"], 12)
+        self.assertEqual(cohort["rolling"]["10"]["rate"], 0.5)
+        self.assertEqual(len(cohort["rolling"]["10"]["wilson95"]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

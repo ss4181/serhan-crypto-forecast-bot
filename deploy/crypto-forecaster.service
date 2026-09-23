@@ -24,6 +24,8 @@ ExecStart=/opt/crypto-forecaster/.venv/bin/python -u run.py serve --days 365 --p
 
 Restart=always
 RestartSec=15
+# systemd sends SIGINT for planned restarts; Python exits with conventional 130.
+SuccessExitStatus=130
 
 # The loop already retries with backoff, so a hang is the real failure mode.
 TimeoutStopSec=30

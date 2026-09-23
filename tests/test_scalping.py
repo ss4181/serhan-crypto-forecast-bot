@@ -19,6 +19,8 @@ from crypto_forecaster.scalping import (
     ScalpSetupAssessment,
     ScalpScanReport,
     deliver_scalp_observations,
+    apply_scalp_notification_safety_gates,
+    record_successful_scalp_delivery,
     deliver_scalp_target_touches,
     evaluate_bull_regime,
     format_scalp_observation_digest,
@@ -31,10 +33,13 @@ from crypto_forecaster.scalping import (
     load_scalp_bracket_ledger,
     load_scalp_ledger,
     load_scalp_target_ledger,
+    load_scalp_setup_forward_ledger,
+    load_pending_scalp_setup_forward,
     pending_scalp_target_touches,
     record_scalp_observations,
     record_scalp_bracket_setups,
     record_scalp_target_setups,
+    record_scalp_setup_forward_setups,
     scalp_cache_path,
     scalp_forecast_stats,
     scalp_scorecard,
@@ -45,6 +50,7 @@ from crypto_forecaster.scalping import (
     settle_scalp_observations,
     settle_scalp_bracket_outcomes,
     settle_scalp_target_outcomes,
+    settle_scalp_setup_forward,
     _assign_alert_tiers,
     _closed_market_context,
     _rank_market_contexts,
@@ -95,7 +101,8 @@ def snapshot(*, spread_bps: float = 2.0) -> FuturesMarketSnapshot:
     mid = 100.0
     half = spread_bps / 20_000.0 * mid
     return FuturesMarketSnapshot(
-        "BTCUSDT", mid - half, mid + half, spread_bps, 100.0, 100.0, 1.0
+        "BTCUSDT", mid - half, mid + half, spread_bps, 100.0, 100.0, 1.0,
+        25_000_000.0,
     )
 
 
@@ -634,12 +641,13 @@ class DigestTests(unittest.TestCase):
                 "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
             )
             notifier = Notifier()
-            delivery = deliver_scalp_observations(
-                Settings(scalp_state_dir=state_dir),
-                report,
-                manifest=manifest,
-                notifier=notifier,  # type: ignore[arg-type]
-            )
+            with patch("crypto_forecaster.scalping.filter_scalp_notification_report", return_value=report):
+                delivery = deliver_scalp_observations(
+                    Settings(scalp_state_dir=state_dir),
+                    report,
+                    manifest=manifest,
+                    notifier=notifier,  # type: ignore[arg-type]
+                )
         self.assertEqual(delivery.status, "SENT")  # type: ignore[union-attr]
         self.assertEqual(len(notifier.calls), 1)
 
@@ -859,11 +867,7 @@ class DigestTests(unittest.TestCase):
 
     def test_transition_uses_stricter_gate_than_bull(self) -> None:
         items = tuple(
-            replace(
-                observation(family=family, score=2.8),
-                alert_tier="KURULUM",
-                regime_state="TRANSITION",
-            )
+            replace(observation(family=family, score=2.8), alert_tier="KURULUM", regime_state="TRANSITION")
             for family in ("B1", "F3")
         )
         report = ScalpScanReport(
@@ -911,6 +915,53 @@ class DigestTests(unittest.TestCase):
                 ).observations,
                 bull_items,
             )
+
+    def test_off_regime_is_silent_unless_its_stricter_opt_in_gate_passes(self) -> None:
+        items = tuple(
+            replace(observation(family=family, score=4.2), alert_tier="KURULUM", regime_state="OFF")
+            for family in ("B1", "F3")
+        )
+        report = ScalpScanReport(
+            load_trade1_universe().version, 89, 89, 0, (), items, START_MS,
+            regime=BullRegime("OFF", 0.2, 0.3, 0.2, False, 89),
+        )
+        assessment = ScalpSetupAssessment(
+            "DIRECTIONAL_LONG", "Yönsel momentum LONG", "YUKARI", 60,
+            0.70, 250.0, 120, 100, 0.95, "YÜKSEK",
+        )
+        with patch("crypto_forecaster.scalping.scalp_setup_assessment", return_value=assessment):
+            silent = filter_scalp_notification_report(report, minimum_score=2.5)
+            enabled = filter_scalp_notification_report(
+                report, minimum_score=2.5, off_alerts_enabled=True,
+                off_minimum_score=4.0, off_minimum_quality_percentile=0.90,
+                off_minimum_direction_probability=0.65,
+                off_minimum_expected_net_bps=200.0,
+                off_minimum_calibration_samples=100,
+            )
+        self.assertEqual(silent.observations, ())
+        self.assertEqual(enabled.observations, items)
+
+    def test_successful_delivery_cooldown_allows_a_material_score_improvement(self) -> None:
+        items = tuple(
+            replace(observation(family=family, score=3.0), alert_tier="KURULUM")
+            for family in ("B1", "F3")
+        )
+        report = ScalpScanReport(load_trade1_universe().version, 89, 89, 0, (), items, START_MS)
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "crypto_forecaster.scalping.scalp_setup_direction", return_value="YUKARI"
+        ):
+            settings = Settings(scalp_state_dir=Path(directory))
+            first, reason = apply_scalp_notification_safety_gates(report, settings, now_ms=START_MS)
+            self.assertEqual(first.observations, items)
+            self.assertIsNone(reason)
+            record_successful_scalp_delivery(settings, first, sent_at_ms=START_MS)
+            repeated, reason = apply_scalp_notification_safety_gates(report, settings, now_ms=START_MS + 5 * 60_000)
+            self.assertEqual(repeated.observations, ())
+            self.assertEqual(reason, "cooldown")
+            stronger = replace(report, observations=tuple(replace(item, score=3.6) for item in items))
+            allowed, reason = apply_scalp_notification_safety_gates(stronger, settings, now_ms=START_MS + 5 * 60_000)
+            self.assertEqual(len(allowed.observations), 2)
+            self.assertIsNone(reason)
 
     def test_muted_setup_still_enters_shadow_target_ledger(self) -> None:
         manifest = load_trade1_universe()
@@ -1090,6 +1141,52 @@ class DigestTests(unittest.TestCase):
 
 
 class ForwardLedgerTests(unittest.TestCase):
+    def test_setup_forward_ledger_freezes_direction_then_scores_net_at_15_30_60(self) -> None:
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(observation(family=family, score=2.0), alert_tier="KURULUM", regime_state="BULL")
+            for family in ("B1", "F3")
+        )
+        frame = market_frame(320)
+        source_index = int(frame.index[frame["open_time_ms"] == items[0].bar_open_time_ms][0])
+        for offset in range(1, 13):
+            frame.loc[source_index + offset, "open"] = 100.0 + offset * 0.1
+            frame.loc[source_index + offset, "close"] = 100.05 + offset * 0.1
+            frame.loc[source_index + offset, "high"] = 100.2 + offset * 0.1
+            frame.loc[source_index + offset, "low"] = 99.9 + offset * 0.1
+        report = ScalpScanReport(
+            "2026-07-ek-g", 89, 89, 0, (), items,
+            items[0].bar_close_time_ms + 1_000,
+        )
+        assessment = ScalpSetupAssessment(
+            "DIRECTIONAL_LONG", "Test long", "YUKARI", 60, 0.7, 20.0, 50, 12, 0.9, "ORTA"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_dir, data_dir = root / "state", root / "data"
+            data_dir.mkdir()
+            frame.to_csv(scalp_cache_path(data_dir, "BTCUSDT"), index=False)
+            with patch("crypto_forecaster.scalping.scalp_setup_assessment", return_value=assessment):
+                self.assertEqual(
+                    record_scalp_setup_forward_setups(
+                        state_dir, report, manifest=manifest, top_k=1
+                    ),
+                    1,
+                )
+            pending = load_pending_scalp_setup_forward(state_dir)
+            self.assertEqual(pending[0]["direction"], "YUKARI")
+            self.assertEqual(pending[0]["families"], ["B1", "F3"])
+            now = datetime.fromtimestamp(
+                (items[0].bar_close_time_ms + 61 * 60_000) / 1000, tz=timezone.utc
+            )
+            outcomes = settle_scalp_setup_forward(state_dir, data_dir, now=now)
+            ledger = load_scalp_setup_forward_ledger(state_dir)
+        self.assertEqual([row["horizon_minutes"] for row in outcomes], [15, 30, 60])
+        self.assertEqual(len(ledger), 3)
+        self.assertTrue(all(row["direction"] == "YUKARI" for row in outcomes))
+        self.assertTrue(all(row["directional_net_bps"] > 0 for row in outcomes))
+        self.assertTrue(all(row["resolution"] == "DIRECTION_HIT" for row in outcomes))
+
     def test_top_k_keeps_all_confirmations_for_each_coin(self) -> None:
         items = (
             observation(family="B1", score=3),
@@ -1195,6 +1292,44 @@ class ForwardLedgerTests(unittest.TestCase):
         )
         self.assertEqual(card["observationCount"], 1)
         self.assertIn("otomatik terfi kapisi degildir", format_scalp_scorecard(card))
+
+    def test_matured_observation_without_candles_is_retained_as_data_missing(self) -> None:
+        manifest = load_trade1_universe()
+        item = observation()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_dir, data_dir = root / "state", root / "data"
+            data_dir.mkdir()
+            record_scalp_observations(state_dir, [item], manifest=manifest)
+            deadline = item.bar_close_time_ms + 60 * 60_000
+            now_ms = deadline + 3 * 24 * 60 * 60_000
+            outcomes = settle_scalp_observations(
+                state_dir,
+                data_dir,
+                now=datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc),
+            )
+            pending = state_dir / "pending" / f"{item.signal_id}.json"
+            ledger = load_scalp_ledger(state_dir)
+            card = scalp_scorecard(
+                ledger,
+                bracket_rows=[{
+                    "resolution": "DATA_MISSING",
+                    "exit_time_ms": None,
+                    "bar_close_time_ms": item.bar_close_time_ms,
+                    "net_bps": None,
+                }],
+                now=datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc),
+            )
+
+        self.assertFalse(pending.exists())
+        self.assertEqual(len(outcomes), 3)
+        self.assertTrue(all(row["resolution"] == "DATA_MISSING" for row in outcomes))
+        self.assertTrue(all(row["success"] is None and row["net_bps"] is None for row in ledger))
+        self.assertEqual(card["outcomeCount"], 0)
+        self.assertEqual(card["dataMissingCount"], 3)
+        self.assertEqual(card["bracketCount"], 0)
+        self.assertEqual(card["bracketDataMissingCount"], 1)
+        self.assertIn("Veri eksik: 3 gozlem, 1 TP/SL", format_scalp_scorecard(card))
 
 
 if __name__ == "__main__":

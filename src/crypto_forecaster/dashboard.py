@@ -11,11 +11,14 @@ from typing import Any
 from .config import Settings
 from .measurement import deadline_ms, measurement_summary
 from .outcomes import load_ledger, pending_dir
+from .persistence import atomic_write_text
 from .scalping import (
     SCALP_TARGET_TOUCH_PERCENTS,
     load_pending_scalp_brackets,
+    load_pending_scalp_setup_forward,
     load_pending_scalp_targets,
     load_scalp_bracket_ledger,
+    load_scalp_setup_forward_ledger,
     load_scalp_target_ledger,
 )
 
@@ -62,8 +65,14 @@ def build_dashboard_payload(
                 ),
                 "sourcePrice": _number(row.get("source_price")),
                 "sourceTimeMs": _integer(row.get("source_close_time_ms")),
-                "status": str(row.get("resolution", "SONUC")),
-                "success": row.get("correct") is True,
+                "status": (
+                    "VERİ EKSİK" if row.get("resolution") == "DATA_MISSING"
+                    else str(row.get("resolution", "SONUC"))
+                ),
+                "success": (
+                    None if row.get("resolution") == "DATA_MISSING"
+                    else row.get("correct") is True
+                ),
                 "netBps": _number(row.get("net_bps")),
                 "targetPercent": None,
                 "notified": True,
@@ -120,6 +129,12 @@ def build_dashboard_payload(
                     "probabilityDown": row.get("probability_down", {}),
                     "sourcePrice": _number(row.get("source_price")),
                     "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+                    "detectedAtMs": _integer(row.get("detected_at_ms")),
+                    "notifiedAtMs": _integer(row.get("notification_sent_at_ms")),
+                    "detectionToDeliverySeconds": _elapsed_seconds(
+                        row.get("detected_at_ms"), row.get("notification_sent_at_ms")
+                    ),
+                    "policyVersion": str(row.get("policy_version", "legacy")),
                     "status": "BEKLEMEDE",
                     "success": None,
                     "netBps": None,
@@ -128,6 +143,7 @@ def build_dashboard_payload(
                     "horizonHours": int(row["horizon_ms"]) / 3_600_000,
                     "notified": bool(row.get("notification_sent", False)),
                     "strategy": str(row.get("strategy_label", "")),
+                    "regimeState": str(row.get("regime_state", "UNKNOWN")),
                     "confidence": str(row.get("confidence", "")),
                     "successProbability": _number(row.get("success_probability")),
                     "expectedNetBps": _number(row.get("expected_net_bps")),
@@ -151,8 +167,15 @@ def build_dashboard_payload(
                 "probabilityDown": row.get("probability_down", {}),
                 "sourcePrice": _number(row.get("source_price")),
                 "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+                "detectedAtMs": _integer(row.get("detected_at_ms")),
+                "notifiedAtMs": _integer(row.get("notification_sent_at_ms")),
+                "detectionToDeliverySeconds": _elapsed_seconds(
+                    row.get("detected_at_ms"), row.get("notification_sent_at_ms")
+                ),
+                "policyVersion": str(row.get("policy_version", "legacy")),
                 "status": "HEDEF ULAŞTI" if row.get("hit") is True else "HEDEF ULAŞMADI" if row.get("hit") is False else "VERİ EKSİK",
                 "success": row.get("hit") if type(row.get("hit")) is bool else None,
+                "missingReason": str(row.get("missing_reason") or "") or None,
                 "netBps": None,
                 "targetPercent": _number(row.get("target_percent")),
                 "targetPrice": _number(row.get("target_price")),
@@ -160,6 +183,7 @@ def build_dashboard_payload(
                 "horizonHours": (_number(row.get("horizon_ms")) or 0) / 3_600_000,
                 "notified": bool(row.get("notification_sent", False)),
                 "strategy": str(row.get("strategy_label", "")),
+                "regimeState": str(row.get("regime_state", "UNKNOWN")),
                 "confidence": str(row.get("confidence", "")),
                 "successProbability": _number(row.get("success_probability")),
                 "expectedNetBps": _number(row.get("expected_net_bps")),
@@ -183,6 +207,12 @@ def build_dashboard_payload(
                 "probabilityDown": None,
                 "sourcePrice": _number(row.get("source_price")),
                 "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+                "detectedAtMs": _integer(row.get("detected_at_ms")),
+                "notifiedAtMs": _integer(row.get("notification_sent_at_ms")),
+                "detectionToDeliverySeconds": _elapsed_seconds(
+                    row.get("detected_at_ms"), row.get("notification_sent_at_ms")
+                ),
+                "policyVersion": str(row.get("policy_version", "legacy")),
                 "status": "TP/SL BEKLEMEDE",
                 "horizonHours": (_number(row.get("horizon_minutes")) or 0) / 60,
                 "success": None,
@@ -194,6 +224,7 @@ def build_dashboard_payload(
                 ),
                 "notified": bool(row.get("notification_sent", False)),
                 "strategy": str(row.get("strategy_label", "")),
+                "regimeState": str(row.get("regime_state", "UNKNOWN")),
                 "confidence": str(row.get("confidence", "")),
                 "successProbability": _number(row.get("success_probability")),
                 "expectedNetBps": _number(row.get("expected_net_bps")),
@@ -222,13 +253,27 @@ def build_dashboard_payload(
                 "probabilityDown": None,
                 "sourcePrice": _number(row.get("source_price")),
                 "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
-                "status": str(row.get("resolution", "SONUÇ")),
+                "status": (
+                    "VERİ EKSİK" if row.get("resolution") == "DATA_MISSING"
+                    else str(row.get("resolution", "SONUÇ"))
+                ),
                 "horizonHours": (_number(row.get("horizon_minutes")) or 0) / 60,
                 "touchTimeMs": _integer(row.get("exit_time_ms")),
+                "detectedAtMs": _integer(row.get("detected_at_ms")),
+                "notifiedAtMs": _integer(row.get("notification_sent_at_ms")),
+                "detectionToDeliverySeconds": _elapsed_seconds(
+                    row.get("detected_at_ms"), row.get("notification_sent_at_ms")
+                ),
+                "policyVersion": str(row.get("policy_version", "legacy")),
                 "entryPrice": _number(row.get("entry_price")),
                 "targetPrice": _number(row.get("target_price")),
                 "stopPrice": _number(row.get("stop_price")),
-                "success": row.get("resolution") == "TARGET",
+                "success": (
+                    True if row.get("resolution") == "TARGET"
+                    else False if row.get("resolution") in {"STOP", "TIME_EXIT"}
+                    else None
+                ),
+                "missingReason": str(row.get("missing_reason") or "") or None,
                 "netBps": _number(row.get("net_bps")),
                 "targetPercent": (
                     _number(row.get("target_bps")) / 100.0
@@ -237,6 +282,7 @@ def build_dashboard_payload(
                 ),
                 "notified": bool(row.get("notification_sent", False)),
                 "strategy": str(row.get("strategy_label", "")),
+                "regimeState": str(row.get("regime_state", "UNKNOWN")),
                 "confidence": str(row.get("confidence", "")),
                 "successProbability": _number(row.get("success_probability")),
                 "expectedNetBps": _number(row.get("expected_net_bps")),
@@ -251,6 +297,72 @@ def build_dashboard_payload(
                 "elapsedMinutes": _number(row.get("elapsed_minutes")),
             }
         )
+    forward_rows = load_scalp_setup_forward_ledger(settings.scalp_state_dir, limit=history_limit)
+    pending_forward_rows = load_pending_scalp_setup_forward(settings.scalp_state_dir, limit=history_limit)
+    source_counts.extend((len(forward_rows), len(pending_forward_rows)))
+    for row in forward_rows:
+        net = _number(row.get("directional_net_bps"))
+        resolution = str(row.get("resolution", ""))
+        signals.append({
+            "kind": "scalp-forward",
+            "signalId": f"{row.get('setup_id', '')}:{row.get('horizon_minutes', '')}",
+            "symbol": str(row.get("spot_symbol", "")),
+            "interval": "5m",
+            "direction": str(row.get("direction", "UNKNOWN")),
+            "tier": "KURULUM",
+            "score": _number(row.get("score")),
+            "families": row.get("families", []),
+            "sourcePrice": _number(row.get("entry_price")),
+            "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+            "detectedAtMs": _integer(row.get("detected_at_ms")),
+            "notifiedAtMs": _integer(row.get("notification_sent_at_ms")),
+            "detectionToDeliverySeconds": _elapsed_seconds(
+                row.get("detected_at_ms"), row.get("notification_sent_at_ms")
+            ),
+            "touchTimeMs": _integer(row.get("exit_time_ms")),
+            "horizonHours": (_number(row.get("horizon_minutes")) or 0) / 60,
+            "status": (
+                "VERİ EKSİK" if resolution == "DATA_MISSING"
+                else "YÖN DOĞRU" if resolution == "DIRECTION_HIT"
+                else "YÖN YANLIŞ"
+            ),
+            "success": (net > 0) if net is not None and resolution != "DATA_MISSING" else None,
+            "netBps": net,
+            "targetPercent": None,
+            "notified": bool(row.get("notification_sent", False)),
+            "strategy": str(row.get("strategy_label", "")),
+            "regimeState": str(row.get("regime_state", "UNKNOWN")),
+            "policyVersion": str(row.get("policy_version", "legacy")),
+            "missingReason": str(row.get("missing_reason") or "") or None,
+        })
+    for row in pending_forward_rows:
+        for horizon in row.get("horizons_minutes", []):
+            signals.append({
+                "kind": "scalp-forward",
+                "signalId": f"{row.get('setup_id', '')}:{horizon}",
+                "symbol": str(row.get("spot_symbol", "")),
+                "interval": "5m",
+                "direction": str(row.get("direction", "UNKNOWN")),
+                "tier": "KURULUM",
+                "score": _number(row.get("score")),
+                "families": row.get("families", []),
+                "sourcePrice": _number(row.get("source_price")),
+                "sourceTimeMs": _integer(row.get("bar_close_time_ms")),
+                "horizonHours": (_number(horizon) or 0) / 60,
+                "status": "BEKLEMEDE",
+                "success": None,
+                "netBps": None,
+                "targetPercent": None,
+                "detectedAtMs": _integer(row.get("detected_at_ms")),
+                "notifiedAtMs": _integer(row.get("notification_sent_at_ms")),
+                "detectionToDeliverySeconds": _elapsed_seconds(
+                    row.get("detected_at_ms"), row.get("notification_sent_at_ms")
+                ),
+                "notified": bool(row.get("notification_sent", False)),
+                "strategy": str(row.get("strategy_label", "")),
+                "regimeState": str(row.get("regime_state", "UNKNOWN")),
+                "policyVersion": "legacy",
+            })
     # A durable append may precede removal of pending state during a restart.
     # Prefer the settled evidence; never count both copies as separate trials.
     unique: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -261,7 +373,7 @@ def build_dashboard_payload(
             unique[key] = row
     signals = list(unique.values())
     for row in signals:
-        if row["kind"] not in {"scalp-target", "scalp-bracket"}:
+        if row["kind"] not in {"scalp-target", "scalp-bracket", "scalp-forward"}:
             continue
         deadline = deadline_ms(row)
         row["deadlineTimeMs"] = deadline
@@ -270,6 +382,29 @@ def build_dashboard_payload(
             row["status"] = "VERİ EKSİK"
     history_complete = all(count < history_limit for count in source_counts)
     measurements = measurement_summary(signals, now_ms=now_ms, history_complete=history_complete)
+    # Make the success-rate filter refer to realised outcome cohorts, never to
+    # the in-sample/backtest forecast probability shown on a signal card.
+    for signal in signals:
+        if signal.get("kind") not in {"scalp-target", "scalp-bracket", "scalp-forward"}:
+            continue
+        families = signal.get("families") if isinstance(signal.get("families"), list) else []
+        cohorts = measurements["audiences"]["all"]
+        matches = [
+            cohort for cohort in cohorts
+            if cohort.get("kind") == signal.get("kind")
+            and cohort.get("symbol") == signal.get("symbol")
+            and cohort.get("direction") == signal.get("direction")
+            and cohort.get("regime") == signal.get("regimeState")
+            and cohort.get("strategy") == (signal.get("strategy") or "Bilinmiyor")
+            and cohort.get("policyVersion") == (signal.get("policyVersion") or "legacy")
+            and (not families or cohort.get("family") in families)
+            and (signal.get("targetPercent") is None or cohort.get("targetPercent") == signal.get("targetPercent"))
+            and cohort.get("horizonHours") == signal.get("horizonHours")
+            and cohort.get("rateAvailable")
+        ]
+        if matches:
+            signal["cohortHitRate"] = min(float(value["hitRate"]) for value in matches)
+            signal["cohortResolvedCount"] = min(int(value["resolvedCount"]) for value in matches)
     signals.sort(key=lambda row: int(row.get("sourceTimeMs") or 0), reverse=True)
     latest_signal_ms = max(
         (int(row["sourceTimeMs"]) for row in signals if row.get("sourceTimeMs")),
@@ -288,6 +423,12 @@ def build_dashboard_payload(
         row for row in scalp_brackets if row["success"] is not None
     ]
     bracket_wins = sum(row["success"] is True for row in settled_scalp_brackets)
+    quarantine_dir = settings.scalp_state_dir / "quarantine"
+    quarantined_records = (
+        sum(1 for path in quarantine_dir.iterdir() if path.is_file())
+        if quarantine_dir.exists()
+        else 0
+    )
     return {
         "schema": SCHEMA,
         "generatedAtUtc": current.isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -322,6 +463,7 @@ def build_dashboard_payload(
             "settledScalpBracketCount": len(settled_scalp_brackets),
             "scalpBracketWins": bracket_wins,
             "scalpBracketWinRate": None,
+            "quarantinedRecordCount": quarantined_records,
         },
         "signals": signals[:limit],
     }
@@ -335,12 +477,11 @@ def write_dashboard_payload(
     limit: int = 2_000,
     source_status: str = "fresh",
 ) -> Path:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
+    atomic_write_text(
+        output,
         dashboard_payload_text(
             settings, now=now, limit=limit, source_status=source_status
         ),
-        encoding="utf-8",
     )
     return output
 
@@ -380,6 +521,14 @@ def _integer(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _elapsed_seconds(start_ms: Any, end_ms: Any) -> float | None:
+    start = _integer(start_ms)
+    end = _integer(end_ms)
+    if start is None or end is None or start < 0 or end < start:
+        return None
+    return (end - start) / 1000.0
 
 
 def _milliseconds_to_utc_text(value: int | None) -> str | None:

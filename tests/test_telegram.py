@@ -90,6 +90,18 @@ class TelegramTests(unittest.TestCase):
             },
         )
 
+    @patch.dict(os.environ, DIRECT_CREDENTIALS, clear=False)
+    def test_operational_alert_is_sent_only_to_the_owner(self) -> None:
+        requests = []
+
+        def opener(request, timeout):  # type: ignore[no-untyped-def]
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(chat_id=500100)
+
+        TelegramNotifier(opener=opener).send_owner_alert("service degraded")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["chat_id"], 500100)
+
     def test_owner_menu_alone_contains_membership_controls(self) -> None:
         member_callbacks = {
             button["callback_data"]

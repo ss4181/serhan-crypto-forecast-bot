@@ -175,6 +175,7 @@ def poll_and_answer(
     performance_text: Callable[[int], str],
     scalp_performance_text: Callable[[int], str] | None = None,
     explanation_text: Callable[[], str] | None = None,
+    symbol_forecast_text: Callable[[str], str] | None = None,
     reply_markup: dict[str, object] | None = None,
     notifier: TelegramNotifier | None = None,
     now: datetime | None = None,
@@ -413,6 +414,7 @@ def poll_and_answer(
                 performance_text=performance_text,
                 scalp_performance_text=scalp_performance_text,
                 explanation_text=explanation_text or format_explanations,
+                symbol_forecast_text=symbol_forecast_text,
                 now=current,
             )
         except Exception as error:  # a bad answer must not kill the cycle
@@ -606,10 +608,18 @@ def _answer(
     performance_text: Callable[[int], str],
     scalp_performance_text: Callable[[int], str] | None,
     explanation_text: Callable[[], str],
+    symbol_forecast_text: Callable[[str], str] | None = None,
     now: datetime,
 ) -> str | None:
     match = _COMMAND.match(text.strip())
     if match is None:
+        if symbol_forecast_text is not None:
+            try:
+                from .coin_query import normalize_coin_query
+                symbol = normalize_coin_query(text)
+            except ValueError:
+                return None
+            return symbol_forecast_text(symbol)
         return None
     command = match.group(1)
     argument = (match.group(2) or "").strip()
@@ -619,6 +629,17 @@ def _answer(
         return explanation_text()
     if command in ("durum", "status"):
         return status_text()
+    if command in ("coin", "tahmin"):
+        if symbol_forecast_text is None:
+            return "ℹ️ Coin tahmini bu sunucuda henüz etkin değil."
+        if not argument:
+            return "❗ Kullanım: /coin ALLOUSDT (veya yalnızca ALLOUSDT yazın)."
+        try:
+            from .coin_query import normalize_coin_query
+            symbol = normalize_coin_query(argument)
+        except ValueError:
+            return "❗ Geçersiz sembol. Örnek: /coin ALLOUSDT"
+        return symbol_forecast_text(symbol)
     if command in ("performans", "karne"):
         return performance_text(_days_argument(argument))
     if command in ("scalpkarne", "scalp_performance"):
@@ -753,6 +774,7 @@ def _help_text(*, is_owner: bool) -> str:
         "",
         "📌 KOMUTLAR",
         "📊 /durum — alti modelin su anki durumu",
+        "🔎 /coin <sembol> — coine özel 15dk/1s/4s/1g tahmini (örn. /coin ALLOUSDT); sembolü tek başına da gönderebilirsin",
         "📈 /performans [gun] — gonderilen sinyallerin gercek sonucu (varsayilan 30 gun)",
         "🧪 /scalpkarne [gun] — scalp ileri-test sonuclari (varsayilan 30 gun)",
         "📖 /aciklamalar — bildirim alanlari ve strateji mantigi",
@@ -796,7 +818,7 @@ def format_explanations() -> str:
             "• Beklenen net: secilen yondeki ortalama hareketten komisyon, spread ve kayma varsayiminin cikarilmis hali.",
             "• Guven: sonuc sayisi kadar bagimsiz piyasa gununu da dikkate alir; ayni andaki coinleri bagimsiz saymaz.",
             "• Tetikleyici: gozlemin neden olustugunu aciklar.",
-            "• Beklenen ufuk: scalp ileri-testinin sabit 15/30/60 dakika cikislari.",
+            "• Beklenen ufuk: scalp 15/30/60dk ileri-test çıkışı.",
             "• Piyasa: bildirimlerin olculdugu Binance USD-M vadeli kontrati.",
             "• 24s kapali mum getirisi/sirasi: son kapanmis 24 saatin evrendeki yeri.",
             "• 1s hacim / onceki 24s medyani: son saatin hacmi, onceki saatlerin tipik hacmine gore.",
@@ -831,13 +853,15 @@ def format_explanations() -> str:
             "• Dusus devami SHORT: F2 sokunun ilk asagi devam hipotezi; toparlanmayla karistirilmaz.",
             "",
             "📊 BT 15/30/60dk",
-            "• Yalnizca kapanmis ileri-test sonuclaridir; her ufuk ayri hesaplanir.",
+            "• Her ufuk ayrı, kapanmış ileri-test sonucudur.",
             "• Yukari/asagi olasiligi: gecmiste fiyat hangi yonde hareket etti.",
             "• Medyan hareket: tipik brut hareket (bps ve %).",
-            "• Medyan net hareket: tahmini maliyet cikarildiktan sonraki tipik hareket.",
+            "• Medyan net: tahmini maliyet sonrası tipik hareket.",
             "• Yon ozeti: o coindeki ailelerin yerlesmis BT sonuclarinin n agirlikli sentezi.",
             "  15/30/60dk ayri okunur; KARIŞIK, gecmis verinin net bir yon vermedigini anlatir.",
             "• n: hesaba giren sonuc sayisi; n dusukse belirsizlik yuksektir.",
+            "",
+            "🔎 Coin: /coin ALLOUSDT veya sembol; 15dk/1s/4s/1g tahmini.",
             "",
             "🤖 BTC/ETH MODEL MESAJLARI",
             "• Yukari/asagi yuzdeleri: kalibre edilmis model olasiligi.",

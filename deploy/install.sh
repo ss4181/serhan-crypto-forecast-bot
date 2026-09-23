@@ -91,7 +91,8 @@ if [[ ! -x "$APP_DIR/.venv/bin/python" ]]; then
   "$PYTHON_BIN" -m venv "$APP_DIR/.venv"
 fi
 "$APP_DIR/.venv/bin/python" -m pip install --quiet --upgrade pip
-"$APP_DIR/.venv/bin/python" -m pip install --quiet -e "$APP_DIR"
+"$APP_DIR/.venv/bin/python" -m pip install --quiet -r "$APP_DIR/requirements.lock"
+"$APP_DIR/.venv/bin/python" -m pip install --quiet --no-deps --no-build-isolation -e "$APP_DIR"
 
 chown -R "$BOT_USER":"$BOT_USER" "$APP_DIR"
 

@@ -34,6 +34,7 @@ from .data import (
     load_cache,
     update_market_cache,
 )
+from .persistence import atomic_write_json
 from .regime import update_regime
 from .telegram import (
     TelegramDelivery,
@@ -52,6 +53,9 @@ SCALP_TARGET_PENDING_SCHEMA = "scalp-target-pending-v1"
 SCALP_TARGET_LEDGER_SCHEMA = "scalp-target-outcome-v1"
 SCALP_BRACKET_PENDING_SCHEMA = "scalp-bracket-pending-v1"
 SCALP_BRACKET_LEDGER_SCHEMA = "scalp-bracket-outcome-v1"
+SCALP_SETUP_FORWARD_PENDING_SCHEMA = "scalp-setup-forward-pending-v1"
+SCALP_SETUP_FORWARD_LEDGER_SCHEMA = "scalp-setup-forward-outcome-v1"
+SCALP_POLICY_VERSION = "trade3-scalp-regime-gates-v2"
 SCALP_TARGET_TOUCH_PERCENTS = (2.0, 3.0, 5.0)
 SCALP_SETTLEMENT_GRACE_DAYS = 2
 SCALP_BACKTEST_HORIZONS = (15, 30, 60)
@@ -144,6 +148,7 @@ class ScalpObservation:
     mark_price: float | None = None
     taker_buy_ratio_1h: float | None = None
     volatility_bps: float | None = None
+    quote_volume_24h_usdt: float | None = None
 
     @property
     def signal_id(self) -> str:
@@ -224,6 +229,8 @@ def scan_scalp_frame(
     """Evaluate only the latest closed 5m bar, with no future values."""
     if len(frame) < SCALP_MINIMUM_BARS:
         return ()
+    if context is None:
+        context = _closed_market_context(frame)
     close = frame["close"].astype("float64")
     open_ = frame["open"].astype("float64")
     high = frame["high"].astype("float64")
@@ -709,12 +716,14 @@ def format_scalp_observation_digest(
     top_k: int,
     ledger: Iterable[dict[str, Any]] = (),
     bracket_ledger: Iterable[dict[str, Any]] = (),
+    settings: Settings | None = None,
 ) -> str:
     """Compact coin cards; detailed family evidence remains in the scorecard."""
     shown = report.top(top_k)
     if not shown:
         raise ValueError("Scalp gozlem raporu icin kurulum yok")
     rows = tuple(ledger)
+    active_settings = settings or Settings()
     bracket_rows = tuple(bracket_ledger)
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in shown:
@@ -744,6 +753,20 @@ def format_scalp_observation_digest(
             )
         families = "+".join(i.family for i in items)
         lines.append(f"{families} • Güç {max(i.score for i in items):.2f}")
+        target_bps, stop_bps = _dynamic_bracket_bps(items)
+        risk_ratio = target_bps / stop_bps if stop_bps > 0 else 0.0
+        cost_bps = max(float(value.estimated_cost_bps) for value in items)
+        daily_limit = (
+            f"−{active_settings.scalp_daily_research_loss_limit_bps:g} bps"
+            if active_settings.scalp_daily_research_loss_limit_bps > 0
+            else "kapalı"
+        )
+        lines.append(
+            f"🛡 Simülasyon hedef/stop: +{target_bps:.0f}/−{stop_bps:.0f} bps "
+            f"(1:{risk_ratio:.2f}) • maliyet ~{cost_bps:.0f} bps • "
+            f"açık ≤{active_settings.scalp_maximum_concurrent_research_alerts} • "
+            f"günlük sim {daily_limit} • kill {'AÇIK' if active_settings.scalp_alert_kill_switch else 'kapalı'}"
+        )
         recent = _recent_scalp_success(
             items,
             assessment=assessment,
@@ -789,6 +812,17 @@ def filter_scalp_notification_report(
     transition_minimum_direction_probability: float | None = None,
     transition_minimum_expected_net_bps: float | None = None,
     transition_minimum_calibration_samples: int | None = None,
+    off_alerts_enabled: bool = False,
+    off_minimum_score: float | None = None,
+    off_minimum_quality_percentile: float | None = None,
+    off_minimum_direction_probability: float | None = None,
+    off_minimum_expected_net_bps: float | None = None,
+    off_minimum_calibration_samples: int | None = None,
+    maximum_spread_bps: float | None = None,
+    minimum_quote_volume_24h_usdt: float | None = None,
+    maximum_abs_funding_bps: float | None = None,
+    maximum_bar_volatility_bps: float | None = None,
+    live_families: Iterable[str] | None = None,
     diagnostics: dict[str, int] | None = None,
 ) -> ScalpScanReport:
     """Keep only exact-direction, high-score multi-family setups for Telegram.
@@ -813,10 +847,10 @@ def filter_scalp_notification_report(
             diagnostics[reason] = diagnostics.get(reason, 0) + 1
 
     regime_state = report.regime.state if report.regime is not None else None
-    if regime_state in {"OFF", "UNKNOWN"}:
+    if regime_state == "UNKNOWN" or (regime_state == "OFF" and not off_alerts_enabled):
         # A report with no confirmed broad-market regime is still retained in
         # the shadow ledger, but it must never become a Telegram setup.
-        count("regime_silent")
+        count("off_disabled" if regime_state == "OFF" else "regime_silent")
         return replace(report, observations=())
     if regime_state == "TRANSITION" and not transition_alerts_enabled:
         count("transition_disabled")
@@ -852,13 +886,69 @@ def filter_scalp_notification_report(
                 int(minimum_calibration_samples),
                 int(transition_minimum_calibration_samples),
             )
+    elif regime_state == "OFF":
+        # OFF is opt-in and cannot be configured looser than the BULL policy.
+        active_threshold = max(threshold, float(off_minimum_score or 0.0))
+        active_quality_percentile = max(
+            float(minimum_quality_percentile or 0.0),
+            float(off_minimum_quality_percentile or 0.0),
+        )
+        active_direction_probability = max(
+            float(minimum_direction_probability or 0.0),
+            float(off_minimum_direction_probability or 0.0),
+        )
+        active_expected_net_bps = max(
+            float(minimum_expected_net_bps or 0.0),
+            float(off_minimum_expected_net_bps or 0.0),
+        )
+        active_calibration_samples = max(
+            int(minimum_calibration_samples), int(off_minimum_calibration_samples or 0)
+        )
 
     ledger_rows = tuple(ledger)
+    allowed_families = set(live_families) if live_families is not None else set(FAMILY_LABELS)
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in report.observations:
         grouped.setdefault(item.perpetual_symbol, []).append(item)
     eligible_symbols: set[str] = set()
     for symbol, items in grouped.items():
+        if any(item.family not in allowed_families for item in items):
+            count("shadow_only_family")
+            continue
+        if (
+            not any(item.execution_eligible for item in items)
+            and any(value is not None for value in (
+                maximum_spread_bps, minimum_quote_volume_24h_usdt,
+                maximum_abs_funding_bps, maximum_bar_volatility_bps,
+            ))
+        ):
+            if all(item.spread_bps is None for item in items):
+                count("market_data_missing")
+            else:
+                if maximum_spread_bps is not None and any(
+                    item.spread_bps is not None and item.spread_bps > maximum_spread_bps
+                    for item in items
+                ):
+                    count("spread")
+                if minimum_quote_volume_24h_usdt is not None and any(
+                    item.quote_volume_24h_usdt is None
+                    or item.quote_volume_24h_usdt < minimum_quote_volume_24h_usdt
+                    for item in items
+                ):
+                    count("liquidity")
+                if maximum_abs_funding_bps is not None and any(
+                    item.funding_rate_bps is None
+                    or abs(item.funding_rate_bps) > maximum_abs_funding_bps
+                    for item in items
+                ):
+                    count("funding")
+                if maximum_bar_volatility_bps is not None and any(
+                    item.volatility_bps is None
+                    or item.volatility_bps > maximum_bar_volatility_bps
+                    for item in items
+                ):
+                    count("volatility")
+            continue
         if (
             len({item.family for item in items}) < 2
             or not any(item.alert_tier == "KURULUM" for item in items)
@@ -912,6 +1002,96 @@ def filter_scalp_notification_report(
     )
 
 
+def apply_scalp_notification_safety_gates(
+    report: ScalpScanReport,
+    settings: Settings,
+    *,
+    now_ms: int | None = None,
+) -> tuple[ScalpScanReport, str | None]:
+    """Apply manual kill switch, paper-risk caps and delivered-signal cooldown."""
+    if not report.observations:
+        return report, None
+    if settings.scalp_alert_kill_switch:
+        return replace(report, observations=()), "kill_switch"
+    current = now_ms or int(datetime.now(UTC).timestamp() * 1000)
+    pending = [
+        row for row in load_pending_scalp_brackets(settings.scalp_state_dir)
+        if row.get("notification_sent") is True
+        and _safe_int(row.get("bar_close_time_ms"))
+        + _safe_int(row.get("horizon_minutes")) * 60_000 > current
+    ]
+    if len(pending) >= settings.scalp_maximum_concurrent_research_alerts:
+        return replace(report, observations=()), "max_concurrent_research_alerts"
+    loss_limit = settings.scalp_daily_research_loss_limit_bps
+    if loss_limit > 0:
+        day_start = current - (current % 86_400_000)
+        today = [
+            row for row in load_scalp_bracket_ledger(settings.scalp_state_dir)
+            if _safe_int(row.get("exit_time_ms")) >= day_start
+            and row.get("notification_sent") is True
+            and _finite_value(row.get("net_bps")) is not None
+        ]
+        if sum(float(row["net_bps"]) for row in today) <= -loss_limit:
+            return replace(report, observations=()), "daily_research_loss_limit"
+    cooldown_path = settings.scalp_state_dir / "delivery-cooldowns.json"
+    try:
+        saved = json.loads(cooldown_path.read_text(encoding="utf-8"))
+        recent = saved.get("symbols", {}) if isinstance(saved, dict) else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        recent = {}
+    grouped: dict[str, list[ScalpObservation]] = {}
+    for item in report.observations:
+        grouped.setdefault(item.perpetual_symbol, []).append(item)
+    allowed: set[str] = set()
+    cooldown_ms = settings.scalp_same_direction_cooldown_minutes * 60_000
+    for symbol, items in grouped.items():
+        direction = scalp_setup_direction(items)
+        previous = recent.get(symbol, {}) if isinstance(recent, dict) else {}
+        previous_ms = _safe_int(previous.get("sent_at_ms")) if isinstance(previous, dict) else 0
+        previous_score = _finite_value(previous.get("score")) if isinstance(previous, dict) else None
+        score = max(item.score for item in items)
+        if (
+            direction == (previous.get("direction") if isinstance(previous, dict) else None)
+            and cooldown_ms > 0
+            and current - previous_ms < cooldown_ms
+            and (previous_score is None or score < previous_score + settings.scalp_realert_score_delta)
+        ):
+            continue
+        allowed.add(symbol)
+    return replace(
+        report,
+        observations=tuple(item for item in report.observations if item.perpetual_symbol in allowed),
+    ), "cooldown" if grouped and not allowed else None
+
+
+def record_successful_scalp_delivery(
+    settings: Settings,
+    report: ScalpScanReport,
+    *,
+    sent_at_ms: int | None = None,
+) -> None:
+    """Persist repeat-control state only after Telegram confirms a delivery."""
+    current = sent_at_ms or int(datetime.now(UTC).timestamp() * 1000)
+    path = settings.scalp_state_dir / "delivery-cooldowns.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        symbols = payload.get("symbols", {}) if isinstance(payload, dict) else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        symbols = {}
+    if not isinstance(symbols, dict):
+        symbols = {}
+    grouped: dict[str, list[ScalpObservation]] = {}
+    for item in report.observations:
+        grouped.setdefault(item.perpetual_symbol, []).append(item)
+    for symbol, items in grouped.items():
+        symbols[symbol] = {
+            "direction": scalp_setup_direction(items),
+            "score": max(item.score for item in items),
+            "sent_at_ms": current,
+        }
+    atomic_write_json(path, {"version": 1, "symbols": symbols})
+
+
 def deliver_scalp_observations(
     settings: Settings,
     report: ScalpScanReport,
@@ -940,6 +1120,17 @@ def deliver_scalp_observations(
         transition_minimum_direction_probability=settings.scalp_transition_minimum_direction_probability,
         transition_minimum_expected_net_bps=settings.scalp_transition_minimum_expected_net_bps,
         transition_minimum_calibration_samples=settings.scalp_transition_minimum_calibration_samples,
+        off_alerts_enabled=settings.scalp_off_alerts_enabled,
+        off_minimum_score=settings.scalp_off_minimum_alert_score,
+        off_minimum_quality_percentile=settings.scalp_off_minimum_quality_percentile,
+        off_minimum_direction_probability=settings.scalp_off_minimum_direction_probability,
+        off_minimum_expected_net_bps=settings.scalp_off_minimum_expected_net_bps,
+        off_minimum_calibration_samples=settings.scalp_off_minimum_calibration_samples,
+        maximum_spread_bps=settings.scalp_maximum_spread_bps,
+        minimum_quote_volume_24h_usdt=settings.scalp_minimum_quote_volume_24h_usdt,
+        maximum_abs_funding_bps=settings.scalp_maximum_abs_funding_bps,
+        maximum_bar_volatility_bps=settings.scalp_maximum_bar_volatility_bps,
+        live_families=settings.scalp_live_families,
     )
     shown = filtered_report.top(settings.scalp_top_k) if filtered_report.observations else ()
     if not shown:
@@ -957,6 +1148,7 @@ def deliver_scalp_observations(
             top_k=settings.scalp_top_k,
             ledger=ledger,
             bracket_ledger=bracket_ledger,
+            settings=settings,
         ),
         state_dir=settings.telegram_state_dir / "scalp",
         reply_markup=telegram_channel_keyboard(),
@@ -1016,7 +1208,18 @@ def record_scalp_target_setups(
             "direction": direction,
             "horizon_directions": list(horizon_directions),
             "source_price": float(source.price),
+            "mark_price_at_scan": source.mark_price,
+            "regime_state": source.regime_state,
+            "regime_score": float(source.regime_score),
+            "market_breadth": float(source.breadth),
+            "spread_bps_at_scan": source.spread_bps,
+            "estimated_round_trip_cost_bps": max(
+                float(item.estimated_cost_bps) for item in items
+            ),
+            "family_scores": {item.family: float(item.score) for item in items},
             "bar_close_time_ms": int(source.bar_close_time_ms),
+            "detected_at_ms": int(report.evaluated_at_ms),
+            "policy_version": SCALP_POLICY_VERSION,
             "horizons_minutes": list(manifest.scalp_horizons_minutes),
             "horizon_ms": max(int(milestone_horizon_hours), 1) * 3_600_000,
             "strategy_code": assessment.strategy_code,
@@ -1048,6 +1251,9 @@ def record_scalp_target_setups(
             "delivered_percents": [],
             "outcome_recorded_percents": [],
             "notification_sent": bool(notification_sent),
+            "notification_sent_at_ms": (
+                int(datetime.now(UTC).timestamp() * 1000) if notification_sent else None
+            ),
         }
         try:
             with path.open("x", encoding="utf-8", newline="\n") as handle:
@@ -1061,16 +1267,10 @@ def record_scalp_target_setups(
                 existing = _read_scalp_target_record(path)
                 if existing is not None and not bool(existing.get("notification_sent", False)):
                     existing["notification_sent"] = True
-                    path.write_text(
-                        json.dumps(
-                            existing,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            allow_nan=False,
-                        )
-                        + "\n",
-                        encoding="utf-8",
+                    existing["notification_sent_at_ms"] = int(
+                        datetime.now(UTC).timestamp() * 1000
                     )
+                    atomic_write_json(path, existing)
             continue
     return added
 
@@ -1092,7 +1292,7 @@ def pending_scalp_target_touches(
     for path in sorted(directory.glob("*.json")):
         record = _read_scalp_target_record(path)
         if record is None:
-            path.unlink(missing_ok=True)
+            _quarantine_pending_record(path)
             continue
         source_ms = int(record["bar_close_time_ms"])
         deadline_ms = source_ms + int(record["horizon_ms"])
@@ -1139,7 +1339,7 @@ def settle_scalp_target_outcomes(
     for path in sorted(directory.glob("*.json")):
         record = _read_scalp_target_record(path)
         if record is None:
-            path.unlink(missing_ok=True)
+            _quarantine_pending_record(path)
             continue
         source_ms = int(record["bar_close_time_ms"])
         deadline_ms = source_ms + int(record["horizon_ms"])
@@ -1150,32 +1350,33 @@ def settle_scalp_target_outcomes(
             except (MarketDataError, OSError, ValueError):
                 frames[symbol] = pd.DataFrame()
         window = _scalp_target_window(frames[symbol], source_ms, min(current_ms, deadline_ms))
-        if window.empty:
-            if current_ms - deadline_ms > grace_ms:
-                path.unlink(missing_ok=True)
-            continue
         touched = _scalp_target_touches(record, window)
         recorded = {float(value) for value in record.get("outcome_recorded_percents", [])}
         hit_levels = set(touched)
         # A missing candle cannot prove a target was never touched.
         expected_count = int(record["horizon_ms"]) // SCALP_STEP_MS
         complete = (
-            len(window) == expected_count
+            not window.empty
+            and len(window) == expected_count
             and int(window.iloc[0]["close_time_ms"]) == source_ms + SCALP_STEP_MS
             and int(window.iloc[-1]["close_time_ms"]) == deadline_ms
             and bool(window["close_time_ms"].diff().dropna().eq(SCALP_STEP_MS).all())
         )
+        past_grace = current_ms - deadline_ms > grace_ms
         for percent in SCALP_TARGET_TOUCH_PERCENTS:
             if percent in recorded:
                 continue
-            if percent not in touched and (current_ms < deadline_ms or not complete):
-                continue
+            if percent not in touched:
+                if current_ms < deadline_ms:
+                    continue
+                if not complete and not past_grace:
+                    continue
             target_price = float(record["source_price"]) * (
                 1.0 + percent / 100.0
                 if str(record["direction"]) == "YUKARI"
                 else 1.0 - percent / 100.0
             )
-            hit = percent in touched
+            hit = percent in touched if complete or percent in touched else None
             outcome = {
                 "schema": SCALP_TARGET_LEDGER_SCHEMA,
                 "setup_id": record["setup_id"],
@@ -1187,11 +1388,27 @@ def settle_scalp_target_outcomes(
                 "score": float(record.get("score", 0.0)),
                 "notification_sent": bool(record.get("notification_sent", True)),
                 "bar_close_time_ms": source_ms,
+                "detected_at_ms": record.get("detected_at_ms"),
+                "notification_sent_at_ms": record.get("notification_sent_at_ms"),
+                "policy_version": record.get("policy_version", "legacy"),
                 "source_price": float(record["source_price"]),
+                "mark_price_at_scan": record.get("mark_price_at_scan"),
+                "regime_state": record.get("regime_state", "UNKNOWN"),
+                "regime_score": record.get("regime_score", 0.0),
+                "market_breadth": record.get("market_breadth", 0.0),
+                "spread_bps_at_scan": record.get("spread_bps_at_scan"),
+                "estimated_round_trip_cost_bps": record.get(
+                    "estimated_round_trip_cost_bps"
+                ),
+                "family_scores": record.get("family_scores", {}),
                 "horizon_ms": int(record["horizon_ms"]),
                 "target_percent": percent,
                 "target_price": target_price,
                 "hit": hit,
+                "missing_reason": (
+                    None if hit is not None else
+                    "CACHE_UNAVAILABLE_AFTER_GRACE" if window.empty else "CANDLE_GAP_AFTER_GRACE"
+                ),
                 "touch_price": touched[percent]["touch_price"] if hit else None,
                 "touch_close_time_ms": touched[percent]["touch_close_time_ms"] if hit else None,
                 "settled_at_ms": current_ms,
@@ -1214,7 +1431,8 @@ def settle_scalp_target_outcomes(
             not bool(record.get("notification_sent", True))
             or hit_levels.issubset(delivered)
         )
-        acknowledgements.append((path, record, remove))
+        if recorded or not window.empty:
+            acknowledgements.append((path, record, remove))
     if settled:
         _append_scalp_target_ledger(state_dir, settled)
     # Commit evidence first. A failed write must leave the pending work intact.
@@ -1222,11 +1440,7 @@ def settle_scalp_target_outcomes(
         if remove:
             path.unlink(missing_ok=True)
         else:
-            path.write_text(
-                json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False)
-                + "\n",
-                encoding="utf-8",
-            )
+            atomic_write_json(path, record)
     return settled
 
 
@@ -1275,6 +1489,8 @@ def record_scalp_bracket_setups(
             "strategy_label": assessment.strategy_label,
             "source_price": float(source.price),
             "bar_close_time_ms": int(source.bar_close_time_ms),
+            "detected_at_ms": int(report.evaluated_at_ms),
+            "policy_version": SCALP_POLICY_VERSION,
             "horizon_minutes": max(int(horizon_minutes), 5),
             "target_bps": target_bps,
             "stop_bps": stop_bps,
@@ -1289,6 +1505,9 @@ def record_scalp_bracket_setups(
             "independent_days": assessment.independent_days,
             "confidence": assessment.confidence,
             "notification_sent": bool(notification_sent),
+            "notification_sent_at_ms": (
+                int(datetime.now(UTC).timestamp() * 1000) if notification_sent else None
+            ),
         }
         try:
             with path.open("x", encoding="utf-8", newline="\n") as handle:
@@ -1302,12 +1521,218 @@ def record_scalp_bracket_setups(
                 existing = _read_scalp_bracket_record(path)
                 if existing is not None and not bool(existing.get("notification_sent", False)):
                     existing["notification_sent"] = True
-                    path.write_text(
-                        json.dumps(existing, ensure_ascii=False, sort_keys=True, allow_nan=False)
-                        + "\n",
-                        encoding="utf-8",
+                    existing["notification_sent_at_ms"] = int(
+                        datetime.now(UTC).timestamp() * 1000
                     )
+                    atomic_write_json(path, existing)
     return added
+
+
+def record_scalp_setup_forward_setups(
+    state_dir: Path,
+    report: ScalpScanReport,
+    *,
+    manifest: UniverseManifest,
+    top_k: int,
+    ledger: Iterable[dict[str, Any]] = (),
+    notification_sent: bool = False,
+) -> int:
+    """Freeze the causal setup direction for 15/30/60m forward evaluation."""
+    grouped: dict[str, list[ScalpObservation]] = {}
+    for item in report.top(top_k):
+        grouped.setdefault(item.perpetual_symbol, []).append(item)
+    historical = tuple(
+        row for row in ledger
+        if isinstance(row, dict)
+        and _safe_int(row.get("exit_time_ms")) <= report.evaluated_at_ms
+        and row.get("resolution") != "DATA_MISSING"
+    )
+    directory = _setup_forward_pending_dir(state_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    added = 0
+    for items in grouped.values():
+        if len({item.family for item in items}) < 2 or not any(
+            item.alert_tier == "KURULUM" for item in items
+        ):
+            continue
+        assessment = scalp_setup_assessment(items, historical)
+        if assessment.direction not in {"YUKARI", "AŞAĞI"}:
+            continue
+        source = items[0]
+        setup_id = sha256(
+            f"{manifest.version}|{source.perpetual_symbol}|{source.bar_close_time_ms}|{assessment.strategy_code}".encode("ascii")
+        ).hexdigest()
+        path = directory / f"{setup_id}.json"
+        payload = {
+            "schema": SCALP_SETUP_FORWARD_PENDING_SCHEMA,
+            "setup_id": setup_id,
+            "universe_version": manifest.version,
+            "spot_symbol": source.spot_symbol,
+            "perpetual_symbol": source.perpetual_symbol,
+            "families": sorted({item.family for item in items}),
+            "direction": assessment.direction,
+            "strategy_code": assessment.strategy_code,
+            "strategy_label": assessment.strategy_label,
+            "policy_version": SCALP_POLICY_VERSION,
+            "regime_state": source.regime_state,
+            "bar_open_time_ms": source.bar_open_time_ms,
+            "bar_close_time_ms": source.bar_close_time_ms,
+            "source_price": source.price,
+            "round_trip_cost_bps": max(item.estimated_cost_bps for item in items),
+            "score": max(item.score for item in items),
+            "horizons_minutes": list(SCALP_BACKTEST_HORIZONS),
+            "detected_at_ms": report.evaluated_at_ms,
+            "notification_sent": bool(notification_sent),
+            "notification_sent_at_ms": (
+                int(datetime.now(UTC).timestamp() * 1000) if notification_sent else None
+            ),
+        }
+        try:
+            with path.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n")
+            added += 1
+        except FileExistsError:
+            if notification_sent:
+                existing = _read_setup_forward_pending(path)
+                if existing is not None and not existing["notification_sent"]:
+                    existing["notification_sent"] = True
+                    existing["notification_sent_at_ms"] = int(datetime.now(UTC).timestamp() * 1000)
+                    atomic_write_json(path, existing)
+    return added
+
+
+def load_pending_scalp_setup_forward(
+    state_dir: Path, *, limit: int = 20_000
+) -> list[dict[str, Any]]:
+    directory = _setup_forward_pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    return [
+        row for path in sorted(directory.glob("*.json"))[-limit:]
+        if (row := _read_setup_forward_pending(path)) is not None
+    ]
+
+
+def load_scalp_setup_forward_ledger(
+    state_dir: Path, *, limit: int = 20_000
+) -> list[dict[str, Any]]:
+    path = _setup_forward_ledger_path(state_dir)
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    result = []
+    for line in lines[-limit:]:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("schema") == SCALP_SETUP_FORWARD_LEDGER_SCHEMA:
+            result.append(row)
+    return result
+
+
+def settle_scalp_setup_forward(
+    state_dir: Path, data_dir: Path, *, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    directory = _setup_forward_pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    current = int((now or datetime.now(UTC)).timestamp() * 1000)
+    grace = SCALP_SETTLEMENT_GRACE_DAYS * 86_400_000
+    frames: dict[str, pd.DataFrame] = {}
+    settled: list[dict[str, Any]] = []
+    completed: list[Path] = []
+    for path in sorted(directory.glob("*.json")):
+        record = _read_setup_forward_pending(path)
+        if record is None:
+            _quarantine_pending_record(path)
+            continue
+        source_ms = int(record["bar_close_time_ms"])
+        if current < source_ms + max(record["horizons_minutes"]) * 60_000:
+            continue
+        symbol = str(record["perpetual_symbol"])
+        if symbol not in frames:
+            try:
+                frames[symbol] = load_cache(scalp_cache_path(data_dir, symbol))
+            except (MarketDataError, OSError, ValueError):
+                frames[symbol] = pd.DataFrame()
+        frame = frames[symbol]
+        matches = frame.index[frame["open_time_ms"] == int(record["bar_open_time_ms"])].tolist() if not frame.empty else []
+        if not matches:
+            if current - (source_ms + max(record["horizons_minutes"]) * 60_000) > grace:
+                settled.extend(_missing_setup_forward_outcomes(record, "CACHE_OR_SOURCE_MISSING"))
+                completed.append(path)
+            continue
+        index = int(matches[-1])
+        last_index = index + max(record["horizons_minutes"]) // 5
+        expected = source_ms + np.arange(1, last_index - index + 1) * SCALP_STEP_MS
+        actual = frame.iloc[index + 1:last_index + 1]["close_time_ms"].to_numpy()
+        if last_index >= len(frame) or not np.array_equal(actual, expected):
+            if current - (source_ms + max(record["horizons_minutes"]) * 60_000) > grace:
+                settled.extend(_missing_setup_forward_outcomes(record, "CANDLE_GAP_AFTER_GRACE"))
+                completed.append(path)
+            continue
+        entry_price = float(frame.iloc[index + 1]["open"])
+        sign = 1.0 if record["direction"] == "YUKARI" else -1.0
+        cost = float(record["round_trip_cost_bps"])
+        for horizon in record["horizons_minutes"]:
+            exit_row = frame.iloc[index + horizon // 5]
+            gross = math.log(float(exit_row["close"]) / entry_price) * 10_000.0
+            directional_net = sign * gross - cost
+            settled.append({
+                "schema": SCALP_SETUP_FORWARD_LEDGER_SCHEMA,
+                **{key: record[key] for key in (
+                    "setup_id", "universe_version", "spot_symbol", "perpetual_symbol",
+                    "families", "direction", "strategy_code", "strategy_label",
+                    "policy_version", "regime_state", "bar_close_time_ms", "detected_at_ms",
+                    "notification_sent", "notification_sent_at_ms",
+                )},
+                "horizon_minutes": horizon,
+                "entry_price": entry_price,
+                "exit_price": float(exit_row["close"]),
+                "exit_time_ms": int(exit_row["close_time_ms"]),
+                "gross_bps": gross,
+                "directional_net_bps": directional_net,
+                "round_trip_cost_bps": cost,
+                "resolution": "DIRECTION_HIT" if directional_net > 0 else "DIRECTION_MISS",
+                "success": directional_net > 0,
+            })
+        completed.append(path)
+    if settled:
+        _append_outcomes_once(
+            _setup_forward_ledger_path(state_dir), settled, ("setup_id", "horizon_minutes")
+        )
+    for path in completed:
+        path.unlink(missing_ok=True)
+    return settled
+
+
+def _missing_setup_forward_outcomes(record: dict[str, Any], reason: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "schema": SCALP_SETUP_FORWARD_LEDGER_SCHEMA,
+            **{key: record[key] for key in (
+                "setup_id", "universe_version", "spot_symbol", "perpetual_symbol",
+                "families", "direction", "strategy_code", "strategy_label",
+                "policy_version", "regime_state", "bar_close_time_ms", "detected_at_ms",
+                "notification_sent", "notification_sent_at_ms",
+            )},
+            "horizon_minutes": horizon,
+            "entry_price": None,
+            "exit_price": None,
+            "exit_time_ms": record["bar_close_time_ms"] + horizon * 60_000,
+            "gross_bps": None,
+            "directional_net_bps": None,
+            "round_trip_cost_bps": record["round_trip_cost_bps"],
+            "resolution": "DATA_MISSING",
+            "success": None,
+            "missing_reason": reason,
+        }
+        for horizon in record["horizons_minutes"]
+    ]
 
 
 def settle_scalp_bracket_outcomes(
@@ -1328,7 +1753,7 @@ def settle_scalp_bracket_outcomes(
     for path in sorted(directory.glob("*.json")):
         record = _read_scalp_bracket_record(path)
         if record is None:
-            path.unlink(missing_ok=True)
+            _quarantine_pending_record(path)
             continue
         source_ms = int(record["bar_close_time_ms"])
         deadline_ms = source_ms + int(record["horizon_minutes"]) * 60_000
@@ -1341,13 +1766,31 @@ def settle_scalp_bracket_outcomes(
         window = _scalp_bracket_window(
             frames[symbol], source_ms, min(current_ms, deadline_ms)
         )
-        if window.empty:
-            if current_ms - deadline_ms > grace_ms:
-                path.unlink(missing_ok=True)
-            continue
         outcome = _first_touch_bracket(record, window, deadline_reached=current_ms >= deadline_ms)
         if outcome is None:
-            continue
+            if current_ms - deadline_ms <= grace_ms:
+                continue
+            outcome = {
+                **{key: value for key, value in record.items() if key != "schema"},
+                "schema": SCALP_BRACKET_LEDGER_SCHEMA,
+                "entry_price": None,
+                "target_price": None,
+                "stop_price": None,
+                "exit_price": None,
+                "exit_time_ms": None,
+                "resolution": "DATA_MISSING",
+                "success": None,
+                "ambiguous_same_bar": False,
+                "gross_bps": None,
+                "net_bps": None,
+                "mfe_bps": None,
+                "mae_bps": None,
+                "elapsed_minutes": None,
+                "missing_reason": (
+                    "CACHE_UNAVAILABLE_AFTER_GRACE" if window.empty
+                    else "CANDLE_GAP_AFTER_GRACE"
+                ),
+            }
         settled.append(outcome)
         completed_paths.append(path)
     if settled:
@@ -1475,6 +1918,8 @@ def mark_scalp_target_touch_delivered(
     path = _target_pending_dir(state_dir) / f"{setup_id}.json"
     record = _read_scalp_target_record(path)
     if record is None:
+        if path.exists():
+            _quarantine_pending_record(path)
         return
     delivered = {float(value) for value in record.get("delivered_percents", [])}
     delivered.add(percent)
@@ -1487,10 +1932,7 @@ def mark_scalp_target_touch_delivered(
     ):
         path.unlink(missing_ok=True)
         return
-    path.write_text(
-        json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_json(path, record)
 
 
 def format_scalp_target_touch(event: dict[str, Any]) -> str:
@@ -1963,6 +2405,7 @@ def record_scalp_observations(
         payload = {
             "schema": SCALP_PENDING_SCHEMA,
             "signal_id": item.signal_id,
+            "policy_version": SCALP_POLICY_VERSION,
             "universe_version": item.universe_version,
             "spot_symbol": item.spot_symbol,
             "perpetual_symbol": item.perpetual_symbol,
@@ -2022,7 +2465,7 @@ def settle_scalp_observations(
     for path in sorted(directory.glob("*.json")):
         record = _read_pending(path)
         if record is None:
-            path.unlink(missing_ok=True)
+            _quarantine_pending_record(path)
             continue
         horizons = tuple(int(value) for value in record["horizons_minutes"])
         deadline_ms = int(record["bar_close_time_ms"]) + max(horizons) * 60_000
@@ -2037,7 +2480,17 @@ def settle_scalp_observations(
         rows = _time_exit_outcomes(record, frames[symbol])
         if rows is None:
             if current_ms - deadline_ms > grace_ms:
-                path.unlink(missing_ok=True)
+                reason = (
+                    "CACHE_UNAVAILABLE_AFTER_GRACE"
+                    if frames[symbol].empty
+                    else "CANDLE_GAP_OR_SOURCE_MISSING_AFTER_GRACE"
+                )
+                settled.extend(
+                    _missing_scalp_observation_outcomes(
+                        record, reason=reason, settled_at_ms=current_ms
+                    )
+                )
+                completed_paths.append(path)
             continue
         settled.extend(rows)
         completed_paths.append(path)
@@ -2067,6 +2520,21 @@ def load_scalp_ledger(state_dir: Path, *, limit: int = 20_000) -> list[dict[str,
     return rows
 
 
+def load_pending_scalp_observations(
+    state_dir: Path, *, limit: int = 20_000
+) -> list[dict[str, Any]]:
+    """Return validated shadow observations that have not matured yet."""
+    directory = _pending_dir(state_dir)
+    if not directory.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json"))[-limit:]:
+        row = _read_pending(path)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
 def scalp_scorecard(
     rows: Iterable[dict[str, Any]],
     *,
@@ -2078,12 +2546,26 @@ def scalp_scorecard(
         raise ValueError("Scalp karne gun sayisi pozitif olmali")
     current_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
     cutoff = current_ms - days * 86_400_000
-    recent = [row for row in rows if int(row.get("exit_time_ms", 0)) >= cutoff]
+    all_recent = [row for row in rows if _row_time_ms(row, "exit_time_ms") >= cutoff]
+    recent = [
+        row for row in all_recent
+        if row.get("resolution") != "DATA_MISSING"
+        and _finite_value(row.get("net_bps")) is not None
+    ]
+    missing_count = sum(row.get("resolution") == "DATA_MISSING" for row in all_recent)
     keys = sorted({(str(row["family"]), int(row["horizon_minutes"])) for row in recent})
+    bracket_rows = list(bracket_rows)
     recent_brackets = [
         row
         for row in bracket_rows
-        if int(row.get("exit_time_ms", 0)) >= cutoff
+        if _row_time_ms(row, "exit_time_ms") >= cutoff
+        and row.get("resolution") in {"TARGET", "STOP", "TIME_EXIT"}
+        and _finite_value(row.get("net_bps")) is not None
+    ]
+    recent_bracket_missing = [
+        row for row in bracket_rows
+        if row.get("resolution") == "DATA_MISSING"
+        and _row_time_ms(row, "bar_close_time_ms") >= cutoff
     ]
     strategies = sorted(
         {str(row.get("strategy_label", "Bilinmeyen")) for row in recent_brackets}
@@ -2095,6 +2577,7 @@ def scalp_scorecard(
         "days": days,
         "observationCount": len({row.get("signal_id") for row in recent}),
         "outcomeCount": len(recent),
+        "dataMissingCount": missing_count,
         "byFamilyHorizon": {
             f"{family}_{horizon}": _aggregate_scalp(
                 [
@@ -2119,6 +2602,7 @@ def scalp_scorecard(
             )
         },
         "bracketCount": len(recent_brackets),
+        "bracketDataMissingCount": len(recent_bracket_missing),
         "bracketWinRate": (
             sum(row.get("resolution") == "TARGET" for row in recent_brackets)
             / len(recent_brackets)
@@ -2148,6 +2632,28 @@ def scalp_scorecard(
     }
 
 
+def _row_time_ms(row: dict[str, Any], field: str) -> int:
+    try:
+        return int(row.get(field) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _finite_value(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def format_scalp_scorecard(card: dict[str, Any]) -> str:
     lines = [
         f"🧪 SCALP ILERI TEST KARNESI — son {card['days']} gun",
@@ -2155,6 +2661,8 @@ def format_scalp_scorecard(card: dict[str, Any]) -> str:
         "📌 OZET",
         f"Olgun gozlem: {card['observationCount']}",
         f"Sonuc sayisi: {card['outcomeCount']}",
+        f"Veri eksik: {card.get('dataMissingCount', 0)} gozlem, "
+        f"{card.get('bracketDataMissingCount', 0)} TP/SL",
     ]
     if not card["outcomeCount"]:
         lines.append("ℹ️ Henuz 15/30/60 dakika sonucu olusan gozlem yok.")
@@ -2318,7 +2826,10 @@ def _scan_frames(
         observations = [
             item for item in observations if item.bar_close_time_ms == newest_close
         ]
-    observations = _assign_alert_tiers(observations, regime)
+    observations = _assign_alert_tiers(
+        observations, regime,
+        off_enabled=bool(settings and settings.scalp_off_alerts_enabled),
+    )
     return ScalpScanReport(
         universe_version=manifest.version,
         attempted=len(entries),
@@ -2334,7 +2845,7 @@ def _scan_frames(
 
 
 def _assign_alert_tiers(
-    observations: Iterable[ScalpObservation], regime: BullRegime
+    observations: Iterable[ScalpObservation], regime: BullRegime, *, off_enabled: bool = False
 ) -> list[ScalpObservation]:
     items = list(observations)
     families_by_symbol: dict[str, set[str]] = {}
@@ -2343,7 +2854,7 @@ def _assign_alert_tiers(
     return [
         replace(item, alert_tier="KURULUM")
         if (
-            regime.state in {"BULL", "TRANSITION"}
+            (regime.state in {"BULL", "TRANSITION"} or (regime.state == "OFF" and off_enabled))
             and item.execution_eligible
             and len(families_by_symbol[item.perpetual_symbol]) >= 2
         )
@@ -2533,6 +3044,16 @@ def _observation(
             + 2.0 * settings.scalp_slippage_bps_per_side,
         )
         execution_eligible = snapshot.spread_bps <= settings.scalp_maximum_spread_bps
+        execution_eligible = (
+            execution_eligible
+            and snapshot.quote_volume_24h_usdt is not None
+            and snapshot.quote_volume_24h_usdt >= settings.scalp_minimum_quote_volume_24h_usdt
+            and snapshot.funding_rate_bps is not None
+            and abs(snapshot.funding_rate_bps) <= settings.scalp_maximum_abs_funding_bps
+            and context is not None
+            and context.volatility_bps is not None
+            and context.volatility_bps <= settings.scalp_maximum_bar_volatility_bps
+        )
     return ScalpObservation(
         universe_version=universe_version,
         spot_symbol=entry.spot_symbol,
@@ -2560,6 +3081,9 @@ def _observation(
             context.taker_buy_ratio_1h if context is not None else None
         ),
         volatility_bps=(context.volatility_bps if context is not None else None),
+        quote_volume_24h_usdt=(
+            snapshot.quote_volume_24h_usdt if snapshot is not None else None
+        ),
     )
 
 
@@ -2574,6 +3098,46 @@ def _edge_is_new(condition: pd.Series, latest: int, *, cooldown_bars: int = 12) 
     rising = condition & ~condition.shift(1, fill_value=False)
     start = max(0, latest - cooldown_bars + 1)
     return not bool(rising.iloc[start:latest].any())
+
+
+def _missing_scalp_observation_outcomes(
+    record: dict[str, Any], *, reason: str, settled_at_ms: int
+) -> list[dict[str, Any]]:
+    """Keep matured but unscoreable forward tests visible, never as losses."""
+    rows = []
+    for horizon in tuple(int(value) for value in record["horizons_minutes"]):
+        rows.append(
+            {
+                "schema": SCALP_LEDGER_SCHEMA,
+                "signal_id": record["signal_id"],
+                "universe_version": record["universe_version"],
+                "policy_version": record.get("policy_version", "legacy"),
+                "spot_symbol": record["spot_symbol"],
+                "perpetual_symbol": record["perpetual_symbol"],
+                "universe_group": record["universe_group"],
+                "family": record["family"],
+                "score": float(record["score"]),
+                "bar_close_time_ms": int(record["bar_close_time_ms"]),
+                "entry_price": None,
+                "horizon_minutes": horizon,
+                "exit_price": None,
+                "exit_time_ms": int(record["bar_close_time_ms"]) + horizon * 60_000,
+                "gross_bps": None,
+                "net_bps": None,
+                "round_trip_cost_bps": float(record["round_trip_cost_bps"]),
+                "resolution": "DATA_MISSING",
+                "success": None,
+                "missing_reason": reason,
+                "settled_at_ms": int(settled_at_ms),
+                "regime_state": str(record.get("regime_state", "UNKNOWN")),
+                "regime_score": float(record.get("regime_score", 0.0)),
+                "breadth": float(record.get("breadth", 0.0)),
+                "spread_bps": record.get("spread_bps"),
+                "execution_eligible": bool(record.get("execution_eligible", False)),
+                "alert_tier": str(record.get("alert_tier", "RADAR")),
+            }
+        )
+    return rows
 
 
 def _time_exit_outcomes(
@@ -2609,6 +3173,7 @@ def _time_exit_outcomes(
                 "schema": SCALP_LEDGER_SCHEMA,
                 "signal_id": record["signal_id"],
                 "universe_version": record["universe_version"],
+                "policy_version": record.get("policy_version", "legacy"),
                 "spot_symbol": record["spot_symbol"],
                 "perpetual_symbol": record["perpetual_symbol"],
                 "universe_group": record["universe_group"],
@@ -2687,6 +3252,59 @@ def _target_pending_dir(state_dir: Path) -> Path:
 
 def _bracket_pending_dir(state_dir: Path) -> Path:
     return state_dir / "bracket_pending"
+
+
+def _setup_forward_pending_dir(state_dir: Path) -> Path:
+    return state_dir / "setup_forward_pending"
+
+
+def _setup_forward_ledger_path(state_dir: Path) -> Path:
+    return state_dir / "setup_forward_ledger.jsonl"
+
+
+def _read_setup_forward_pending(path: Path) -> dict[str, Any] | None:
+    try:
+        row = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(row, dict) or row.get("schema") != SCALP_SETUP_FORWARD_PENDING_SCHEMA:
+            return None
+        required = (
+            "setup_id", "universe_version", "spot_symbol", "perpetual_symbol",
+            "direction", "strategy_code", "strategy_label", "bar_open_time_ms",
+            "bar_close_time_ms", "source_price", "round_trip_cost_bps", "horizons_minutes",
+        )
+        if any(key not in row for key in required):
+            return None
+        validate_market_symbol(str(row["perpetual_symbol"]))
+        if row["direction"] not in {"YUKARI", "AŞAĞI"}:
+            return None
+        horizons = tuple(int(value) for value in row["horizons_minutes"])
+        if horizons != SCALP_BACKTEST_HORIZONS:
+            return None
+        if float(row["source_price"]) <= 0 or float(row["round_trip_cost_bps"]) < 0:
+            return None
+        return {**row, "horizons_minutes": list(horizons)}
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _quarantine_pending_record(path: Path) -> Path | None:
+    """Preserve unreadable pending state for diagnosis instead of deleting it."""
+    if not path.exists():
+        return None
+    quarantine = path.parent.parent / "quarantine"
+    quarantine.mkdir(parents=True, exist_ok=True)
+    stem = f"{path.parent.name}__{path.name}.invalid"
+    destination = quarantine / stem
+    suffix = 1
+    while destination.exists():
+        destination = quarantine / f"{stem}.{suffix}"
+        suffix += 1
+    try:
+        path.rename(destination)
+    except OSError:
+        # Keep the original in place if the filesystem cannot preserve it.
+        return None
+    return destination
 
 
 def _scalp_setup_id(item: ScalpObservation, universe_version: str) -> str:

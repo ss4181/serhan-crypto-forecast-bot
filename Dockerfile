@@ -16,9 +16,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements.lock ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir -e . \
+RUN python -m pip install --no-cache-dir -r requirements.lock \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation -e . \
     && useradd --system --create-home botuser \
     && mkdir -p data artifacts/models artifacts/reports state/telegram state/outcomes \
     && chown -R botuser:botuser /app

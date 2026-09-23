@@ -27,6 +27,55 @@ from datetime import datetime, timezone
 
 
 class ReviewRegressions(unittest.TestCase):
+    def test_setup_records_keep_policy_and_detection_and_delivery_times(self):
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(
+                observation(family=f),
+                alert_tier="KURULUM",
+                regime_state="BULL",
+                execution_eligible=True,
+            )
+            for f in ("B1", "F3")
+        )
+        report = ScalpScanReport(manifest.version, 1, 1, 0, (), items, START_MS)
+        rows = [
+            dict(
+                family=family,
+                horizon_minutes=horizon,
+                gross_bps=-40,
+                net_bps=-52,
+                perpetual_symbol="BTCUSDT",
+                regime_state="BULL",
+            )
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(
+                record_scalp_target_setups(
+                    root, report, manifest=manifest, top_k=1, ledger=rows
+                ),
+                1,
+            )
+            pending = next((root / "target_pending").glob("*.json"))
+            shadow = json.loads(pending.read_text(encoding="utf-8"))
+            self.assertEqual(shadow["detected_at_ms"], START_MS)
+            self.assertEqual(shadow["policy_version"], "trade3-scalp-regime-gates-v2")
+            self.assertFalse(shadow["notification_sent"])
+            record_scalp_target_setups(
+                root,
+                report,
+                manifest=manifest,
+                top_k=1,
+                ledger=rows,
+                notification_sent=True,
+            )
+            delivered = json.loads(pending.read_text(encoding="utf-8"))
+            self.assertTrue(delivered["notification_sent"])
+            self.assertIsInstance(delivered["notification_sent_at_ms"], int)
+
     def test_targets_and_brackets_survive_failed_append_and_acknowledgement_replay(self):
         manifest = load_trade1_universe()
         items = tuple(replace(observation(family=f), alert_tier="KURULUM", regime_state="BULL") for f in ("B1", "F3"))
@@ -93,6 +142,66 @@ class ReviewRegressions(unittest.TestCase):
                 except json.JSONDecodeError:
                     continue
             self.assertEqual(valid, [{"id": "old"}, {"id": "new"}])
+
+    def test_invalid_pending_records_are_quarantined_not_deleted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, settle in (
+                ("pending", settle_scalp_observations),
+                ("target_pending", settle_scalp_target_outcomes),
+                ("bracket_pending", settle_scalp_bracket_outcomes),
+            ):
+                pending = root / name
+                pending.mkdir()
+                corrupt = pending / "damaged.json"
+                corrupt.write_text('{"schema":', encoding="utf-8")
+                settle(root, root)
+                self.assertFalse(corrupt.exists())
+                preserved = list((root / "quarantine").glob(f"{name}__damaged.json.invalid*"))
+                self.assertEqual(len(preserved), 1)
+                self.assertEqual(preserved[0].read_text(encoding="utf-8"), '{"schema":')
+
+    def test_expired_incomplete_target_and_bracket_data_stay_visible_as_missing(self):
+        manifest = load_trade1_universe()
+        items = tuple(
+            replace(
+                observation(family=f),
+                alert_tier="KURULUM",
+                regime_state="BULL",
+                execution_eligible=True,
+            )
+            for f in ("B1", "F3")
+        )
+        report = ScalpScanReport(manifest.version, 1, 1, 0, (), items, START_MS)
+        rows = [
+            dict(
+                family=family,
+                horizon_minutes=horizon,
+                gross_bps=-40,
+                net_bps=-52,
+                perpetual_symbol="BTCUSDT",
+                regime_state="BULL",
+            )
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        now = datetime.fromtimestamp(
+            (items[0].bar_close_time_ms + 24 * 60 * 60_000 + 3 * 24 * 60 * 60_000) / 1000,
+            timezone.utc,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_scalp_target_setups(root, report, manifest=manifest, top_k=1, ledger=rows)
+            record_scalp_bracket_setups(root, report, manifest=manifest, top_k=1, ledger=rows)
+            with patch("crypto_forecaster.scalping.load_cache", return_value=pd.DataFrame()):
+                target_rows = settle_scalp_target_outcomes(root, root, now=now)
+                bracket_rows = settle_scalp_bracket_outcomes(root, root, now=now)
+            self.assertEqual(len(target_rows), 3)
+            self.assertTrue(all(row["hit"] is None for row in target_rows))
+            self.assertTrue(all(row["missing_reason"] == "CACHE_UNAVAILABLE_AFTER_GRACE" for row in target_rows))
+            self.assertEqual(len(bracket_rows), 1)
+            self.assertEqual(bracket_rows[0]["resolution"], "DATA_MISSING")
+            self.assertEqual(bracket_rows[0]["missing_reason"], "CACHE_UNAVAILABLE_AFTER_GRACE")
 
     @patch.dict(os.environ, DIRECT_CREDENTIALS)
     def test_partial_delivery_retries_only_failed_recipient(self):

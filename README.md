@@ -211,6 +211,7 @@ Python 3.11+ kurulu olmalıdır:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.lock
 python -m pip install -e .
 ```
 
@@ -576,9 +577,24 @@ Onaylı abonelerin özel sohbette kullanabileceği komutlar:
 | Komut | Ne yapar |
 |---|---|
 | `/durum` | Altı modelin o anki durumu — beklemeden anlık cevap |
+| `/coin ALLOUSDT` | Coin'e özel 15 dk / 1 saat / 4 saat / 1 gün yön olasılığı ve ileri-test ölçümü |
 | `/performans [gün]` | Gönderilen sinyallerin gerçek sonucu (varsayılan 30 gün) |
 | `/scalpkarne [gün]` | Scalp ileri-test sonuçları (varsayılan 30 gün) |
 | `/yardim` | Komut listesi |
+
+`/coin` yerine doğrudan `ALLOUSDT` veya `ALLO` yazılabilir. Sorgu yalnız onaylı
+kişinin özel sohbetinde çalışır ve Binance USD-M perpetual çiftini arar. Her
+ufukta o coinin kendi 5 dakikalık mumlarından ayrı, kalibre edilmiş model
+kurulur; BTC/ETH modelleri başka coinlere uygulanmaz. Varsayılan 180 günlük
+veri kullanılır ve model haftada bir yenilenir. Yeterli kesintisiz tarihçe veya
+Binance USD-M çifti yoksa tahmin uydurulmaz, açıklayıcı hata döner.
+
+Her ufuk için yukarı/aşağı olasılığının yanında kronolojik ileri-test yön isabeti,
+örnek sayısı ve %95 aralığı ile maliyet sonrası ortalama simüle bps gösterilir.
+Testin bağımlı mumları olduğundan başarı aralığı örtüşen 5 dakikalık sonuçları
+değil, çakışmayan ufukları kullanır; bir günlük ufukta bu yüzden örnek sayısı
+düşük ve belirsizlik aralığı geniş olabilir. Sonuçlar araştırma amaçlıdır; işlem
+talimatı veya gelecek performans garantisi değildir.
 
 Yalnız sahibin görebildiği ve kullanabildiği üyelik kontrolleri:
 
@@ -801,7 +817,10 @@ cd ~/serhan-crypto-forecast-bot && git pull
 sudo bash deploy/update.sh
 ```
 
-`update.sh` önce testleri çalıştırır; testler geçmezse güncellemeyi durdurur.
+`requirements.lock` servis, CI ve Docker bağımlılıklarını sabitler. `update.sh`
+önce aynı kilitli bağımlılıklarla yeni kodu kurar ve test eder; testler geçmezse
+önceki kod ile onun lock dosyasındaki bağımlılıkları geri yükler. Planlı systemd
+yeniden başlatmasındaki Python 130 çıkış kodu da normal duruş sayılır.
 
 Konteyner tercih ederseniz kökteki `Dockerfile` aynı işi yapar; `data`,
 `artifacts` ve `state` dizinlerini kalıcı volume olarak bağlayın — `state`
@@ -873,6 +892,23 @@ bir sinyal 2 saatte hedefe ulaşsa bile 24 saat tamamlanmadan oranı değiştirm
 %2, %3 ve %5 ile farklı takip süreleri ayrı gruplardır. Eksik sonuç/takip süresi
 olan grupta oran gösterilmez. “Veri eksik” bir kayıp veya başarısızlık değildir.
 Bildirim gönderilen ve sessiz izlenen kayıtlar ayrı seçilebilir.
+5 dakikalık gözlem ileri-testinde de cache/veri boşluğu iki günlük bekleme
+süresinden sonra `DATA_MISSING` olarak kaydedilir; silinmez ve performans
+ortalamasına dahil edilmez.
+
+Başarı grupları ayrıca **yön, piyasa rejimi, strateji ve politika sürümü** bazında ayrılır;
+eşik veya rejim kuralı değişince eski-yeni sürüm sonuçları birleştirilmez.
+Tabloda farklı UTC işlem günlerinin sayısı ve örneklem için %95 Wilson aralığı
+bulunur. Bu aralık, aynı coinlerin veya aynı gün piyasa hareketlerinin birbirine
+bağımlı olmasını düzeltmez; kesin başarı garantisi değildir. Kayıt tablosunda
+İstanbul saatine göre tarih aralığı, yön, rejim, strateji ve politika filtreleri; mum zamanı
+ile taramadan Telegram teslimine kadar geçen süre yer alır. Eski kayıtlarda bu
+zaman damgaları bulunmayabileceğinden gecikme `—` görünebilir.
+
+Takip verisi süresi sonunda hâlâ eksikse sonuç artık atılmaz: **VERİ EKSİK** olarak
+saklanır ve başarı/başarısızlık oranına dahil edilmez. Okunamayan bekleyen JSON
+kayıtları silinmez; `state/scalp/quarantine/` altına taşınıp dashboard'da sayılır.
+Karantina kaydı görülürse sunucu günlükleri ve dosya incelenmelidir.
 
 Özetler gösterilecek tablo satırı sınırından önce hesaplanır; kaynak başına
 20.000 kayıt güvenlik sınırına ulaşılırsa eksik geçmişten oran üretilmez.
@@ -903,6 +939,56 @@ bir kez sayar; iki strateji ailesi aynı coini iki aday yapmaz. Durum dosyası
 `state/scalp/notification_status.json` atomik yazılır, kişisel veri içermez ve
 teslimat defterinin yerine geçmez. Durum yazımı başarısız olursa geçerli sinyal
 gönderimi durdurulmaz. Bu değişiklik strateji veya bildirim eşiklerini gevşetmez.
+
+## Geniş-evren scalp: filtre, risk ve izleme (23 Eylül 2026)
+
+Bu bölüm yalnız Trade3 içindir. Trade1 deposu değiştirilmez; Trade1'den burada
+yalnızca sürümlü coin evreni ve karşılaştırma ölçümü okunur.
+
+- Binance USD-M Futures 5m WebSocket kapanmış mum olayı taramayı uyandırır;
+  REST taraması yedek olarak kalır. Kapanış, tarama ve Telegram teslim zamanları
+  günlükte/panelde ayrı tutulur. Sunucu döngüsünün kalan piyasa işleri gecikme
+  ekleyebilir; ölçülen kapanış→tarama süresi esas alınmalıdır.
+- Telegram uygunluğu yalnız skora dayanmaz. BULL/TRANSITION için ayrı kapılar
+  vardır; OFF/UNKNOWN sessizdir. OFF varsayılan kapalıdır; açılırsa ayrı, daha
+  sıkı eşik ve daha büyük kalibrasyon örneği gerekir.
+- Yeni aileler `CRYPTO_SCALP_LIVE_FAMILIES` listesine eklenene kadar shadow-only
+  kalır. Shadow gözlemleri ileri-test ve dashboard ölçümüne girer; mesaj filtresi
+  dışında tutulmaları ölçüm kayıtlarını silmez.
+- Yürütülebilirlik kapısı spread yanında 24s USDT kotasyon hacmini, funding
+  oranının mutlak değerini ve son mumların tipik volatilitesini de kontrol eder.
+  Varsayılanlar sırasıyla $5M minimum hacim, 10 bps maksimum funding, 250 bps
+  maksimum tipik 5m aralık ve 8 bps maksimum spread'dir. Veri eksikse KURULUM
+  üretilmez; REST görünürlük/izleme için kullanılmaya devam eder.
+- Aynı coin/yön 60 dakika içinde tekrar gönderilmez; skor en az 0.5 artarsa
+  cooldown istisnası vardır. Cooldown yalnız başarılı Telegram tesliminden sonra
+  kaydedilir.
+- Dashboard; %2/%3/%5 dokunuşlarını, ilk TP/SL sonucunu ve 15/30/60 dakika sabit
+  ileri-testlerini ayrı raporlar. Son 10/50/100 oranları ve Wilson %95 aralıkları
+  örnek sayısıyla gösterilir; ayrıca coin/aile/yön/rejim/strateji/politika
+  ayrımları vardır. 15/30/60 metriği maliyet sonrası net pozitif kapanış oranıdır;
+  tek başına yön tahmini ya da %2 hedef başarısı değildir. Aynı coin ve gün
+  sinyalleri bağımlı olabilir; Wilson aralığı bu kümelenmeyi düzeltmez.
+- Telegram kartındaki hedef/stop, risk/getiri oranı ve maliyet yalnız simüle
+  araştırma ölçüsüdür. Eşzamanlı açık araştırma kurulumu varsayılan 5 ile
+  sınırlıdır. Kill switch `CRYPTO_SCALP_ALERT_KILL_SWITCH=true` ile araştırma
+  mesajlarını susturur. Günlük simülasyon kayıp limiti varsayılan kapalıdır;
+  bps toplamı hesap getirisi veya gerçek portföy kaybı değildir. Bot emir
+  göndermez; bunlar gerçek hesap riskini yönetmez.
+- Sağlık gözetimi sahip özel sohbetine Binance kapsama/WebSocket/cache, Telegram
+  teslim, 30 dakika uygun aday olmaması, disk ve yerel/GitHub Pages dashboard
+  verisi için alarm gönderir. Aynı sorun 6 saat dolmadan tekrar bildirilmez.
+- Bot varsayılan olarak sahibi ve onaylı üyeleri ayrı özel mesajlarla çalışır;
+  üyeler birbirinin kimliğini görmez. Tokenı düzenli aralıkla döndürmek için
+  BotFather'da tokenı iptal edip yenisini sunucunun `/etc/crypto-forecaster.env`
+  dosyasına ve gerekiyorsa GitHub Actions Secret'ına elle yazın; tokenı sohbete,
+  issue'ya veya commit'e koymayın. Bu işlem kodla otomatikleştirilemez.
+
+Trade3'te bu yeni davranışların etkinleşmesi için değişikliklerin ayrıca `main`
+dalına gönderilip sunucuda `git pull` ve `sudo bash deploy/update.sh` ile
+dağıtılması gerekir. Dağıtımdan sonra Telegram **Durum** düğmesi ile günlükteki
+`Scalp gecikme`, `Scalp bildirim filtresi` ve `Operasyon alarmı` satırlarını
+kontrol edin. Sunucuya bu çalışma kapsamında bağlanılmadı ve dağıtım yapılmadı.
 
 Model özeti (`GÖZLEM`) işlem bildirimi değildir ve %2/%3/%5 hedef takipçisi
 oluşturmaz. Düzenli hedef dokunuşu yalnızca gerçekten gönderilmiş `ISLEM`

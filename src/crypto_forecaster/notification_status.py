@@ -15,13 +15,29 @@ from .config import Settings, local_text
 
 SCHEMA = "scalp-notification-status-v1"
 REASONS = {
+    "regime_silent": "rejim kapalı/ölçülemiyor",
+    "transition_disabled": "geçiş bildirimleri kapalı",
+    "off_disabled": "kapalı rejim bildirimleri kapalı",
     "no_setup": "çoklu teyit yok",
+    "shadow_only_family": "aile shadow modunda",
+    "market_data_missing": "yürütülebilirlik verisi eksik",
+    "spread": "spread yüksek",
+    "liquidity": "24 saatlik likidite düşük",
+    "funding": "funding aşırı/eksik",
+    "volatility": "mum oynaklığı fazla",
+    "cache": "cache eskimiş",
+    "dashboard": "dashboard dosyası eski/eksik",
+    "public_dashboard": "GitHub Pages dashboard eski/erişilemiyor",
     "direction_unclear": "yön net değil",
     "calibration_missing": "geçmiş ölçüm eksik",
     "probability_low": "net-pozitif geçmiş oranı düşük",
     "expected_net_low": "net beklenti düşük",
     "score_low": "ham skor düşük",
     "quality_low": "aile içi kalite düşük",
+    "kill_switch": "manuel kill-switch açık",
+    "max_concurrent_research_alerts": "eşzamanlı araştırma sınırı dolu",
+    "daily_research_loss_limit": "günlük simülasyon limiti doldu",
+    "cooldown": "aynı yön cooldown",
 }
 DELIVERIES = {
     "NO_CANDIDATE": "uygun aday yok; gönderim denenmedi",
@@ -119,8 +135,8 @@ def format_notification_status(settings: Settings, *, now: datetime | None = Non
         if timestamp <= 0 or age_ms < -60_000:
             raise ValueError("clock")
         stale = age_ms > 15 * 60_000
-        total = sum(counts[key] for key in (*REASONS, "eligible"))
         rejected = [f"{counts[key]} {label}" for key, label in REASONS.items() if counts[key]]
+        checked = counts["eligible"] + sum(counts[key] for key in REASONS)
         delivery = DELIVERIES.get(row.get("delivery_status"), "teslimat kaydı bilinmiyor")
         coverage = f"{row['fresh']}/{row['attempted']} taze piyasa"
         if row["attempted"] <= 0 or row["fresh"] / row["attempted"] < settings.scalp_minimum_coverage:
@@ -152,7 +168,7 @@ def format_notification_status(settings: Settings, *, now: datetime | None = Non
             f"Son tarama: {stamp}",
             f"Kaynak: Binance USD-M PERP • Rejim: {regime}",
             f"{coverage} • Radar {radar} • Kurulum {setups}",
-            f"Bu taramada: {counts['eligible']}/{total} coin/mum bildirime uygun",
+            f"Bu taramada: {counts['eligible']}/{checked} coin/mum bildirime uygun",
             "İlk elenme nedeni: " + ("; ".join(rejected) if rejected else "yok"),
             "Son taramada: " + delivery,
             "Güncel uygun adaylar: " + ("yok" if not candidate_lines else "") ,
@@ -167,6 +183,23 @@ def format_notification_status(settings: Settings, *, now: datetime | None = Non
              f"yön ≥%{settings.scalp_transition_minimum_direction_probability * 100:g}, "
              f"net ≥{settings.scalp_transition_minimum_expected_net_bps:g} bps, "
              f"n ≥{settings.scalp_transition_minimum_calibration_samples}."),
+            (f"Kapalı rejim: {'açık' if settings.scalp_off_alerts_enabled else 'sessiz'}; "
+             f"skor ≥{settings.scalp_off_minimum_alert_score:g}, "
+             f"yön ≥%{settings.scalp_off_minimum_direction_probability * 100:g}, "
+             f"net ≥{settings.scalp_off_minimum_expected_net_bps:g} bps, "
+             f"n ≥{settings.scalp_off_minimum_calibration_samples}."),
+            (f"Piyasa kapısı: spread ≤{settings.scalp_maximum_spread_bps:g} bps, "
+             f"hacim ≥${settings.scalp_minimum_quote_volume_24h_usdt / 1_000_000:g}M/24s, "
+             f"|funding| ≤{settings.scalp_maximum_abs_funding_bps:g} bps, "
+             f"mum aralığı ≤{settings.scalp_maximum_bar_volatility_bps:g} bps."),
+            (f"Tekrar: {settings.scalp_same_direction_cooldown_minutes} dk cooldown, "
+             f"yenileme artışı ≥{settings.scalp_realert_score_delta:g} skor; "
+             f"açık simülasyon ≤{settings.scalp_maximum_concurrent_research_alerts}."),
+            (f"Güvenlik kapısı: kill {'AÇIK' if settings.scalp_alert_kill_switch else 'kapalı'}, "
+             f"günlük sim kayıp limiti "
+             f"{settings.scalp_daily_research_loss_limit_bps:g} bps "
+             f"({'kapalı' if settings.scalp_daily_research_loss_limit_bps == 0 else 'aktif'}); "
+             f"canlı aileler: {','.join(settings.scalp_live_families) or 'yok'}."),
         ])
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError):
         return "📡 Scalp bildirim durum kaydı henüz yok veya okunamıyor; servis günlüğünü kontrol edin."

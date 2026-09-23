@@ -84,6 +84,7 @@ def run(
     updates: list[dict],
     members: dict[int, str] | None = None,
     scalp_performance_text=None,
+    symbol_forecast_text=None,
 ):
     settings = Settings(
         telegram_state_dir=directory, outcome_state_dir=directory / "outcomes"
@@ -96,6 +97,7 @@ def run(
         status_text=lambda: "DURUM METNI",
         performance_text=lambda days: f"KARNE {days} GUN",
         scalp_performance_text=scalp_performance_text,
+        symbol_forecast_text=symbol_forecast_text,
         notifier=notifier,
         reply_markup=telegram_menu_keyboard(),
     )
@@ -269,6 +271,42 @@ class CommandTests(unittest.TestCase):
             outcome, notifier, _ = run(Path(directory), [update(1, OWNER, "gunaydin")])
         self.assertEqual(notifier.sent, [])
         self.assertEqual(outcome.answered, 0)
+
+    def test_coin_query_accepts_plain_symbol_and_coin_command_only_for_authorized_users(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            answers = []
+            outcome, notifier, _ = run(
+                Path(directory),
+                [update(1, MEMBER, "ALLOUSDT"), update(2, MEMBER, "/coin SOL")],
+                members={MEMBER: "Ortak"},
+                symbol_forecast_text=lambda symbol: answers.append(symbol) or f"FORECAST {symbol}",
+            )
+        self.assertEqual(outcome.answered, 2)
+        self.assertEqual(answers, ["ALLOUSDT", "SOLUSDT"])
+        self.assertEqual([message for _, message in notifier.sent], ["FORECAST ALLOUSDT", "FORECAST SOLUSDT"])
+
+    def test_unauthorized_coin_query_never_runs_forecast(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+            outcome, notifier, _ = run(
+                Path(directory),
+                [update(1, STRANGER, "ALLOUSDT")],
+                symbol_forecast_text=lambda symbol: calls.append(symbol) or symbol,
+            )
+        self.assertEqual(outcome.refused, 1)
+        self.assertEqual(calls, [])
+        self.assertEqual(notifier.sent, [])
+
+    def test_coin_command_validates_missing_and_bad_symbols(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            outcome, notifier, _ = run(
+                Path(directory),
+                [update(1, OWNER, "/coin"), update(2, OWNER, "/coin ../../bad")],
+                symbol_forecast_text=lambda symbol: f"FORECAST {symbol}",
+            )
+        self.assertEqual(outcome.answered, 2)
+        self.assertIn("Kullanım", notifier.sent[0][1])
+        self.assertIn("Geçersiz sembol", notifier.sent[1][1])
 
     def test_unknown_command_is_refused_politely(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

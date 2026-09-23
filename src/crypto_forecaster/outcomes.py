@@ -23,6 +23,7 @@ import pandas as pd
 
 from .config import INTERVAL_LABELS, cache_path
 from .data import load_cache
+from .persistence import atomic_write_json
 
 
 PENDING_SCHEMA = "signal-outcome-pending-v2"
@@ -84,20 +85,14 @@ def record_delivery(
         "horizon_ms": int(horizon_ms),
     }
     if not path.exists():
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
+        atomic_write_json(path, payload)
     elif track_target_touches and str(payload.get("tier", "")) == "ISLEM":
         # Upgrade an observation record if a later timing pass sends the real
         # operation notification for the same candle.
         existing = _read_record(path)
         if existing is not None and str(existing.get("tier", "")) != "ISLEM":
             existing.update(payload)
-            path.write_text(
-                json.dumps(existing, ensure_ascii=False, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+            atomic_write_json(path, existing)
     # Observation digests are not trades. Only an actual ISLEM delivery may
     # create the separate +/−2%, +/−3% and +/−5% target watcher.
     if track_target_touches and str(payload.get("tier", "")) == "ISLEM":
@@ -183,10 +178,7 @@ def mark_target_touch_delivered(
     if all(percent in delivered for percent in TARGET_TOUCH_PERCENTS):
         path.unlink(missing_ok=True)
         return
-    path.write_text(
-        json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_json(path, record)
 
 
 def settle_pending(

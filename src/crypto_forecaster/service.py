@@ -26,6 +26,7 @@ from .commands import (
     load_pending_members,
     poll_and_answer,
 )
+from .coin_query import forecast_coin, format_coin_forecast
 from .data import (
     BinanceKlineStream,
     BinanceMarketDataClient,
@@ -35,8 +36,10 @@ from .data import (
 )
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
+from .dashboard import write_dashboard_payload
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
 from .notification_status import format_notification_status, write_notification_status
+from .ops_monitor import mark_health_alert_sent, scalp_health_incidents
 from .openinterest import OpenInterestError, update_open_interest
 from .outcomes import (
     format_scorecard,
@@ -56,16 +59,20 @@ from .scalping import (
     deliver_scalp_target_touches,
     deliver_scalp_observations,
     filter_scalp_notification_report,
+    apply_scalp_notification_safety_gates,
     format_scalp_scorecard,
     load_scalp_bracket_ledger,
     load_scalp_ledger,
     record_scalp_bracket_setups,
     record_scalp_observations,
+    record_scalp_setup_forward_setups,
+    record_successful_scalp_delivery,
     record_scalp_target_setups,
     refresh_and_scan_scalp_universe,
     scalp_scorecard,
     scalp_setup_assessment,
     settle_scalp_observations,
+    settle_scalp_setup_forward,
     settle_scalp_bracket_outcomes,
     settle_scalp_target_outcomes,
 )
@@ -627,9 +634,22 @@ def answer_commands(
             )
         ),
         explanation_text=format_explanations,
+        symbol_forecast_text=lambda symbol: _coin_query_reply(settings, symbol),
         notifier=notifier,
         now=current,
     )
+
+
+def _coin_query_reply(settings: Settings, symbol: str) -> str:
+    try:
+        return format_coin_forecast(forecast_coin(settings, symbol))
+    except ValueError as error:
+        return f"⚠️ {error}"
+    except (MarketDataError, OSError, RuntimeError, TypeError) as error:
+        return (
+            f"⚠️ {symbol} tahmini şu an oluşturulamadı ({type(error).__name__}). "
+            "Biraz sonra tekrar deneyin."
+        )
 
 
 def _scalp_status_candidates(
@@ -708,6 +728,7 @@ def serve_forever(
             progress(f"Telegram komut menusu hazirlanamadi: {error}")
     consecutive_failures = 0
     cache = PredictionCache()
+    last_predictions: list[Prediction] = []
     scalp_manifest: UniverseManifest | None = None
     scalp_entries = ()
     kline_stream: BinanceKlineStream | None = None
@@ -736,6 +757,15 @@ def serve_forever(
         try:
             now = datetime.now(timezone.utc)
             now_ms = int(now.timestamp() * 1000)
+            # Answer queued Telegram commands before exchange refresh, scalp
+            # fan-out, or walk-forward research can occupy this loop.
+            if is_primary():
+                answers = answer_commands(settings, last_predictions, now=now)
+                if answers.received or answers.failed:
+                    line = f"Komut: {answers.received} guncelleme, {answers.answered} yanit, {answers.refused} yetkisiz"
+                    if answers.failed:
+                        line += f", {answers.failed} HATA ({answers.detail})"
+                    progress(line)
             for symbol in SYMBOLS:
                 for interval in INTERVALS:
                     due = next_close_ms.get((symbol, interval))
@@ -771,6 +801,8 @@ def serve_forever(
             scalp_now_ms = int(scalp_now.timestamp() * 1000)
             if scalp_manifest is not None and scalp_now_ms >= next_scalp_scan_ms:
                 try:
+                    scalp_delivery_status = "NO_CANDIDATE"
+                    notification_counts: dict[str, int] = {}
                     scalp_scan_started = time.monotonic()
                     scalp_report = refresh_and_scan_scalp_universe(
                         settings,
@@ -802,19 +834,29 @@ def serve_forever(
                     try:
                         regime_delivery = deliver_regime_change(settings)
                         if regime_delivery is not None:
+                            if regime_delivery.status not in {"SENT", "DEDUPLICATED"}:
+                                scalp_delivery_status = regime_delivery.status
                             progress(f"Scalp rejim Telegram: {regime_delivery.status}{_detail_suffix(regime_delivery)}")
                     except (OSError, RuntimeError, TypeError, ValueError) as error:
+                        scalp_delivery_status = "ERROR"
                         progress(f"Scalp rejim bildirimi hatasi: {error}")
                     scalp_settled = settle_scalp_observations(
                         settings.scalp_state_dir,
                         settings.scalp_data_dir,
                         now=scalp_now,
                     )
+                    setup_forward_settled = settle_scalp_setup_forward(
+                        settings.scalp_state_dir, settings.scalp_data_dir, now=scalp_now
+                    )
+                    if setup_forward_settled:
+                        progress(f"Scalp 15/30/60 yon testi: {len(setup_forward_settled)} sonuc")
                     if is_primary():
                         scalp_target_deliveries = deliver_scalp_target_touches(
                             settings, now=scalp_now
                         )
                         for event, delivery in scalp_target_deliveries:
+                            if delivery.status not in {"SENT", "DEDUPLICATED"}:
+                                scalp_delivery_status = delivery.status
                             progress(
                                 f"Scalp {event['spot_symbol']} hedef "
                                 f"{event['direction']} %{float(event['target_percent']):g}: "
@@ -824,6 +866,13 @@ def serve_forever(
                         settings.scalp_state_dir,
                         scalp_report.observations,
                         manifest=scalp_manifest,
+                    )
+                    record_scalp_setup_forward_setups(
+                        settings.scalp_state_dir,
+                        scalp_report,
+                        manifest=scalp_manifest,
+                        top_k=settings.scalp_top_k,
+                        ledger=load_scalp_ledger(settings.scalp_state_dir),
                     )
                     record_scalp_target_setups(
                         settings.scalp_state_dir,
@@ -854,7 +903,6 @@ def serve_forever(
                         f"{len(scalp_settled)} sonuc"
                     )
                     if is_primary():
-                        notification_counts: dict[str, int] = {}
                         scalp_ledger = load_scalp_ledger(settings.scalp_state_dir)
                         scalp_notification_report = filter_scalp_notification_report(
                             scalp_report,
@@ -870,8 +918,25 @@ def serve_forever(
                             transition_minimum_direction_probability=settings.scalp_transition_minimum_direction_probability,
                             transition_minimum_expected_net_bps=settings.scalp_transition_minimum_expected_net_bps,
                             transition_minimum_calibration_samples=settings.scalp_transition_minimum_calibration_samples,
+                            off_alerts_enabled=settings.scalp_off_alerts_enabled,
+                            off_minimum_score=settings.scalp_off_minimum_alert_score,
+                            off_minimum_quality_percentile=settings.scalp_off_minimum_quality_percentile,
+                            off_minimum_direction_probability=settings.scalp_off_minimum_direction_probability,
+                            off_minimum_expected_net_bps=settings.scalp_off_minimum_expected_net_bps,
+                            off_minimum_calibration_samples=settings.scalp_off_minimum_calibration_samples,
+                            maximum_spread_bps=settings.scalp_maximum_spread_bps,
+                            minimum_quote_volume_24h_usdt=settings.scalp_minimum_quote_volume_24h_usdt,
+                            maximum_abs_funding_bps=settings.scalp_maximum_abs_funding_bps,
+                            maximum_bar_volatility_bps=settings.scalp_maximum_bar_volatility_bps,
+                            live_families=settings.scalp_live_families,
                             diagnostics=notification_counts,
                         )
+                        scalp_notification_report, safety_reason = apply_scalp_notification_safety_gates(
+                            scalp_notification_report, settings,
+                            now_ms=int(scalp_now.timestamp() * 1000),
+                        )
+                        if safety_reason:
+                            notification_counts[safety_reason] = notification_counts.get(safety_reason, 0) + 1
                         status_candidates = _scalp_status_candidates(
                             scalp_notification_report, scalp_ledger
                         )
@@ -880,8 +945,8 @@ def serve_forever(
                             if key != "eligible"
                         ) or "elenen yok"
                         progress(
-                            f"Scalp bildirim filtresi: {notification_counts.get('eligible', 0)}/"
-                            f"{sum(notification_counts.values())} uygun; {reason_text}"
+                            f"Scalp bildirim filtresi: {notification_counts.get('eligible', 0)} uygun coin/mum; "
+                            f"elenme nedenleri: {reason_text}"
                         )
                         initial_status = "PENDING" if scalp_notification_report.observations else "NO_CANDIDATE"
                         _save_notification_check(
@@ -905,6 +970,9 @@ def serve_forever(
                             scalp_delivery.status if scalp_delivery is not None else initial_status,
                             progress, status_candidates,
                         )
+                        scalp_delivery_status = (
+                            scalp_delivery.status if scalp_delivery is not None else initial_status
+                        )
                         if (
                             scalp_delivery is not None
                             and scalp_delivery.status != "DEDUPLICATED"
@@ -917,6 +985,11 @@ def serve_forever(
                             "DEDUPLICATED",
                             "PARTIAL",
                         }:
+                            if scalp_delivery.status in {"SENT", "PARTIAL"}:
+                                record_successful_scalp_delivery(
+                                    settings, scalp_notification_report,
+                                    sent_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
+                                )
                             tracked = record_scalp_target_setups(
                                 settings.scalp_state_dir,
                                 scalp_notification_report,
@@ -934,6 +1007,14 @@ def serve_forever(
                                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                                 notification_sent=True,
                                 horizon_minutes=settings.scalp_bracket_horizon_minutes,
+                            )
+                            record_scalp_setup_forward_setups(
+                                settings.scalp_state_dir,
+                                scalp_notification_report,
+                                manifest=scalp_manifest,
+                                top_k=settings.scalp_top_k,
+                                ledger=load_scalp_ledger(settings.scalp_state_dir),
+                                notification_sent=True,
                             )
                             if tracked:
                                 progress(f"Scalp hedef izleme: {tracked} yeni kurulum")
@@ -957,11 +1038,42 @@ def serve_forever(
                         )
                     if is_primary():
                         for event, delivery in deliver_scalp_bracket_wins(settings):
+                            if delivery.status not in {"SENT", "DEDUPLICATED"}:
+                                scalp_delivery_status = delivery.status
                             if delivery.status != "DEDUPLICATED":
                                 progress(
                                     f"Scalp {event['spot_symbol']} dinamik hedef: "
                                     f"{delivery.status}{_detail_suffix(delivery)}"
                                 )
+                    try:
+                        write_dashboard_payload(
+                            settings, settings.report_dir / "scalp-data.json", now=scalp_now
+                        )
+                        if is_primary():
+                            incidents = scalp_health_incidents(
+                                settings,
+                                evaluated_at_ms=scalp_report.evaluated_at_ms,
+                                fresh=scalp_report.fresh,
+                                attempted=scalp_report.attempted,
+                                eligible=notification_counts.get("eligible", 0),
+                                websocket_connected=bool(kline_stream and kline_stream.connected),
+                                delivery_status=scalp_delivery_status,
+                                dashboard_url=settings.scalp_public_dashboard_url,
+                            )
+                            if incidents:
+                                notifier = TelegramNotifier(state_dir=settings.telegram_state_dir)
+                                for incident in incidents:
+                                    try:
+                                        notifier.send_owner_alert("🚨 TRADE3 • Operasyon\n" + incident["message"])
+                                        mark_health_alert_sent(
+                                            settings, incident["code"],
+                                            sent_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
+                                        )
+                                        progress(f"Operasyon alarmı: {incident['code']} iletildi")
+                                    except (OSError, RuntimeError, TypeError, ValueError) as error:
+                                        progress(f"Operasyon alarmı gönderilemedi: {error}")
+                    except (OSError, RuntimeError, TypeError, ValueError) as error:
+                        progress(f"Scalp dashboard/izleme hatası: {error}")
                 except (OSError, RuntimeError, TypeError, ValueError) as error:
                     # Experimental observation must never take the verified
                     # BTC/ETH service down or trigger its exponential backoff.
@@ -976,6 +1088,7 @@ def serve_forever(
                 research_all(settings, progress=progress)
                 cache = PredictionCache()  # fresh models invalidate every answer
             predictions = evaluate_all(settings, now=now, cache=cache)
+            last_predictions = predictions
             for prediction in predictions:
                 next_close_ms[(prediction.symbol, prediction.interval)] = (
                     prediction.target_close_time_ms
@@ -990,12 +1103,6 @@ def serve_forever(
                 digest = deliver_observation_digest(settings, predictions, now=now)
                 if digest is not None and digest.status != "DEDUPLICATED":
                     progress(f"Gozlem raporu: {digest.status}{_detail_suffix(digest)}")
-                answers = answer_commands(settings, predictions, now=now)
-                if answers.received or answers.failed:
-                    line = f"Komut: {answers.received} guncelleme, {answers.answered} yanit, {answers.refused} yetkisiz"
-                    if answers.failed:
-                        line += f", {answers.failed} HATA ({answers.detail})"
-                    progress(line)
             snapshot = dashboard_snapshot(predictions)
             write_snapshot(settings.report_dir, snapshot)
             if hub_configured():
@@ -1013,7 +1120,17 @@ def serve_forever(
             )
             time.sleep(backoff)
             continue
-        time.sleep(poll_seconds)
+        if kline_stream is not None and scalp_manifest is not None:
+            # Do not add a full polling interval after a closed 5m event. The
+            # regular market/model work remains on its existing cadence.
+            until_scalp = max(
+                0.0,
+                (next_scalp_scan_ms - int(datetime.now(timezone.utc).timestamp() * 1000))
+                / 1000.0,
+            )
+            kline_stream.wait_for_closed_update(min(float(poll_seconds), until_scalp))
+        else:
+            time.sleep(poll_seconds)
 
 
 def _next_scalp_scan_ms(current_ms: int, *, close_delay_seconds: int = 20) -> int:

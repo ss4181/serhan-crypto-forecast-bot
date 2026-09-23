@@ -60,6 +60,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: requirements.lock
 
       - name: Select hourly candle cache
         id: candle-key
@@ -90,7 +91,7 @@ jobs:
             crypto-signals-${{ runner.os }}-
 
       - name: Install bot
-        run: python -m pip install -e .
+        run: python -m pip install -r requirements.lock && python -m pip install --no-deps --no-build-isolation -e .
 
       - name: Send Telegram connection test
         if: ${{ inputs.telegram_test == true }}

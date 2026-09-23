@@ -179,6 +179,7 @@ class DataTests(unittest.TestCase):
                         "lastFundingRate": "0.0001",
                     }
                 ],
+                [{"symbol": "BTCUSDT", "quoteVolume": "25000000"}],
             )
         )
 
@@ -192,6 +193,7 @@ class DataTests(unittest.TestCase):
         self.assertAlmostEqual(result.spread_bps, 10.0)
         self.assertAlmostEqual(result.funding_rate_bps or 0.0, 1.0)
         self.assertEqual(result.mark_price, 100.01)
+        self.assertEqual(result.quote_volume_24h_usdt, 25_000_000.0)
 
     def test_halt_in_the_series_keeps_the_newest_contiguous_run(self) -> None:
         # Binance maintenance leaves a hole.  Rejecting the file outright wedged

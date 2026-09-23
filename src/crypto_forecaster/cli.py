@@ -695,6 +695,17 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
         transition_minimum_direction_probability=settings.scalp_transition_minimum_direction_probability,
         transition_minimum_expected_net_bps=settings.scalp_transition_minimum_expected_net_bps,
         transition_minimum_calibration_samples=settings.scalp_transition_minimum_calibration_samples,
+        off_alerts_enabled=settings.scalp_off_alerts_enabled,
+        off_minimum_score=settings.scalp_off_minimum_alert_score,
+        off_minimum_quality_percentile=settings.scalp_off_minimum_quality_percentile,
+        off_minimum_direction_probability=settings.scalp_off_minimum_direction_probability,
+        off_minimum_expected_net_bps=settings.scalp_off_minimum_expected_net_bps,
+        off_minimum_calibration_samples=settings.scalp_off_minimum_calibration_samples,
+        maximum_spread_bps=settings.scalp_maximum_spread_bps,
+        minimum_quote_volume_24h_usdt=settings.scalp_minimum_quote_volume_24h_usdt,
+        maximum_abs_funding_bps=settings.scalp_maximum_abs_funding_bps,
+        maximum_bar_volatility_bps=settings.scalp_maximum_bar_volatility_bps,
+        live_families=settings.scalp_live_families,
     )
     delivery = deliver_scalp_observations(
         settings, notification_report, manifest=manifest

@@ -52,24 +52,36 @@
     <div class="card">%5 dokunuş<span class="value" id="target-5">-</span></div>
   </section>
   <p class="measurement-note muted">Yukarıdaki dokunuşlar ufku henüz dolmamış sinyalleri de içerir; başarı oranı değildir.</p>
+  <p class="measurement-note muted" id="quarantine-note" hidden></p>
   <label>İncelenen sinyaller
     <select aria-label="Bildirim kapsamı" id="audience"><option value="notified">Bildirim gönderilen</option><option value="muted">Sessiz izlenen</option><option value="all">Hepsi</option></select>
   </label>
   <h2>1. %2 / %3 / %5 dokunuşları</h2>
   <p class="measurement-note muted">Yalnız takip süresi dolan sinyaller oranlara girer. Farklı takip süreleri birleştirilmez. Dokunuş, stop sonrası da olabilir.</p>
-  <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Hedef</th><th>Takip süresi</th><th>Dokundu / Sonuç</th><th>Dokunuş oranı</th><th>Ufku açık</th><th>Veri eksik</th></tr></thead><tbody id="touch-cohorts"></tbody></table></div>
+  <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Hedef</th><th>Takip süresi</th><th>Coin / aile</th><th>Dokundu / Sonuç</th><th>Dokunuş oranı</th><th>Son 10 / 50 / 100 · oran (%95 aralık)</th><th>Ufku açık</th><th>Veri eksik</th><th>Yön / rejim / strateji / politika</th><th>Farklı UTC gün</th><th>Tüm örnek %95 aralık</th></tr></thead><tbody id="touch-cohorts"></tbody></table></div>
   <h2>2. Hedef / stop simülasyonu</h2>
   <p class="measurement-note muted">Stop öncesi hedef ve maliyet sonrası pozitif sonuç farklı ölçülerdir. Net değerler işlem başına simülasyondur; hesap getirisi değildir.</p>
-  <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Takip süresi</th><th>Sonuç</th><th>Hedef / Stop / Süre</th><th>Hedef önce</th><th>Net pozitif</th><th>Ort. net</th><th>Ufku açık / Eksik</th></tr></thead><tbody id="bracket-cohorts"></tbody></table></div>
+  <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Takip süresi</th><th>Coin / aile</th><th>Sonuç</th><th>Hedef / Stop / Süre</th><th>Hedef önce</th><th>Net pozitif</th><th>Ort. net</th><th>Son 10 / 50 / 100 · hedef (%95 aralık)</th><th>Ufku açık / Eksik</th><th>Yön / rejim / strateji / politika</th><th>Farklı UTC gün</th><th>Tüm örnek %95 aralık</th></tr></thead><tbody id="bracket-cohorts"></tbody></table></div>
+  <h2>3. 15 / 30 / 60 dakika ileri-test</h2>
+  <p class="measurement-note muted">Her çoklu-teyit kurulumunda, o anda geçmiş ileri-test verisiyle seçilen YUKARI/AŞAĞI yönü kaydedilir; sonraki 15/30/60 dakikada bu yönde maliyet sonrası net hareket pozitifse “yön doğru” sayılır. Bu ölçüm %2 hedef dokunuşu değildir. Yalnız yönü kurulurken belirlenmiş kayıtlar puanlanır; veri eksikleri başarı/başarısızlık sayılmaz.</p>
+  <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Ufuk</th><th>Coin / aile</th><th>Net pozitif / sonuç</th><th>Net pozitif oran</th><th>Son 10 / 50 / 100 (%95 aralık)</th><th>Bekleyen / veri eksik</th><th>Rejim / politika</th><th>UTC gün</th><th>Tüm örnek %95 aralık</th></tr></thead><tbody id="forward-cohorts"></tbody></table></div>
   <p class="measurement-note muted" id="measurement-note" aria-live="polite">Ölçümler yükleniyor…</p>
   <h2>Sinyal kayıtları</h2>
   <div class="controls">
     <input aria-label="Coin ara" id="search" placeholder="Coin ara (BTCUSDT)">
-    <select aria-label="Kayıt türü" id="kind"><option value="">Tümü</option><option value="regular">Normal model</option><option value="scalp-target">%2/%3/%5 kilometre taşı</option><option value="scalp-bracket">Dinamik TP/SL</option></select>
-    <select aria-label="Sonuç" id="status"><option value="">Tüm durumlar</option><option value="TARGET">Hedef önce</option><option value="STOP">Stop önce</option><option value="TIME_EXIT">Süre sonu</option><option value="TP/SL BEKLEMEDE">TP/SL beklemede</option><option value="HEDEF ULAŞTI">%2/%3/%5 ulaştı</option><option value="HEDEF ULAŞMADI">%2/%3/%5 ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option><option value="VERİ EKSİK">Veri eksik</option></select>
+    <select aria-label="Aile" id="family"><option value="">Tüm aileler</option></select>
+    <label>En az başarı % <input type="number" aria-label="Minimum başarı yüzdesi" id="minimum-success" min="0" max="100" step="1" placeholder="Hepsi"></label>
+    <label>Başlangıç (İstanbul) <input type="date" aria-label="Başlangıç tarihi" id="date-from"></label>
+    <label>Bitiş (İstanbul) <input type="date" aria-label="Bitiş tarihi" id="date-to"></label>
+    <select aria-label="Kayıt türü" id="kind"><option value="">Tümü</option><option value="regular">Normal model</option><option value="scalp-target">%2/%3/%5 kilometre taşı</option><option value="scalp-bracket">Dinamik TP/SL</option><option value="scalp-forward">15/30/60 dk yön ileri-testi</option></select>
+    <select aria-label="Yön" id="direction"><option value="">Tüm yönler</option></select>
+    <select aria-label="Rejim" id="regime"><option value="">Tüm rejimler</option></select>
+    <select aria-label="Strateji" id="strategy"><option value="">Tüm stratejiler</option></select>
+    <select aria-label="Politika sürümü" id="policy"><option value="">Tüm politikalar</option></select>
+    <select aria-label="Sonuç" id="status"><option value="">Tüm durumlar</option><option value="TARGET">Hedef önce</option><option value="STOP">Stop önce</option><option value="TIME_EXIT">Süre sonu</option><option value="DIRECTION_HIT">Yön doğru</option><option value="DIRECTION_MISS">Yön yanlış</option><option value="TP/SL BEKLEMEDE">TP/SL beklemede</option><option value="HEDEF ULAŞTI">%2/%3/%5 ulaştı</option><option value="HEDEF ULAŞMADI">%2/%3/%5 ulaşmadı</option><option value="BEKLEMEDE">Beklemede</option><option value="VERİ EKSİK">Veri eksik</option></select>
   </div>
-  <div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Strateji</th><th>Ham güç</th><th>Kalite/Güven</th><th>Geçmiş örnek</th><th>Aile</th><th>Sinyal fiyatı</th><th>Hedef / Stop</th><th>Dokunuş / Sonuç zamanı</th><th>Durum</th><th>İlk sinyal</th><th>Net bps</th></tr></thead><tbody id="rows"></tbody></table></div>
-  <details class="measurement-note muted"><summary>Nasıl okunmalı?</summary><p>Bildirim kapsamı hem karneleri hem sinyal listesini değiştirir. Coin, tür ve sonuç filtreleri yalnız sinyal listesini değiştirir. Özetler tablo satır sınırından önce hesaplanır. Aynı sinyalin %2/%3/%5 kayıtları ayrı işlemler değildir. Eksik sonuç veya takip süresi varsa ilgili grubun oranı gösterilmez. “Gönderildi” ilk sinyalin en az bir alıcıya teslimat kaydıdır; herkesin okuduğu anlamına gelmez. Geçmiş örnek yüzdesi %2/%3/%5 hedefine ulaşma olasılığı değildir. Sonraki mum açılışıyla yapılan simülasyon gerçek bir işlem değildir. Sayfa yayın zamanında yenilenir; canlı fiyat akışı değildir.</p></details>
+  <div class="table-wrap"><table><thead><tr><th>Mum zamanı</th><th>Algılandı → Telegram</th><th>Tür</th><th>Coin</th><th>Yön</th><th>Rejim</th><th>Strateji</th><th>Ham güç</th><th>Kalite/Güven</th><th>Geçmiş örnek</th><th>Aile</th><th>Sinyal fiyatı</th><th>Hedef / Stop</th><th>Dokunuş / Sonuç zamanı</th><th>Durum</th><th>İlk sinyal</th><th>Net bps</th><th>Politika</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <details class="measurement-note muted"><summary>Nasıl okunmalı?</summary><p>Bildirim kapsamı hem karneleri hem sinyal listesini değiştirir. Coin, tarih, tür, yön, rejim, strateji ve sonuç filtreleri yalnız sinyal listesini değiştirir. Özetler tablo satır sınırından önce hesaplanır. Aynı sinyalin %2/%3/%5 kayıtları ayrı işlemler değildir. Eksik sonuç veya takip süresi varsa ilgili grubun oranı gösterilmez. %95 aralık Wilson aralığıdır; coinler ve aynı gün içindeki sinyaller arasındaki korelasyonu düzeltmez. Farklı UTC gün sayısı bağımsız işlem sayısı değildir. “Gönderildi” ilk sinyalin en az bir alıcıya teslimat kaydıdır; herkesin okuduğu anlamına gelmez. Geçmiş örnek yüzdesi %2/%3/%5 hedefine ulaşma olasılığı değildir. Sonraki mum açılışıyla yapılan simülasyon gerçek bir işlem değildir. Sayfa yayın zamanında yenilenir; canlı fiyat akışı değildir.</p></details>
   <footer class="muted">Bu sayfa araştırma/ileri-test sonuçlarını gösterir; emir veya kazanç garantisi değildir.</footer>
 </main>
 <script src="scalp.js" defer></script>

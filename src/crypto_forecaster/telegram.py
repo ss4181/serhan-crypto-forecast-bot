@@ -25,6 +25,7 @@ DASHBOARD_URL = "https://ss4181.github.io/serhan-crypto-forecast-bot/scalp.html"
 PRIVATE_COMMANDS = (
     ("start", "Ana menuyu ac"),
     ("durum", "Guncel model durumunu goster"),
+    ("coin", "Coin sembolu icin 15dk/1s/4s/1g tahmin sor"),
     ("performans", "Sinyal performansini goster"),
     ("scalpkarne", "Scalp ileri-test karnesini goster"),
     ("aciklamalar", "Terimleri ve stratejileri acikla"),
@@ -197,6 +198,15 @@ class TelegramNotifier:
             raise ValueError("Gecersiz sohbet kimligi")
         _validate_text(text)
         return self._send_to_chat(chat_id, text, reply_markup=reply_markup)
+
+    def send_owner_alert(self, text: str) -> int:
+        """Send private operational alerts only to the configured owner."""
+        if self._owner_id is None:
+            raise TelegramError(f"{OWNER_ID_ENV} olmadan sahip alarmi gonderilemez")
+        _validate_text(text)
+        return self._send_to_chat(
+            self._owner_id, text, reply_markup=telegram_menu_keyboard(is_owner=True)
+        )
 
     def send_message(
         self, text: str, *, reply_markup: dict[str, object] | None = None
