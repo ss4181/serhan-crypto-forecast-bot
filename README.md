@@ -578,9 +578,16 @@ Onaylı abonelerin özel sohbette kullanabileceği komutlar:
 |---|---|
 | `/durum` | Altı modelin o anki durumu — beklemeden anlık cevap |
 | `/coin ALLOUSDT` | Coin'e özel 15 dk / 1 saat / 4 saat / 1 gün yön olasılığı ve ileri-test ölçümü |
+| `/rejim` | Teyitli piyasa rejimi, genişlik ve trend durumu |
+| `/bildirim` | Son scalp taraması ve bildirim filtresi durumu |
 | `/performans [gün]` | Gönderilen sinyallerin gerçek sonucu (varsayılan 30 gün) |
 | `/scalpkarne [gün]` | Scalp ileri-test sonuçları (varsayılan 30 gün) |
 | `/yardim` | Komut listesi |
+
+Özel sohbet klavyesinde Coin Sorgula düğmesi sembolü yazmanızı ister; örneğin
+`ALLOUSDT` gönderin. Piyasa Rejimi ve Bildirim Durumu düğmeleri ilgili güncel
+raporları açar; Canlı Panel düğmesi başarı panosuna götürür. Aynı raporlara
+`/rejim` ve `/bildirim` ile de erişilebilir.
 
 `/coin` yerine doğrudan `ALLOUSDT` veya `ALLO` yazılabilir. Sorgu yalnız onaylı
 kişinin özel sohbetinde çalışır ve Binance USD-M perpetual çiftini arar. Her

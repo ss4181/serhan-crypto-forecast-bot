@@ -85,6 +85,8 @@ def run(
     members: dict[int, str] | None = None,
     scalp_performance_text=None,
     symbol_forecast_text=None,
+    regime_text=None,
+    notification_status_text=None,
 ):
     settings = Settings(
         telegram_state_dir=directory, outcome_state_dir=directory / "outcomes"
@@ -98,6 +100,8 @@ def run(
         performance_text=lambda days: f"KARNE {days} GUN",
         scalp_performance_text=scalp_performance_text,
         symbol_forecast_text=symbol_forecast_text,
+        regime_text=regime_text,
+        notification_status_text=notification_status_text,
         notifier=notifier,
         reply_markup=telegram_menu_keyboard(),
     )
@@ -222,6 +226,36 @@ class CommandTests(unittest.TestCase):
                 scalp_performance_text=lambda days: f"SCALP KARNE {days} GUN",
             )
         self.assertEqual(notifier.sent[0][1], "SCALP KARNE 7 GUN")
+
+    def test_new_query_buttons_open_coin_prompt_and_live_regime_and_alert_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            outcome, notifier, _ = run(
+                Path(directory),
+                [
+                    callback_update(1, OWNER, "coin_query"),
+                    callback_update(2, OWNER, "regime"),
+                    callback_update(3, OWNER, "notification_status"),
+                ],
+                regime_text=lambda: "REJİM AKTİF",
+                notification_status_text=lambda: "BİLDİRİM AKTİF",
+            )
+        self.assertEqual(outcome.answered, 3)
+        self.assertIn("ALLOUSDT", notifier.sent[0][1])
+        self.assertEqual(notifier.sent[1][1], "REJİM AKTİF")
+        self.assertEqual(notifier.sent[2][1], "BİLDİRİM AKTİF")
+
+    def test_regime_and_notification_commands_have_direct_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, notifier, _ = run(
+                Path(directory),
+                [update(1, OWNER, "/rejim"), update(2, OWNER, "/bildirim")],
+                regime_text=lambda: "REJİM AKTİF",
+                notification_status_text=lambda: "BİLDİRİM AKTİF",
+            )
+        self.assertEqual(
+            [message for _, message in notifier.sent],
+            ["REJİM AKTİF", "BİLDİRİM AKTİF"],
+        )
 
     def test_only_the_owner_may_add_people(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

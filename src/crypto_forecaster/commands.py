@@ -176,6 +176,8 @@ def poll_and_answer(
     scalp_performance_text: Callable[[int], str] | None = None,
     explanation_text: Callable[[], str] | None = None,
     symbol_forecast_text: Callable[[str], str] | None = None,
+    regime_text: Callable[[], str] | None = None,
+    notification_status_text: Callable[[], str] | None = None,
     reply_markup: dict[str, object] | None = None,
     notifier: TelegramNotifier | None = None,
     now: datetime | None = None,
@@ -326,6 +328,8 @@ def poll_and_answer(
                     performance_text=performance_text,
                     scalp_performance_text=scalp_performance_text,
                     explanation_text=explanation_text or format_explanations,
+                    regime_text=regime_text,
+                    notification_status_text=notification_status_text,
                 )
             except Exception as error:  # a bad answer must not kill the cycle
                 failed += 1
@@ -415,6 +419,8 @@ def poll_and_answer(
                 scalp_performance_text=scalp_performance_text,
                 explanation_text=explanation_text or format_explanations,
                 symbol_forecast_text=symbol_forecast_text,
+                regime_text=regime_text,
+                notification_status_text=notification_status_text,
                 now=current,
             )
         except Exception as error:  # a bad answer must not kill the cycle
@@ -609,6 +615,8 @@ def _answer(
     scalp_performance_text: Callable[[int], str] | None,
     explanation_text: Callable[[], str],
     symbol_forecast_text: Callable[[str], str] | None = None,
+    regime_text: Callable[[], str] | None = None,
+    notification_status_text: Callable[[], str] | None = None,
     now: datetime,
 ) -> str | None:
     match = _COMMAND.match(text.strip())
@@ -629,6 +637,14 @@ def _answer(
         return explanation_text()
     if command in ("durum", "status"):
         return status_text()
+    if command in ("rejim", "regime"):
+        return regime_text() if regime_text is not None else status_text()
+    if command in ("bildirim", "notifications"):
+        return (
+            notification_status_text()
+            if notification_status_text is not None
+            else status_text()
+        )
     if command in ("coin", "tahmin"):
         if symbol_forecast_text is None:
             return "ℹ️ Coin tahmini bu sunucuda henüz etkin değil."
@@ -686,6 +702,8 @@ def _answer_callback(
     performance_text: Callable[[int], str],
     scalp_performance_text: Callable[[int], str] | None,
     explanation_text: Callable[[], str],
+    regime_text: Callable[[], str] | None = None,
+    notification_status_text: Callable[[], str] | None = None,
 ) -> str | None:
     if data in ("start", "help"):
         return _help_text(is_owner=sender_id == owner)
@@ -693,6 +711,16 @@ def _answer_callback(
         return explanation_text()
     if data == "status":
         return status_text()
+    if data == "coin_query":
+        return "🔎 Sorgulamak istediğin coin sembolünü gönder. Örnek: ALLOUSDT (veya yalnızca ALLO)."
+    if data == "regime":
+        return regime_text() if regime_text is not None else status_text()
+    if data == "notification_status":
+        return (
+            notification_status_text()
+            if notification_status_text is not None
+            else status_text()
+        )
     if data == "members":
         if sender_id != owner:
             return "🔒 Abone listesi yalnızca bot sahibine açıktır."
@@ -775,6 +803,8 @@ def _help_text(*, is_owner: bool) -> str:
         "📌 KOMUTLAR",
         "📊 /durum — alti modelin su anki durumu",
         "🔎 /coin <sembol> — coine özel 15dk/1s/4s/1g tahmini (örn. /coin ALLOUSDT); sembolü tek başına da gönderebilirsin",
+        "🧭 /rejim — teyitli piyasa rejimi, genişlik ve trend bilgisi",
+        "🔔 /bildirim — son scalp taraması ve bildirim filtresi durumu",
         "📈 /performans [gun] — gonderilen sinyallerin gercek sonucu (varsayilan 30 gun)",
         "🧪 /scalpkarne [gun] — scalp ileri-test sonuclari (varsayilan 30 gun)",
         "📖 /aciklamalar — bildirim alanlari ve strateji mantigi",

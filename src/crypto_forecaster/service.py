@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import math
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
-import math
-import time
 from typing import Callable
 
 import numpy as np
 
+from .coin_query import forecast_coin, format_coin_forecast
+from .commands import (
+    CommandOutcome,
+    format_explanations,
+    load_members,
+    load_pending_members,
+    poll_and_answer,
+)
 from .config import (
     INTERVAL_LABELS,
     INTERVAL_MILLISECONDS,
@@ -19,14 +27,7 @@ from .config import (
     local_text,
     model_path,
 )
-from .commands import (
-    CommandOutcome,
-    format_explanations,
-    load_members,
-    load_pending_members,
-    poll_and_answer,
-)
-from .coin_query import forecast_coin, format_coin_forecast
+from .dashboard import write_dashboard_payload
 from .data import (
     BinanceKlineStream,
     BinanceMarketDataClient,
@@ -36,11 +37,10 @@ from .data import (
 )
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
-from .dashboard import write_dashboard_payload
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
 from .notification_status import format_notification_status, write_notification_status
-from .ops_monitor import mark_health_alert_sent, scalp_health_incidents
 from .openinterest import OpenInterestError, update_open_interest
+from .ops_monitor import mark_health_alert_sent, scalp_health_incidents
 from .outcomes import (
     format_scorecard,
     load_ledger,
@@ -55,25 +55,25 @@ from .research import research_all
 from .scalping import (
     SCALP_STEP_MS,
     ScalpScanReport,
-    deliver_scalp_bracket_wins,
-    deliver_scalp_target_touches,
-    deliver_scalp_observations,
-    filter_scalp_notification_report,
     apply_scalp_notification_safety_gates,
+    deliver_scalp_bracket_wins,
+    deliver_scalp_observations,
+    deliver_scalp_target_touches,
+    filter_scalp_notification_report,
     format_scalp_scorecard,
     load_scalp_bracket_ledger,
     load_scalp_ledger,
     record_scalp_bracket_setups,
     record_scalp_observations,
     record_scalp_setup_forward_setups,
-    record_successful_scalp_delivery,
     record_scalp_target_setups,
+    record_successful_scalp_delivery,
     refresh_and_scan_scalp_universe,
     scalp_scorecard,
     scalp_setup_assessment,
+    settle_scalp_bracket_outcomes,
     settle_scalp_observations,
     settle_scalp_setup_forward,
-    settle_scalp_bracket_outcomes,
     settle_scalp_target_outcomes,
 )
 from .telegram import (
@@ -635,6 +635,10 @@ def answer_commands(
         ),
         explanation_text=format_explanations,
         symbol_forecast_text=lambda symbol: _coin_query_reply(settings, symbol),
+        regime_text=lambda: format_regime_status(settings, now=current),
+        notification_status_text=lambda: format_notification_status(
+            settings, now=current
+        ),
         notifier=notifier,
         now=current,
     )

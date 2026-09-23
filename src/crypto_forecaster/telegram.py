@@ -26,6 +26,8 @@ PRIVATE_COMMANDS = (
     ("start", "Ana menuyu ac"),
     ("durum", "Guncel model durumunu goster"),
     ("coin", "Coin sembolu icin 15dk/1s/4s/1g tahmin sor"),
+    ("rejim", "Guncel piyasa rejimini goster"),
+    ("bildirim", "Scalp bildirim durumunu goster"),
     ("performans", "Sinyal performansini goster"),
     ("scalpkarne", "Scalp ileri-test karnesini goster"),
     ("aciklamalar", "Terimleri ve stratejileri acikla"),
@@ -48,11 +50,19 @@ def telegram_menu_keyboard(*, is_owner: bool = False) -> dict[str, object]:
             {"text": "📖 Açıklamalar", "callback_data": "explanations"},
         ],
         [
-            {"text": "📊 Güncel Durum", "callback_data": "status"},
-            {"text": "📈 Performans (30g)", "callback_data": "performance:30"},
+            {"text": "🔎 Coin Sorgula", "callback_data": "coin_query"},
+            {"text": "🧭 Piyasa Rejimi", "callback_data": "regime"},
         ],
         [
+            {"text": "📊 Güncel Durum", "callback_data": "status"},
+            {"text": "🔔 Bildirim Durumu", "callback_data": "notification_status"},
+        ],
+        [
+            {"text": "📈 Performans (30g)", "callback_data": "performance:30"},
             {"text": "🧪 Scalp Karne (30g)", "callback_data": "scalp_performance:30"},
+        ],
+        [
+            {"text": "🌐 Canlı Panel", "url": DASHBOARD_URL},
         ],
     ]
     if is_owner:

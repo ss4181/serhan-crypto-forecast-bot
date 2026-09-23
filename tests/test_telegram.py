@@ -78,16 +78,25 @@ class TelegramTests(unittest.TestCase):
             for row in telegram_menu_keyboard()["inline_keyboard"]
             for button in row
         ]
-        callbacks = {button["callback_data"] for button in buttons}
+        callbacks = {
+            button["callback_data"] for button in buttons if "callback_data" in button
+        }
         self.assertEqual(
             callbacks,
             {
                 "start",
                 "explanations",
+                "coin_query",
+                "regime",
                 "status",
+                "notification_status",
                 "performance:30",
                 "scalp_performance:30",
             },
+        )
+        self.assertIn(
+            {"text": "🌐 Canlı Panel", "url": "https://ss4181.github.io/serhan-crypto-forecast-bot/scalp.html"},
+            buttons,
         )
 
     @patch.dict(os.environ, DIRECT_CREDENTIALS, clear=False)
@@ -107,11 +116,13 @@ class TelegramTests(unittest.TestCase):
             button["callback_data"]
             for row in telegram_menu_keyboard()["inline_keyboard"]
             for button in row
+            if "callback_data" in button
         }
         owner_callbacks = {
             button["callback_data"]
             for row in telegram_menu_keyboard(is_owner=True)["inline_keyboard"]
             for button in row
+            if "callback_data" in button
         }
         self.assertNotIn("members", member_callbacks)
         self.assertEqual(
@@ -147,11 +158,13 @@ class TelegramTests(unittest.TestCase):
             button["callback_data"]
             for row in requests[0]["reply_markup"]["inline_keyboard"]
             for button in row
+            if "callback_data" in button
         }
         member_buttons = {
             button["callback_data"]
             for row in requests[1]["reply_markup"]["inline_keyboard"]
             for button in row
+            if "callback_data" in button
         }
         self.assertIn("members", owner_buttons)
         self.assertNotIn("members", member_buttons)
