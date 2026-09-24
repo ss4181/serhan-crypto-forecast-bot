@@ -280,9 +280,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if posted
                 else "Panel baglantisi tanimli degil; yerel ozet yazildi."
             )
+            dashboard_source_status = "stale"
             if settings.scalp_observation_enabled:
                 try:
-                    _run_scalp_once(settings, refresh=True, send=True)
+                    scalp_report = _run_scalp_once(settings, refresh=True, send=True)
+                    if not (
+                        scalp_report.errors
+                        or scalp_report.coverage < settings.scalp_minimum_coverage
+                    ):
+                        dashboard_source_status = "fresh"
                 except (
                     MarketDataError,
                     OSError,
@@ -294,8 +300,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"Scalp gozlem hatasi (ana bulut kosusu tamamlandi): {error}",
                         file=sys.stderr,
                     )
+                    dashboard_source_status = "stale"
             dashboard_path = write_dashboard_payload(
-                settings, Path("docs/scalp-data.json")
+                settings,
+                Path("docs/scalp-data.json"),
+                source_status=dashboard_source_status,
             )
             print(f"Sinyal dashboard verisi yazildi: {dashboard_path}")
             return 0
@@ -596,7 +605,7 @@ def _research_is_due(settings: Settings) -> bool:
     return research_due(settings)
 
 
-def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
+def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: ignore[no-untyped-def]
     manifest = load_trade1_universe()
     entries = manifest.selected_entries()
     report = (
@@ -663,10 +672,10 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
             )
         )
     if not send:
-        return
+        return report
     if not _telegram_configured():
         print("Telegram tanimli/primary degil; scalp gozlemi gonderilmedi.")
-        return
+        return report
     try:
         regime_delivery = deliver_regime_change(settings)
         if regime_delivery is not None:
@@ -748,6 +757,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool) -> None:
             f"{len(settled_targets)} kademe sonucu; "
             f"{bracket_tracked} yeni parantez, {len(settled_brackets)} ilk-dokunus sonucu"
         )
+    return report
 
 
 def _deliver_cloud_eligible(settings: Settings, predictions):  # type: ignore[no-untyped-def]

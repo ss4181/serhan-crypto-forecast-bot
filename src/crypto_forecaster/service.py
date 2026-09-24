@@ -1051,7 +1051,17 @@ def serve_forever(
                                 )
                     try:
                         write_dashboard_payload(
-                            settings, settings.report_dir / "scalp-data.json", now=scalp_now
+                            settings,
+                            settings.report_dir / "scalp-data.json",
+                            now=scalp_now,
+                            source_status=(
+                                "fresh"
+                                if (
+                                    scalp_report.coverage >= settings.scalp_minimum_coverage
+                                    and not scalp_report.errors
+                                )
+                                else "stale"
+                            ),
                         )
                         if is_primary():
                             incidents = scalp_health_incidents(
