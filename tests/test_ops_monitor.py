@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from crypto_forecaster.config import Settings
-from crypto_forecaster.ops_monitor import mark_health_alert_sent, scalp_health_incidents
+from crypto_forecaster.ops_monitor import scalp_health_incidents
 
 
 class OpsMonitorTests(unittest.TestCase):
@@ -71,7 +71,7 @@ class OpsMonitorTests(unittest.TestCase):
                 )
             self.assertIn("public_dashboard", {row["code"] for row in incidents})
 
-    def test_no_candidate_alarm_waits_thirty_minutes_then_throttles(self) -> None:
+    def test_no_candidate_is_normal_and_never_pages_owner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             settings = Settings(
@@ -92,17 +92,14 @@ class OpsMonitorTests(unittest.TestCase):
                 "websocket_connected": True,
                 "delivery_status": "NO_CANDIDATE",
             }
-            self.assertEqual(scalp_health_incidents(settings, **base), [])
-            later = {**base, "evaluated_at_ms": now + 31 * 60_000}
-            os.utime(settings.report_dir / "scalp-data.json", (later["evaluated_at_ms"] / 1000,) * 2)
-            os.utime(settings.scalp_data_dir / "BTCUSDT_5m_futures.csv", (later["evaluated_at_ms"] / 1000,) * 2)
-            incidents = scalp_health_incidents(settings, **later)
-            self.assertEqual([item["code"] for item in incidents], ["no_eligible_signal"])
-            mark_health_alert_sent(settings, "no_eligible_signal", sent_at_ms=now + 31 * 60_000)
-            newer = now + 60 * 60_000
-            os.utime(settings.report_dir / "scalp-data.json", (newer / 1000,) * 2)
-            os.utime(settings.scalp_data_dir / "BTCUSDT_5m_futures.csv", (newer / 1000,) * 2)
-            self.assertEqual(scalp_health_incidents(settings, **{**later, "evaluated_at_ms": newer}), [])
+            for elapsed in (0, 31 * 60_000, 12 * 60 * 60_000):
+                checked_at = now + elapsed
+                os.utime(settings.report_dir / "scalp-data.json", (checked_at / 1000,) * 2)
+                os.utime(settings.scalp_data_dir / "BTCUSDT_5m_futures.csv", (checked_at / 1000,) * 2)
+                incidents = scalp_health_incidents(
+                    settings, **{**base, "evaluated_at_ms": checked_at}
+                )
+                self.assertNotIn("no_eligible_signal", {item["code"] for item in incidents})
 
     def test_binance_telegram_and_disk_incidents_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -55,14 +55,10 @@ def scalp_health_incidents(
             problems["cache"] = "Scalp cache yaşı kontrol edilemedi."
     if delivery_status in {"ERROR", "PARTIAL", "FAILED"}:
         problems["telegram"] = f"Telegram teslimat durumu: {delivery_status}."
-    if eligible == 0:
-        since = state.get("no_signal_since_ms")
-        if not isinstance(since, int) or since <= 0:
-            state["no_signal_since_ms"] = evaluated_at_ms
-        elif evaluated_at_ms - since >= 30 * 60_000:
-            problems["no_eligible_signal"] = "30 dakikadır bildirime uygun sinyal yok (sessiz filtreler dahil)."
-    else:
-        state.pop("no_signal_since_ms", None)
+    # No eligible setup is a normal research outcome under the intentionally
+    # strict regime/liquidity/edge gates, not an operational incident. Keep the
+    # argument for compatibility with callers, but never page the owner for it.
+    state.pop("no_signal_since_ms", None)
 
     try:
         disk_path = settings.scalp_state_dir if settings.scalp_state_dir.exists() else settings.scalp_state_dir.parent

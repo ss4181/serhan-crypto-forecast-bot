@@ -1,11 +1,19 @@
 name: BTC ETH Cloud Bot
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cloud-bot.yml"
+      - "docs/**"
+      - "src/crypto_forecaster/**"
+      - "pyproject.toml"
+      - "run.py"
+      - "tests/dashboard_ui.cjs"
   schedule:
-    # GitHub drops most of a */5 schedule and bills private-repo minutes by the
-    # minute, so this job is a standby that keeps research and the panel warm.
-    # Minute-accurate alerting is the always-on host's job (see deploy/).
-    - cron: "23 */3 * * *"
+    # Publish frequently enough that a missed scheduled event does not leave
+    # the public dashboard stale for most of a trading session. Runs take <2m.
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       force_research:

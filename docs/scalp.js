@@ -29,6 +29,89 @@ function cell(row, text, className = "") {
   row.appendChild(td);
   return td;
 }
+function wilson95(hits, resolved) {
+  if (!resolved) return null;
+  const z = 1.959963984540054;
+  const p = hits / resolved;
+  const denominator = 1 + z * z / resolved;
+  const center = (p + z * z / (2 * resolved)) / denominator;
+  const margin = z * Math.sqrt((p * (1 - p) + z * z / (4 * resolved)) / resolved) / denominator;
+  return [Math.max(0, center - margin), Math.min(1, center + margin)];
+}
+function renderPivot() {
+  const audience = el("pivot-audience").value;
+  const window = el("pivot-window").value;
+  const fromDate = el("pivot-date-from").value;
+  const toDate = el("pivot-date-to").value;
+  el("pivot-date-from").disabled = window !== "custom";
+  el("pivot-date-to").disabled = window !== "custom";
+  const now = Date.now();
+  const groups = new Map();
+  let recordCount = 0;
+  for (const x of signals) {
+    if (x.kind !== "scalp-target") continue;
+    if (audience !== "all" && !!x.notified !== (audience === "notified")) continue;
+    const level = Math.round(Number(x.targetPercent));
+    if (![2, 3, 5].includes(level) || Math.abs(Number(x.targetPercent) - level) > 0.001) continue;
+    const stamp = num(x.sourceTimeMs);
+    if (window === "custom") {
+      const day = localDateKey(stamp);
+      if (!day || (fromDate && day < fromDate) || (toDate && day > toDate)) continue;
+    } else if (window !== "all") {
+      const days = Number(window);
+      if (!Number.isFinite(stamp) || stamp < now - days * 86400000 || stamp > now + 300000) continue;
+    }
+    recordCount += 1;
+    const strategy = String(x.strategy || "Bilinmiyor");
+    const regime = String(x.regimeState || "UNKNOWN");
+    const families = Array.isArray(x.families) ? [...new Set(x.families.filter(Boolean).map(String))].sort() : [];
+    const setup = `${x.direction || "YÖN BİLİNMİYOR"} · ${families.length ? families.join("+") : "Aile bilinmiyor"}`;
+    const key = JSON.stringify([strategy, regime, setup]);
+    if (!groups.has(key)) {
+      groups.set(key, {strategy, regime, setup, signalIds: new Set(), levels: {
+        2: {hits: 0, misses: 0, pending: 0, missing: 0},
+        3: {hits: 0, misses: 0, pending: 0, missing: 0},
+        5: {hits: 0, misses: 0, pending: 0, missing: 0},
+      }});
+    }
+    const group = groups.get(key);
+    const signalId = x.signalId || `${x.symbol || "?"}:${stamp ?? "?"}:${x.direction || "?"}`;
+    group.signalIds.add(String(signalId));
+    const outcome = group.levels[level];
+    if (canonicalStatus(x.status) === "VERİ EKSİK") outcome.missing += 1;
+    else if (x.success === true) outcome.hits += 1;
+    else if (x.success === false) outcome.misses += 1;
+    else outcome.pending += 1;
+  }
+  const tbody = el("pivot-rows");
+  tbody.replaceChildren();
+  const sorted = [...groups.values()].sort((a, b) =>
+    a.strategy.localeCompare(b.strategy, "tr") || a.regime.localeCompare(b.regime, "tr") || a.setup.localeCompare(b.setup, "tr"));
+  for (const group of sorted) {
+    const row = document.createElement("tr");
+    cell(row, group.strategy);
+    cell(row, group.regime);
+    cell(row, group.setup);
+    for (const level of [2, 3, 5]) {
+      const x = group.levels[level];
+      const resolved = x.hits + x.misses;
+      const ci = wilson95(x.hits, resolved);
+      const rate = resolved ? pct(x.hits / resolved) : "—";
+      const interval = ci ? `\n%95 aralık ${pct(ci[0])}–${pct(ci[1])}` : "\n%95 aralık —";
+      cell(row, `${x.hits} / ${resolved} · ${rate}${interval}\nBekleyen ${x.pending} · Eksik ${x.missing}`,
+        resolved && x.hits / resolved >= 0.5 ? "hit" : resolved ? "miss" : "pending");
+    }
+    cell(row, group.signalIds.size);
+    tbody.appendChild(row);
+  }
+  if (!sorted.length) {
+    const row = document.createElement("tr");
+    cell(row, "Bu tarih ve bildirim kapsamı için hedef dokunuş kaydı yok.").colSpan = 7;
+    tbody.appendChild(row);
+  }
+  el("pivot-count").textContent = `${sorted.length} strateji/rejim/kurulum grubu · ${recordCount} hedef kaydı`;
+  el("pivot-note").textContent = "Başarı oranı yalnız sonuçlanmış hedef kayıtlarında hesaplanır (dokundu / (dokundu + süresi doldu)); bekleyen ve veri eksiği paydadan çıkarılır. %95 Wilson aralığı belirsizliği gösterir, kârlılık garantisi değildir.";
+}
 function render() {
   const q = el("search").value.trim().toUpperCase();
   const family = el("family").value;
@@ -201,6 +284,7 @@ async function load() {
     }
     renderMeasurements();
     render();
+    renderPivot();
   } catch (error) {
     el("updated").textContent = "Veri yüklenemedi. Sayfayı yenileyin veya daha sonra tekrar deneyin.";
     el("freshness").className = "freshness stale";
@@ -209,9 +293,14 @@ async function load() {
     measurements = null;
     renderMeasurements();
     render();
+    renderPivot();
   }
 }
 for (const id of ["search", "family", "minimum-success", "kind", "direction", "regime", "strategy", "policy", "status", "date-from", "date-to"]) el(id).addEventListener(id.startsWith("date-") ? "change" : "input", render);
 el("audience").value = "all";
 el("audience").addEventListener("input", () => { renderMeasurements(); render(); });
+el("pivot-window").value = "30";
+el("pivot-audience").value = "notified";
+for (const id of ["pivot-window", "pivot-audience"]) el(id).addEventListener("input", renderPivot);
+for (const id of ["pivot-date-from", "pivot-date-to"]) el(id).addEventListener("change", renderPivot);
 load();

@@ -81,6 +81,40 @@ async function main() {
   p.get('status').value='TIME_EXIT'; p.get('status').listeners.input();
   assert.equal(p.get('rows').children.length, 1);
   assert.equal(p.get('rows').children[0].children[14].textContent, 'SÜRE SONU');
+  const now = Date.now();
+  const pivotSignals = [
+    {kind:'scalp-target', signalId:'s1', symbol:'AAAUSDT', targetPercent:2, notified:true, success:true, status:'HEDEF ULAŞTI', sourceTimeMs:now-2*86400000, strategy:'Momentum', regimeState:'BULL', direction:'YUKARI', families:['F3','B1']},
+    {kind:'scalp-target', signalId:'s1', symbol:'AAAUSDT', targetPercent:3, notified:true, success:false, status:'HEDEF ULAŞMADI', sourceTimeMs:now-2*86400000, strategy:'Momentum', regimeState:'BULL', direction:'YUKARI', families:['B1','F3']},
+    {kind:'scalp-target', signalId:'s1', symbol:'AAAUSDT', targetPercent:5, notified:true, success:null, status:'BEKLEMEDE', sourceTimeMs:now-2*86400000, strategy:'Momentum', regimeState:'BULL', direction:'YUKARI', families:['B1','F3']},
+    {kind:'scalp-target', signalId:'s2', symbol:'AAAUSDT', targetPercent:2, notified:true, success:true, status:'HEDEF ULAŞTI', sourceTimeMs:now-10*86400000, strategy:'Momentum', regimeState:'BULL', direction:'YUKARI', families:['B1','F3']},
+    {kind:'scalp-target', signalId:'s3', symbol:'BBBUSDT', targetPercent:2, notified:false, success:true, status:'HEDEF ULAŞTI', sourceTimeMs:now-86400000, strategy:'Mean reversion', regimeState:'TRANSITION', direction:'AŞAĞI', families:['B2']},
+    {kind:'scalp-target', signalId:'s4', symbol:'CCCUSDT', targetPercent:2, notified:true, success:null, status:'VERİ EKSİK', sourceTimeMs:now-86400000, strategy:'Momentum', regimeState:'BULL', direction:'YUKARI', families:['B1','F3']},
+  ];
+  p = await page({...payload, signals:pivotSignals});
+  assert.equal(p.get('pivot-window').value, '30');
+  assert.equal(p.get('pivot-audience').value, 'notified');
+  assert.equal(p.get('pivot-rows').children.length, 1, 'pivot defaults to notified records');
+  let pivotRow = p.get('pivot-rows').children[0];
+  assert.equal(pivotRow.children[2].textContent, 'YUKARI · B1+F3');
+  assert.match(pivotRow.children[3].textContent, /2 \/ 2 · %100/);
+  assert.match(pivotRow.children[3].textContent, /%95 aralık/);
+  assert.match(pivotRow.children[3].textContent, /Eksik 1/);
+  assert.match(pivotRow.children[4].textContent, /0 \/ 1 · %0/);
+  assert.match(pivotRow.children[5].textContent, /Bekleyen 1 · Eksik 0/);
+  assert.equal(pivotRow.children[6].textContent, '3');
+  p.get('pivot-window').value='7'; p.get('pivot-window').listeners.input();
+  pivotRow = p.get('pivot-rows').children[0];
+  assert.match(pivotRow.children[3].textContent, /1 \/ 1 · %100/);
+  assert.equal(pivotRow.children[6].textContent, '2');
+  p.get('pivot-window').value='custom';
+  p.get('pivot-date-from').value = new Intl.DateTimeFormat('en-CA', {timeZone:'Europe/Istanbul', year:'numeric', month:'2-digit', day:'2-digit'}).format(new Date(now-2*86400000));
+  p.get('pivot-date-to').value = p.get('pivot-date-from').value;
+  p.get('pivot-window').listeners.input();
+  p.get('pivot-date-from').listeners.change();
+  assert.equal(p.get('pivot-rows').children.length, 1, 'custom Istanbul dates include the selected day');
+  p.get('pivot-window').value='all'; p.get('pivot-window').listeners.input();
+  p.get('pivot-audience').value='all'; p.get('pivot-audience').listeners.input();
+  assert.equal(p.get('pivot-rows').children.length, 2, 'all scope includes muted setups');
   console.log('Dashboard: syntax, HTML structure, rows, filters, missing fields, error and empty states passed.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

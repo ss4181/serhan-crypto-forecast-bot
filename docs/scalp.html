@@ -11,6 +11,8 @@
     h1 { margin: 0 0 .25rem; }
     h2 { font-size: 1.1rem; margin: 1.4rem 0 .5rem; }
     .cohort-table { min-width: 650px; }
+    .pivot-table { min-width: 1080px; }
+    .pivot-table td { white-space: pre-line; vertical-align: top; }
     .measurement-note { font-size: .875rem; margin: .5rem 0 1rem; }
     summary { cursor: pointer; font-weight: 600; }
     .muted { color: #66717f; }
@@ -56,13 +58,28 @@
   <label>İncelenen sinyaller
     <select aria-label="Bildirim kapsamı" id="audience"><option value="notified">Bildirim gönderilen</option><option value="muted">Sessiz izlenen</option><option value="all">Hepsi</option></select>
   </label>
-  <h2>1. %2 / %3 / %5 dokunuşları</h2>
+  <h2>1. Strateji / rejim / kurulum pivotu</h2>
+  <p class="measurement-note muted">Her satır strateji, rejim ve yön+aile kurulumunu birleştirir. Hücrelerde dokunan / olgunlaşmış sonuç, başarı oranı ve %95 Wilson aralığı gösterilir; bekleyen ve veri eksiği paydaya girmez.</p>
+  <div class="controls" aria-label="Pivot tablo filtreleri">
+    <label>Tarih aralığı
+      <select aria-label="Pivot tarih aralığı" id="pivot-window"><option value="7">Son 7 gün</option><option value="30">Son 30 gün</option><option value="90">Son 90 gün</option><option value="all">Tüm tarihçe</option><option value="custom">Özel aralık</option></select>
+    </label>
+    <label>Başlangıç (İstanbul) <input type="date" aria-label="Pivot başlangıç tarihi" id="pivot-date-from"></label>
+    <label>Bitiş (İstanbul) <input type="date" aria-label="Pivot bitiş tarihi" id="pivot-date-to"></label>
+    <label>Kapsam
+      <select aria-label="Pivot bildirim kapsamı" id="pivot-audience"><option value="notified">Bildirim gönderilen</option><option value="muted">Sessiz izlenen</option><option value="all">Hepsi</option></select>
+    </label>
+  </div>
+  <p id="pivot-count" class="muted" aria-live="polite"></p>
+  <div class="table-wrap"><table class="pivot-table"><thead><tr><th>Strateji</th><th>Rejim</th><th>Kurulum · yön + aile</th><th>%2 hedefi</th><th>%3 hedefi</th><th>%5 hedefi</th><th>Sinyal sayısı</th></tr></thead><tbody id="pivot-rows"></tbody></table></div>
+  <p class="measurement-note muted" id="pivot-note">Tarih filtresi sinyalin oluştuğu mum zamanına uygulanır. %2, %3 ve %5 oranları ayrı ayrı hesaplanır; hedefler birleştirilmez.</p>
+  <h2>2. %2 / %3 / %5 dokunuşları</h2>
   <p class="measurement-note muted">Yalnız takip süresi dolan sinyaller oranlara girer. Farklı takip süreleri birleştirilmez. Dokunuş, stop sonrası da olabilir.</p>
   <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Hedef</th><th>Takip süresi</th><th>Coin / aile</th><th>Dokundu / Sonuç</th><th>Dokunuş oranı</th><th>Son 10 / 50 / 100 · oran (%95 aralık)</th><th>Ufku açık</th><th>Veri eksik</th><th>Yön / rejim / strateji / politika</th><th>Farklı UTC gün</th><th>Tüm örnek %95 aralık</th></tr></thead><tbody id="touch-cohorts"></tbody></table></div>
-  <h2>2. Hedef / stop simülasyonu</h2>
+  <h2>3. Hedef / stop simülasyonu</h2>
   <p class="measurement-note muted">Stop öncesi hedef ve maliyet sonrası pozitif sonuç farklı ölçülerdir. Net değerler işlem başına simülasyondur; hesap getirisi değildir.</p>
   <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Takip süresi</th><th>Coin / aile</th><th>Sonuç</th><th>Hedef / Stop / Süre</th><th>Hedef önce</th><th>Net pozitif</th><th>Ort. net</th><th>Son 10 / 50 / 100 · hedef (%95 aralık)</th><th>Ufku açık / Eksik</th><th>Yön / rejim / strateji / politika</th><th>Farklı UTC gün</th><th>Tüm örnek %95 aralık</th></tr></thead><tbody id="bracket-cohorts"></tbody></table></div>
-  <h2>3. 15 / 30 / 60 dakika ileri-test</h2>
+  <h2>4. 15 / 30 / 60 dakika ileri-test</h2>
   <p class="measurement-note muted">Her çoklu-teyit kurulumunda, o anda geçmiş ileri-test verisiyle seçilen YUKARI/AŞAĞI yönü kaydedilir; sonraki 15/30/60 dakikada bu yönde maliyet sonrası net hareket pozitifse “yön doğru” sayılır. Bu ölçüm %2 hedef dokunuşu değildir. Yalnız yönü kurulurken belirlenmiş kayıtlar puanlanır; veri eksikleri başarı/başarısızlık sayılmaz.</p>
   <div class="table-wrap"><table class="cohort-table"><thead><tr><th>Ufuk</th><th>Coin / aile</th><th>Net pozitif / sonuç</th><th>Net pozitif oran</th><th>Son 10 / 50 / 100 (%95 aralık)</th><th>Bekleyen / veri eksik</th><th>Rejim / politika</th><th>UTC gün</th><th>Tüm örnek %95 aralık</th></tr></thead><tbody id="forward-cohorts"></tbody></table></div>
   <p class="measurement-note muted" id="measurement-note" aria-live="polite">Ölçümler yükleniyor…</p>
