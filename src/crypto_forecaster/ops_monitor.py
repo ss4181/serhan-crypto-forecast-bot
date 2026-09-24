@@ -12,9 +12,9 @@ from .config import Settings
 from .persistence import atomic_write_json
 
 ALERT_REPEAT_MS = 6 * 60 * 60 * 1000
-# The public Pages workflow runs every three hours. Allow one additional hour
-# for GitHub scheduling, queueing, and deployment before calling it stale.
-PUBLIC_DASHBOARD_MAX_AGE_MS = 4 * 60 * 60 * 1000
+# Pages is published hourly. Allow one missed run plus a short scheduling/deploy
+# delay, but detect a broken publisher well before stale data spans a session.
+PUBLIC_DASHBOARD_MAX_AGE_MS = 2 * 60 * 60 * 1000
 
 
 def scalp_health_incidents(
@@ -78,15 +78,42 @@ def scalp_health_incidents(
         problems["dashboard"] = "Yerel scalp dashboard çıktısı bulunamadı."
     if dashboard_url:
         try:
-            request = Request(dashboard_url, headers={"User-Agent": "trade3-health/1.0"})
+            # GitHub Pages is CDN-backed. Bypass intermediary/browser caches so
+            # this monitor measures the deployed artifact, not a cached response.
+            request = Request(
+                _cache_busted_url(dashboard_url, evaluated_at_ms),
+                headers={
+                    "User-Agent": "trade3-health/1.0",
+                    "Cache-Control": "no-cache, no-store, max-age=0",
+                    "Pragma": "no-cache",
+                },
+            )
             with urlopen(request, timeout=3.0) as response:
                 published = json.loads(response.read(8 * 1024 * 1024).decode("utf-8"))
-            generated = datetime.fromisoformat(str(published["generatedAtUtc"]))
-            published_age = evaluated_at_ms - int(generated.timestamp() * 1000)
-            if published_age < -60_000 or published_age > PUBLIC_DASHBOARD_MAX_AGE_MS:
-                problems["public_dashboard"] = f"GitHub Pages dashboard verisi eski ({max(0, published_age) // 60_000} dk)."
+            if not isinstance(published, dict):
+                raise ValueError("dashboard payload is not an object")
+            if published.get("schema") != "trade3-signal-dashboard-v1":
+                raise ValueError("unexpected dashboard schema")
+            source_status = published.get("sourceStatus")
+            if source_status != "fresh":
+                problems["public_dashboard"] = (
+                    "GitHub Pages yeni yayınlandı ancak kaynak veri stale/eksik; "
+                    "Binance yenileme ve Oracle pano aktarımı kontrol edilmeli."
+                )
+            else:
+                generated = datetime.fromisoformat(str(published["generatedAtUtc"]))
+                published_age = evaluated_at_ms - int(generated.timestamp() * 1000)
+                if published_age < -60_000 or published_age > PUBLIC_DASHBOARD_MAX_AGE_MS:
+                    problems["public_dashboard"] = f"GitHub Pages dashboard verisi eski ({max(0, published_age) // 60_000} dk)."
             page_url = dashboard_url.rsplit("/", 1)[0] + "/scalp.html"
-            page_request = Request(page_url, headers={"User-Agent": "trade3-health/1.0"})
+            page_request = Request(
+                _cache_busted_url(page_url, evaluated_at_ms),
+                headers={
+                    "User-Agent": "trade3-health/1.0",
+                    "Cache-Control": "no-cache, no-store, max-age=0",
+                    "Pragma": "no-cache",
+                },
+            )
             with urlopen(page_request, timeout=3.0) as response:
                 page_html = response.read(512 * 1024).decode("utf-8")
             if not page_html.strip():
@@ -104,6 +131,11 @@ def scalp_health_incidents(
     # times are written separately, so Telegram errors cannot eat the alarm.
     atomic_write_json(path, {"version": 1, "incidents": state})
     return due
+
+
+def _cache_busted_url(url: str, nonce: int) -> str:
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}healthcheck={nonce}"
 
 
 def mark_health_alert_sent(

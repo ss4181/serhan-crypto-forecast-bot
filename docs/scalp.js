@@ -270,7 +270,11 @@ async function load() {
     const stale = !data.generatedAtUtc || !Number.isFinite(Date.parse(data.generatedAtUtc)) || Date.now() - Date.parse(data.generatedAtUtc) > 6 * 3600000;
     const fresh = data.sourceStatus === "fresh" && !stale;
     el("freshness").className = `freshness ${fresh ? "fresh" : "stale"}`;
-    el("freshness").textContent = fresh ? "Son yayın güncel" : "Eski veya eksik veri — yayın saatini kontrol edin";
+    el("freshness").textContent = fresh
+      ? "Son yayın güncel"
+      : data.sourceStatus !== "fresh"
+        ? "Kaynak verisi yenilenemedi — gösterilen sonuçlar eski olabilir"
+        : "Eski veya eksik yayın — yayın saatini kontrol edin";
     for (const [id, key] of [["total", "signalCount"], ["settled", "settledCount"], ["pending", "pendingCount"]]) el(id).textContent = number(s[key]);
     const quarantined = Number(s.quarantinedRecordCount) || 0;
     const quarantineNote = el("quarantine-note");

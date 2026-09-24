@@ -11,9 +11,9 @@ on:
       - "run.py"
       - "tests/dashboard_ui.cjs"
   schedule:
-    # Publish frequently enough that a missed scheduled event does not leave
-    # the public dashboard stale for most of a trading session. Runs take <2m.
-    - cron: "17 * * * *"
+    # Two offset runs per hour provide a second chance if GitHub drops or delays
+    # one scheduled event; avoid :00, a documented Actions high-load minute.
+    - cron: "17,47 * * * *"
   workflow_dispatch:
     inputs:
       force_research:

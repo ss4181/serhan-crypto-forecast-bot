@@ -14,7 +14,7 @@ from crypto_forecaster.ops_monitor import scalp_health_incidents
 
 
 class OpsMonitorTests(unittest.TestCase):
-    def test_public_dashboard_alarm_matches_three_hour_publish_cadence(self) -> None:
+    def test_public_dashboard_alarm_allows_one_missed_hourly_publish(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             settings = Settings(
@@ -39,17 +39,23 @@ class OpsMonitorTests(unittest.TestCase):
             }
 
             def response_for(request, *, age_ms: int) -> BytesIO:
-                if request.full_url.endswith("scalp.html"):
+                self.assertIn("healthcheck=", request.full_url)
+                self.assertEqual(request.headers.get("Cache-control"), "no-cache, no-store, max-age=0")
+                if request.full_url.split("?", 1)[0].endswith("scalp.html"):
                     return BytesIO(b"<!doctype html><html>Trade3</html>")
                 generated = datetime.fromtimestamp(
                     (now_ms - age_ms) / 1000, UTC
                 ).isoformat()
-                return BytesIO(json.dumps({"generatedAtUtc": generated}).encode())
+                return BytesIO(json.dumps({
+                    "schema": "trade3-signal-dashboard-v1",
+                    "sourceStatus": "fresh",
+                    "generatedAtUtc": generated,
+                }).encode())
 
             with patch(
                 "crypto_forecaster.ops_monitor.urlopen",
                 side_effect=lambda request, timeout: response_for(
-                    request, age_ms=3 * 60 * 60_000 + 59 * 60_000
+                    request, age_ms=1 * 60 * 60_000 + 59 * 60_000
                 ),
             ):
                 incidents = scalp_health_incidents(
@@ -63,13 +69,57 @@ class OpsMonitorTests(unittest.TestCase):
             with patch(
                 "crypto_forecaster.ops_monitor.urlopen",
                 side_effect=lambda request, timeout: response_for(
-                    request, age_ms=4 * 60 * 60_000 + 1
+                    request, age_ms=2 * 60 * 60_000 + 1
                 ),
             ):
                 incidents = scalp_health_incidents(
                     settings, evaluated_at_ms=later_ms, **base
                 )
             self.assertIn("public_dashboard", {row["code"] for row in incidents})
+
+    def test_freshly_generated_dashboard_with_stale_source_is_still_an_incident(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = Settings(
+                scalp_state_dir=root / "state",
+                report_dir=root / "reports",
+                scalp_data_dir=root / "data" / "scalp",
+            )
+            settings.report_dir.mkdir()
+            settings.scalp_data_dir.mkdir(parents=True)
+            (settings.report_dir / "scalp-data.json").write_text("{}", encoding="utf-8")
+            (settings.scalp_data_dir / "BTCUSDT_5m_futures.csv").write_text("stub", encoding="utf-8")
+            now_ms = int(datetime.now(UTC).timestamp() * 1000)
+            base = {
+                "fresh": 89,
+                "attempted": 89,
+                "eligible": 0,
+                "websocket_connected": True,
+                "delivery_status": "NO_CANDIDATE",
+                "dashboard_url": "https://example.test/scalp-data.json",
+            }
+
+            def response_for(request, *, age_ms: int = 0) -> BytesIO:
+                if request.full_url.split("?", 1)[0].endswith("scalp.html"):
+                    return BytesIO(b"<!doctype html><html>Trade3</html>")
+                generated = datetime.fromtimestamp(
+                    (now_ms - age_ms) / 1000, UTC
+                ).isoformat()
+                return BytesIO(json.dumps({
+                    "schema": "trade3-signal-dashboard-v1",
+                    "sourceStatus": "stale",
+                    "generatedAtUtc": generated,
+                }).encode())
+
+            with patch(
+                "crypto_forecaster.ops_monitor.urlopen",
+                side_effect=lambda request, timeout: response_for(request),
+            ):
+                incidents = scalp_health_incidents(
+                    settings, evaluated_at_ms=now_ms, **base
+                )
+            alert = next(row for row in incidents if row["code"] == "public_dashboard")
+            self.assertIn("kaynak veri stale", alert["message"])
 
     def test_no_candidate_is_normal_and_never_pages_owner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
