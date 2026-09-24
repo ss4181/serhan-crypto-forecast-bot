@@ -12,6 +12,9 @@ from .config import Settings
 from .persistence import atomic_write_json
 
 ALERT_REPEAT_MS = 6 * 60 * 60 * 1000
+# The public Pages workflow runs every three hours. Allow one additional hour
+# for GitHub scheduling, queueing, and deployment before calling it stale.
+PUBLIC_DASHBOARD_MAX_AGE_MS = 4 * 60 * 60 * 1000
 
 
 def scalp_health_incidents(
@@ -84,10 +87,16 @@ def scalp_health_incidents(
                 published = json.loads(response.read(8 * 1024 * 1024).decode("utf-8"))
             generated = datetime.fromisoformat(str(published["generatedAtUtc"]))
             published_age = evaluated_at_ms - int(generated.timestamp() * 1000)
-            if published_age < -60_000 or published_age > 30 * 60_000:
+            if published_age < -60_000 or published_age > PUBLIC_DASHBOARD_MAX_AGE_MS:
                 problems["public_dashboard"] = f"GitHub Pages dashboard verisi eski ({max(0, published_age) // 60_000} dk)."
+            page_url = dashboard_url.rsplit("/", 1)[0] + "/scalp.html"
+            page_request = Request(page_url, headers={"User-Agent": "trade3-health/1.0"})
+            with urlopen(page_request, timeout=3.0) as response:
+                page_html = response.read(512 * 1024).decode("utf-8")
+            if not page_html.strip():
+                problems["public_dashboard"] = "GitHub Pages pano sayfası boş yayınlandı."
         except (OSError, ValueError, KeyError, TypeError, UnicodeError):
-            problems["public_dashboard"] = "GitHub Pages dashboard verisi okunamadı; yayın/Actions durumunu kontrol edin."
+            problems["public_dashboard"] = "GitHub Pages pano sayfası/verisi okunamadı; yayın/Actions durumunu kontrol edin."
 
     due: list[dict[str, str]] = []
     for code, message in problems.items():
