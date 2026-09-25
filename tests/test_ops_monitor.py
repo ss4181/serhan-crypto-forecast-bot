@@ -14,7 +14,7 @@ from crypto_forecaster.ops_monitor import scalp_health_incidents
 
 
 class OpsMonitorTests(unittest.TestCase):
-    def test_public_dashboard_alarm_allows_one_missed_hourly_publish(self) -> None:
+    def test_public_dashboard_alarm_allows_delayed_15_minute_publishes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             settings = Settings(
@@ -55,7 +55,7 @@ class OpsMonitorTests(unittest.TestCase):
             with patch(
                 "crypto_forecaster.ops_monitor.urlopen",
                 side_effect=lambda request, timeout: response_for(
-                    request, age_ms=1 * 60 * 60_000 + 59 * 60_000
+                    request, age_ms=59 * 60_000
                 ),
             ):
                 incidents = scalp_health_incidents(
@@ -69,7 +69,7 @@ class OpsMonitorTests(unittest.TestCase):
             with patch(
                 "crypto_forecaster.ops_monitor.urlopen",
                 side_effect=lambda request, timeout: response_for(
-                    request, age_ms=2 * 60 * 60_000 + 1
+                    request, age_ms=60 * 60_000 + 1
                 ),
             ):
                 incidents = scalp_health_incidents(

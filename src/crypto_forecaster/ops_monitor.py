@@ -12,9 +12,9 @@ from .config import Settings
 from .persistence import atomic_write_json
 
 ALERT_REPEAT_MS = 6 * 60 * 60 * 1000
-# Pages is published hourly. Allow one missed run plus a short scheduling/deploy
-# delay, but detect a broken publisher well before stale data spans a session.
-PUBLIC_DASHBOARD_MAX_AGE_MS = 2 * 60 * 60 * 1000
+# Pages is published every 15 minutes. Allow several missed/delayed runs, then
+# alert promptly rather than letting old data pass as current for hours.
+PUBLIC_DASHBOARD_MAX_AGE_MS = 60 * 60 * 1000
 
 
 def scalp_health_incidents(

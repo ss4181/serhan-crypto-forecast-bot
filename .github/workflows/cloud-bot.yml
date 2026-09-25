@@ -11,9 +11,9 @@ on:
       - "run.py"
       - "tests/dashboard_ui.cjs"
   schedule:
-    # Two offset runs per hour provide a second chance if GitHub drops or delays
-    # one scheduled event; avoid :00, a documented Actions high-load minute.
-    - cron: "17,47 * * * *"
+    # Four offset runs per hour reduce the impact of GitHub delaying/dropping
+    # an event; avoid :00, a documented Actions high-load minute.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       force_research:
