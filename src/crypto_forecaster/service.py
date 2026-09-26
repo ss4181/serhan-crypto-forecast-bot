@@ -937,6 +937,7 @@ def serve_forever(
                         )
                         scalp_notification_report, safety_reason = apply_scalp_notification_safety_gates(
                             scalp_notification_report, settings,
+                            ledger=scalp_ledger,
                             now_ms=int(scalp_now.timestamp() * 1000),
                         )
                         if safety_reason:
@@ -992,6 +993,7 @@ def serve_forever(
                             if scalp_delivery.status in {"SENT", "PARTIAL"}:
                                 record_successful_scalp_delivery(
                                     settings, scalp_notification_report,
+                                    ledger=scalp_ledger,
                                     sent_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
                                 )
                             tracked = record_scalp_target_setups(

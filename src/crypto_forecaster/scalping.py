@@ -1006,6 +1006,7 @@ def apply_scalp_notification_safety_gates(
     report: ScalpScanReport,
     settings: Settings,
     *,
+    ledger: Iterable[dict[str, Any]],
     now_ms: int | None = None,
 ) -> tuple[ScalpScanReport, str | None]:
     """Apply manual kill switch, paper-risk caps and delivered-signal cooldown."""
@@ -1044,8 +1045,9 @@ def apply_scalp_notification_safety_gates(
         grouped.setdefault(item.perpetual_symbol, []).append(item)
     allowed: set[str] = set()
     cooldown_ms = settings.scalp_same_direction_cooldown_minutes * 60_000
+    ledger_rows = tuple(ledger)
     for symbol, items in grouped.items():
-        direction = scalp_setup_direction(items)
+        direction, _ = scalp_setup_direction(items, ledger_rows)
         previous = recent.get(symbol, {}) if isinstance(recent, dict) else {}
         previous_ms = _safe_int(previous.get("sent_at_ms")) if isinstance(previous, dict) else 0
         previous_score = _finite_value(previous.get("score")) if isinstance(previous, dict) else None
@@ -1068,6 +1070,7 @@ def record_successful_scalp_delivery(
     settings: Settings,
     report: ScalpScanReport,
     *,
+    ledger: Iterable[dict[str, Any]],
     sent_at_ms: int | None = None,
 ) -> None:
     """Persist repeat-control state only after Telegram confirms a delivery."""
@@ -1083,9 +1086,11 @@ def record_successful_scalp_delivery(
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in report.observations:
         grouped.setdefault(item.perpetual_symbol, []).append(item)
+    ledger_rows = tuple(ledger)
     for symbol, items in grouped.items():
+        direction, _ = scalp_setup_direction(items, ledger_rows)
         symbols[symbol] = {
-            "direction": scalp_setup_direction(items),
+            "direction": direction,
             "score": max(item.score for item in items),
             "sent_at_ms": current,
         }

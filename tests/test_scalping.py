@@ -947,20 +947,51 @@ class DigestTests(unittest.TestCase):
             for family in ("B1", "F3")
         )
         report = ScalpScanReport(load_trade1_universe().version, 89, 89, 0, (), items, START_MS)
-        with tempfile.TemporaryDirectory() as directory, patch(
-            "crypto_forecaster.scalping.scalp_setup_direction", return_value="YUKARI"
-        ):
+        rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": 40.0,
+                "net_bps": 28.0,
+            }
+            for family in ("B1", "F3")
+            for horizon in (15, 30, 60)
+        ]
+        with tempfile.TemporaryDirectory() as directory:
             settings = Settings(scalp_state_dir=Path(directory))
-            first, reason = apply_scalp_notification_safety_gates(report, settings, now_ms=START_MS)
+            first, reason = apply_scalp_notification_safety_gates(
+                report, settings, ledger=iter(rows), now_ms=START_MS
+            )
             self.assertEqual(first.observations, items)
             self.assertIsNone(reason)
-            record_successful_scalp_delivery(settings, first, sent_at_ms=START_MS)
-            repeated, reason = apply_scalp_notification_safety_gates(report, settings, now_ms=START_MS + 5 * 60_000)
+            record_successful_scalp_delivery(
+                settings, first, ledger=iter(rows), sent_at_ms=START_MS
+            )
+            saved = json.loads((Path(directory) / "delivery-cooldowns.json").read_text())
+            self.assertEqual(saved["symbols"][items[0].perpetual_symbol]["direction"], "YUKARI")
+            repeated, reason = apply_scalp_notification_safety_gates(
+                report, settings, ledger=rows, now_ms=START_MS + 5 * 60_000
+            )
             self.assertEqual(repeated.observations, ())
             self.assertEqual(reason, "cooldown")
             stronger = replace(report, observations=tuple(replace(item, score=3.6) for item in items))
-            allowed, reason = apply_scalp_notification_safety_gates(stronger, settings, now_ms=START_MS + 5 * 60_000)
+            allowed, reason = apply_scalp_notification_safety_gates(
+                stronger, settings, ledger=rows, now_ms=START_MS + 5 * 60_000
+            )
             self.assertEqual(len(allowed.observations), 2)
+            self.assertIsNone(reason)
+            reversed_rows = [dict(row, gross_bps=-40.0, net_bps=-52.0) for row in rows]
+            opposite, reason = apply_scalp_notification_safety_gates(
+                report, settings, ledger=reversed_rows, now_ms=START_MS + 5 * 60_000
+            )
+            self.assertEqual(opposite.observations, items)
+            self.assertIsNone(reason)
+            expired, reason = apply_scalp_notification_safety_gates(
+                report, settings, ledger=rows, now_ms=START_MS + 61 * 60_000
+            )
+            self.assertEqual(expired.observations, items)
             self.assertIsNone(reason)
 
     def test_muted_setup_still_enters_shadow_target_ledger(self) -> None:
