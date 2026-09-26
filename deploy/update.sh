@@ -91,6 +91,13 @@ chown -R "$BOT_USER":"$BOT_USER" "$APP_DIR"
 # the copy under /opt and systemd would continue running the old command.
 install -m 644 "$SOURCE_DIR/deploy/crypto-forecaster.service" \
   "/etc/systemd/system/crypto-forecaster.service"
+# A dedicated, root-only timer asks GitHub Actions to rebuild the public Pages
+# dashboard.  Install it with the release, but do not activate it unless its
+# fine-grained GitHub token is already provisioned on this host.
+install -m 644 "$SOURCE_DIR/deploy/trade3-pages-dispatch.service" \
+  "/etc/systemd/system/trade3-pages-dispatch.service"
+install -m 644 "$SOURCE_DIR/deploy/trade3-pages-dispatch.timer" \
+  "/etc/systemd/system/trade3-pages-dispatch.timer"
 # Membership state contains Telegram identifiers.  Older releases may have
 # created it with 0755/0644 defaults, so every update repairs those permissions
 # before the service starts.
@@ -104,6 +111,18 @@ done
 echo "==> Servis yeniden baslatiliyor"
 systemctl daemon-reload
 systemctl restart "$SERVICE"
+if [[ -s /etc/trade3-github-dispatch.env ]] && \
+   grep -q '^TRADE3_GITHUB_ACTIONS_TOKEN=.' /etc/trade3-github-dispatch.env; then
+  echo "==> GitHub Pages yenileme zamanlayicisi etkinlestiriliyor"
+  systemctl enable --now trade3-pages-dispatch.timer
+else
+  # Do not let an unconfigured timer generate repeated failures in the journal.
+  systemctl disable --now trade3-pages-dispatch.timer >/dev/null 2>&1 || true
+  echo "==> Pages zamanlayicisi pasif: /etc/trade3-github-dispatch.env icinde token yok"
+fi
 sleep 3
 systemctl --no-pager --lines=10 status "$SERVICE"
+if systemctl is-active --quiet trade3-pages-dispatch.timer; then
+  systemctl --no-pager --lines=5 status trade3-pages-dispatch.timer
+fi
 DEPLOY_SUCCESS=1

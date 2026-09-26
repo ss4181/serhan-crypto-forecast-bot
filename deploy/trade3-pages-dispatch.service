@@ -1,0 +1,37 @@
+[Unit]
+Description=Trigger Trade3 GitHub Pages dashboard publication
+Documentation=https://github.com/ss4181/serhan-crypto-forecast-bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/crypto-forecaster
+EnvironmentFile=/etc/trade3-github-dispatch.env
+ExecStart=/opt/crypto-forecaster/.venv/bin/python -m crypto_forecaster.pages_dispatch
+
+# The fine-grained token is available only to this one-shot service.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trade3-pages-dispatch

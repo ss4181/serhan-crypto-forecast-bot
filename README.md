@@ -335,9 +335,11 @@ mum verisi eksiksizse başarısız sayılır. Açık eski takipler de %5'i izler
 eski sinyallere geriye dönük %5 sonucu uydurulmaz.
 
 Dashboard %2/%3/%5 için dokunan, süresi dolan ve bekleyen sayılarını ayrı gösterir.
-Sayfa GitHub Pages yayınıyla yenilenir (mevcut program üç saatte bir); bot ise her
-tarama döngüsünde dokunuşları kontrol eder. Kısa ufuktaki yön yüzdeleri %2/%3/%5
-hedefe dokunma olasılığı değildir.
+Oracle sunucusundaki systemd zamanlayıcısı yapılandırıldıktan sonra sayfa 15
+dakikada bir GitHub Actions üzerinden yenilenir; Actions zamanlaması ayrıca 6
+saatte bir yedek tetikleyici olarak kalır. Bot her tarama döngüsünde dokunuşları
+kontrol eder. Kısa ufuktaki yön yüzdeleri %2/%3/%5 hedefe dokunma olasılığı
+değildir.
 
 Mesajdaki eski puan artık **ham güç** adıyla gösterilir; bir olasılık veya
 beklenen getiri değildir. Bot aile/rejim içindeki geçmiş ham güç dağılımını da
@@ -453,6 +455,22 @@ ekranında adı tam olarak `DASHBOARD_SSH_PRIVATE_KEY` olan secret'a yapıştır
 başarılı SSH aktarımında Oracle JSON'unu; anahtar eksik/erişilemez olduğunda
 mevcut bulut önbelleğini yayınlar. Sunucu ED25519 parmak izi workflow'da sabittir;
 beklenmedik bir host anahtarı veri aktarımını kapatır.
+
+GitHub Pages yenilemesini Oracle'dan 15 dakikada bir tetiklemek için GitHub'da
+`ss4181/serhan-crypto-forecast-bot` deposuna özel, yalnızca `Actions: Read and
+write` yetkili fine-grained token oluşturun. Tokenı sohbete, repoya veya shell
+komutuna düz metin olarak koymayın. Sunucuya bağlandıktan sonra şu komutla gizli
+girdi olarak kaydedin; dosya yalnız root tarafından okunabilir ve timer bu dosya
+yokken etkinleşmez:
+
+```bash
+sudo bash -c 'set -euo pipefail; umask 077; read -rsp "GitHub Actions token (paste hidden): " token; printf "\\n"; test -n "$token"; printf "TRADE3_GITHUB_ACTIONS_TOKEN=%s\\n" "$token" > /etc/trade3-github-dispatch.env; unset token; chown root:root /etc/trade3-github-dispatch.env; chmod 600 /etc/trade3-github-dispatch.env; systemctl daemon-reload; systemctl enable --now trade3-pages-dispatch.timer; systemctl start trade3-pages-dispatch.service; systemctl --no-pager status trade3-pages-dispatch.timer'
+```
+
+İlk tetikleme sonucunu `sudo journalctl -u trade3-pages-dispatch.service -n 20
+--no-pager` ile kontrol edin. Başarıda GitHub Actions'ta yeni bir `BTC ETH Cloud
+Bot` koşusu görünür. Tokenı iptal etmek için GitHub token ayarlarından revoke
+edin; yenisini üretip aynı komutu tekrar çalıştırın.
 
 Evreni ve spot→vadeli kontrat eşlemelerini ağsız doğrulama:
 
@@ -835,7 +853,7 @@ kaybolursa gönderilmiş bir uyarı ikinci kez gidebilir.
 
 ## Yedek olarak bulutta çalışma
 
-`.github/workflows/cloud-bot.yml` üç saatte bir çalışır ve **varsayılan olarak
+`.github/workflows/cloud-bot.yml` altı saatte bir yedek olarak çalışır ve **varsayılan olarak
 `standby`** rolündedir: araştırmayı ve paneli güncel tutar, mesaj göndermez.
 Sürekli açık sunucu yoksa `CRYPTO_BOT_ROLE` repository variable'ını `primary`
 yaparak bu iş akışını tek gönderici hâline getirebilirsiniz — o zaman tempo

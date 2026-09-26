@@ -11,9 +11,9 @@ on:
       - "run.py"
       - "tests/dashboard_ui.cjs"
   schedule:
-    # Four offset runs per hour reduce the impact of GitHub delaying/dropping
-    # an event; avoid :00, a documented Actions high-load minute.
-    - cron: "7,22,37,52 * * * *"
+    # Oracle's systemd timer is the primary 15-minute trigger. Keep a low-rate
+    # GitHub schedule as a fallback because scheduled events are best-effort.
+    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       force_research:

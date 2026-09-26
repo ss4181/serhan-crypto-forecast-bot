@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Trade3 GitHub Pages dashboard every 15 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00,15,30,45:00
+Persistent=true
+AccuracySec=30s
+RandomizedDelaySec=15s
+Unit=trade3-pages-dispatch.service
+
+[Install]
+WantedBy=timers.target
