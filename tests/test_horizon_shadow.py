@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 import tempfile
 import unittest
 from dataclasses import replace
@@ -274,3 +276,27 @@ class ShadowLifecycleTests(unittest.TestCase):
         self.assertIsNone(
             load_horizon_shadow_summary(self.settings)["arms"]["proposed"]["candidates"]
         )
+
+    def test_restricted_export_reads_only_public_aggregates(self):
+        self.run_scan()
+        root = self.settings.scalp_state_dir / "experiments" / VERSION
+        private = root / "summary.json"
+        public = root / "public-summary.json"
+        payload = json.loads(public.read_text(encoding="utf-8"))
+        self.assertNotIn("profileId", payload)
+        self.assertNotIn("lastScan", payload)
+        self.assertNotIn("filters", payload)
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(public.stat().st_mode), 0o644)
+        original_read = Path.read_text
+
+        def restricted_read(path, *args, **kwargs):
+            if path == private:
+                raise PermissionError("private research state")
+            return original_read(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", restricted_read):
+            exported = build_dashboard_payload(self.settings)["horizonShadow"]
+        self.assertEqual(exported["arms"]["proposed"]["candidates"], 1)
+        self.assertTrue(exported["dataHealthy"])

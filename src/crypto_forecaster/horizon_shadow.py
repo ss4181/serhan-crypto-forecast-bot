@@ -208,6 +208,11 @@ def run_horizon_shadow(
         },
     }
     atomic_write_json(root / "summary.json", summary)
+    # The restricted Pages SSH command runs as a different Unix user. Keep
+    # research/config files private; publish only the allow-listed aggregates.
+    public_path = root / "public-summary.json"
+    atomic_write_json(public_path, load_horizon_shadow_summary(settings))
+    public_path.chmod(0o644)
     return summary
 
 
@@ -317,7 +322,9 @@ def _number(value: Any) -> float | None:
 
 def load_horizon_shadow_summary(settings: Settings) -> dict[str, Any]:
     """Allow-list public aggregates; never export raw state or recipient data."""
-    source = _read(_root(settings) / "summary.json")
+    source = _read(_root(settings) / "summary.json") or _read(
+        _root(settings) / "public-summary.json"
+    )
     if source.get("version") != VERSION or source.get("mode") != "shadow":
         return {}
 
