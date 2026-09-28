@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .horizon_shadow import load_horizon_shadow_summary
 from .measurement import deadline_ms, measurement_summary
 from .outcomes import load_ledger, pending_dir
 from .persistence import atomic_write_text
@@ -435,6 +436,7 @@ def build_dashboard_payload(
         "sourceStatus": source_status,
         "latestSignalAtUtc": _milliseconds_to_utc_text(latest_signal_ms),
         "measurements": measurements,
+        "horizonShadow": load_horizon_shadow_summary(settings),
         "displayedCount": min(len(signals), limit),
         "historyLimitReached": not history_complete,
         "summary": {

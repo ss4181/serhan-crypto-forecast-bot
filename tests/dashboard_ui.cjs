@@ -36,6 +36,15 @@ async function main() {
   assert.notEqual(p.get('rows').children[0].children[11].textContent, '—');
   assert.equal(p.get('rows').children[2].children[3].textContent, '<script>bad</script>');
   assert.match(p.get('target-5').textContent, /1 dokundu/);
+  assert.match(p.get('horizon-shadow-status').textContent, /ilk kaydı bekleniyor/);
+  const shadowMetric = {rate:null, wins:0, resolved:0, pending:1, missing:0, meanNetBps:null};
+  const shadowArm = {candidates:1, targets:{2:shadowMetric,3:shadowMetric,5:shadowMetric}, bracket:shadowMetric, forward:{15:shadowMetric,30:shadowMetric,60:shadowMetric}};
+  const shadowPage = await page({...payload, horizonShadow:{version:'strategy-horizon-shadow-v1', mode:'shadow', enabled:true, startedAtMs:Date.now(), evaluatedAtMs:Date.now(), arms:{baseline:{...shadowArm,candidates:0}, proposed:shadowArm, additional:shadowArm}}});
+  assert.equal(shadowPage.get('horizon-shadow-rows').children.length, 3);
+  assert.equal(shadowPage.get('horizon-shadow-rows').children[1].children.length, 7);
+  assert.match(shadowPage.get('horizon-shadow-rows').children[2].children[2].textContent, /Bekleyen 1/);
+  assert.doesNotMatch(shadowPage.get('horizon-shadow-rows').children[2].children[2].textContent, /%0|%100/);
+  assert.match(shadowPage.get('horizon-shadow-status').textContent, /Sessiz ölçüm açık/);
   assert.equal(p.get('audience').value, 'all');
   assert.ok(p.get('direction').children.some(option => option.value === 'YUKARI'));
   assert.ok(p.get('regime').children.some(option => option.value === 'BULL'));

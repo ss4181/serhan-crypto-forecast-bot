@@ -851,6 +851,34 @@ Konteyner tercih ederseniz kökteki `Dockerfile` aynı işi yapar; `data`,
 `artifacts` ve `state` dizinlerini kalıcı volume olarak bağlayın — `state`
 kaybolursa gönderilmiş bir uyarı ikinci kez gidebilir.
 
+## Strateji ufku karşılaştırması (sessiz ileri-test)
+
+`CRYPTO_SCALP_HORIZON_SHADOW=true` (varsayılan) olduğunda ana sunucu, her yeni
+5m kapanışında iki aday politikasını aynı gözlem ve o anda sonuçlanmış aynı
+geçmişle karşılaştırır. Mevcut Telegram politikası değişmez. Yeni kuralda LONG
+stratejileri 60 dakika; BULL veya F2 içeren SHORT stratejileri 30 dakika, diğer
+SHORT stratejileri 60 dakika kullanır. Ufuklar geçmiş getiriye bakarak seçilmez.
+Ailelerin seçilen ufukta aynı yönü desteklemesi gerekir; iki zıt strateji de
+geçerse aday belirsiz sayılır. Diğer ufuklar ayrıca ölçülmeye devam eder.
+
+Her iki kol aynı skor, olasılık, net beklenti, likidite ve rejim eşiklerini
+kullanır. Bu deney **filtreyi geçen adayları** karşılaştırır; cooldown, ilk 5,
+eşzamanlı sınır ve Telegram teslimatını simüle etmez. Yeni kol hiçbir sinyal
+veya hedef bildirimi göndermez; otomatik olarak canlıya geçirilmez.
+
+Kayıtlar `state/scalp/experiments/strategy-horizon-shadow-v1/` altında tutulur;
+ana başarı karnesine veya model eğitimine karışmaz. Ayarlar değişirse ayrı bir
+ölçüm grubu başlar; önceki grubun açık sonuçları tamamlanır ve korunur. Aynı
+mum tekrar tarandığında karar değiştirilmez. Geçmiş bildirimlere geriye dönük
+yeni sonuç yazılmaz.
+
+Telegram **Durum / Bildirim Durumu** mevcut, yeni ve yalnız yeni kuralın
+eklediği aday sayısını gösterir. Panodaki **Ufuk karşılaştırması** bunların
+%2/%3/%5 dokunuşlarını, ilk hedef/stop sonucunu, ortalama net bps ve 15/30/60dk
+net-pozitif sonuçlarını ayrı gösterir. Oranlar yalnız takip süresi dolmuş,
+verisi eksiksiz örneklerden üretilir; n ve %95 Wilson aralığı verilir. Yeni
+adaylar için yeterli süre ve örnek birikmeden başarı artışı iddia edilmez.
+
 ## Yedek olarak bulutta çalışma
 
 `.github/workflows/cloud-bot.yml` altı saatte bir yedek olarak çalışır ve **varsayılan olarak

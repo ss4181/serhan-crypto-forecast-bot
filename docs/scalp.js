@@ -252,6 +252,34 @@ function rollingText(rolling) {
     return `${size}: ${number(x.count)} · ${pct(x.rate)}${ci}`;
   }).join(" | ");
 }
+function renderHorizonShadow(summary) {
+  const tbody = el("horizon-shadow-rows");
+  tbody.replaceChildren();
+  if (!summary || summary.version !== "strategy-horizon-shadow-v1" || summary.mode !== "shadow") {
+    el("horizon-shadow-status").textContent = "Sessiz karşılaştırmanın ilk kaydı bekleniyor.";
+    const row = document.createElement("tr");
+    cell(row, "Henüz ölçüm yok; başarı oranı hesaplanmadı.").colSpan = 7;
+    tbody.appendChild(row);
+    return;
+  }
+  const stale = num(summary.evaluatedAtMs) === null || Date.now() - summary.evaluatedAtMs > 30 * 60000;
+  el("horizon-shadow-status").textContent = `${summary.enabled === false ? "Duraklatıldı" : stale ? "Ölçüm kaydı eski" : summary.dataHealthy === false ? "Veri yetersiz; yeni aday kaydedilmedi" : "Sessiz ölçüm açık"} · Başlangıç ${date(summary.startedAtMs)} · Ölçüm ${date(summary.evaluatedAtMs)}`;
+  const metric = (value, withNet = false) => {
+    const x = value || {};
+    const ci = Array.isArray(x.wilson95) ? `\n%95 ${pct(x.wilson95[0])}–${pct(x.wilson95[1])}` : "";
+    return `${pct(x.rate)} · ${number(x.wins)}/${number(x.resolved)}${ci}\nBekleyen ${number(x.pending)} · Eksik ${number(x.missing)}${withNet ? `\nOrt. net ${number(x.meanNetBps)} bps` : ""}`;
+  };
+  for (const [key, label] of [["baseline", "Mevcut kural"], ["proposed", "Sabit strateji ufku"], ["additional", "Yalnız yeni kuralın ekledikleri"]]) {
+    const arm = (summary.arms || {})[key] || {};
+    const row = document.createElement("tr");
+    cell(row, label);
+    cell(row, number(arm.candidates));
+    for (const level of [2, 3, 5]) cell(row, metric((arm.targets || {})[level]));
+    cell(row, metric(arm.bracket, true));
+    cell(row, [15, 30, 60].map(h => `${h}dk: ${metric((arm.forward || {})[h], true)}`).join("\n\n"));
+    tbody.appendChild(row);
+  }
+}
 async function load() {
   try {
     const response = await fetch("scalp-data.json", {cache: "no-store"});
@@ -265,6 +293,7 @@ async function load() {
     setFilterOptions("strategy", "Tüm stratejiler", [...new Set(signals.map(x => x.strategy).filter(Boolean))].sort());
     setFilterOptions("policy", "Tüm politikalar", [...new Set(signals.map(x => x.policyVersion || "legacy"))].sort());
     measurements = data.measurements || null;
+    renderHorizonShadow(data.horizonShadow);
     const s = data.summary || {};
     el("updated").textContent = `Son yayın: ${date(data.generatedAtUtc)} • Son sinyal: ${date(data.latestSignalAtUtc)}`;
     const stale = !data.generatedAtUtc || !Number.isFinite(Date.parse(data.generatedAtUtc)) || Date.now() - Date.parse(data.generatedAtUtc) > 6 * 3600000;
@@ -295,6 +324,7 @@ async function load() {
     el("freshness").textContent = "Veri alınamadı";
     signals = [];
     measurements = null;
+    renderHorizonShadow(null);
     renderMeasurements();
     render();
     renderPivot();

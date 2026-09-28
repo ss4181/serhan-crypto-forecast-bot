@@ -55,6 +55,10 @@
   </section>
   <p class="measurement-note muted">Yukarıdaki dokunuşlar ufku henüz dolmamış sinyalleri de içerir; başarı oranı değildir.</p>
   <p class="measurement-note muted" id="quarantine-note" hidden></p>
+  <h2>Ufuk karşılaştırması · sessiz deney</h2>
+  <p class="measurement-note muted" id="horizon-shadow-status" aria-live="polite">Karşılaştırma yükleniyor…</p>
+  <div class="table-wrap"><table class="pivot-table"><thead><tr><th>Kural</th><th>Aday</th><th>%2 dokunuş</th><th>%3 dokunuş</th><th>%5 dokunuş</th><th>İlk hedef / stop · net</th><th>15 / 30 / 60 dk net pozitif</th></tr></thead><tbody id="horizon-shadow-rows"></tbody></table></div>
+  <p class="measurement-note muted">Mevcut kural üç ufukta uyum ister; yeni kural stratejinin sabit 30/60 dk ufkunu kullanır. “Yalnız yeni” ek adayların sonucudur. İki grubun eşikleri aynıdır. Bu bölüm başlangıçtan itibaren filtreyi geçen adayları karşılaştırır; yukarıdaki ve aşağıdaki tablo filtrelerinden etkilenmez. Cooldown, ilk 5 sınırı ve teslimat bu deneyin dışında kalır. Yeni kural Telegram sinyali göndermez, otomatik devreye alınmaz. Dokunuş oranlarında tam takip süresi dolmadan sonuç kullanılmaz; veri eksiğinde oran gösterilmez. %95 aralık coinler arası korelasyonu düzeltmez.</p>
   <label>İncelenen sinyaller
     <select aria-label="Bildirim kapsamı" id="audience"><option value="notified">Bildirim gönderilen</option><option value="muted">Sessiz izlenen</option><option value="all">Hepsi</option></select>
   </label>

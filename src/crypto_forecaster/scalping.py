@@ -59,6 +59,8 @@ SCALP_POLICY_VERSION = "trade3-scalp-regime-gates-v2"
 SCALP_TARGET_TOUCH_PERCENTS = (2.0, 3.0, 5.0)
 SCALP_SETTLEMENT_GRACE_DAYS = 2
 SCALP_BACKTEST_HORIZONS = (15, 30, 60)
+CONSENSUS_DIRECTION_POLICY = "consensus"
+STRATEGY_HORIZON_DIRECTION_POLICY = "strategy_horizon"
 FAMILY_LABELS = {
     "F1": "hacim momentumu",
     "F2": "kaskad tepki",
@@ -824,6 +826,7 @@ def filter_scalp_notification_report(
     maximum_bar_volatility_bps: float | None = None,
     live_families: Iterable[str] | None = None,
     diagnostics: dict[str, int] | None = None,
+    direction_policy: str = CONSENSUS_DIRECTION_POLICY,
 ) -> ScalpScanReport:
     """Keep only exact-direction, high-score multi-family setups for Telegram.
 
@@ -955,7 +958,7 @@ def filter_scalp_notification_report(
         ):
             count("no_setup")
             continue
-        assessment = scalp_setup_assessment(items, ledger_rows)
+        assessment = scalp_setup_assessment(items, ledger_rows, direction_policy=direction_policy)
         if assessment.direction not in {"YUKARI", "AŞAĞI"}:
             count("direction_unclear")
             continue
@@ -1169,6 +1172,7 @@ def record_scalp_target_setups(
     ledger: Iterable[dict[str, Any]] = (),
     notification_sent: bool = False,
     milestone_horizon_hours: int = 24,
+    direction_policy: str = CONSENSUS_DIRECTION_POLICY,
 ) -> int:
     """Park directional setups for shadow +/−2% and +/−3% milestones.
 
@@ -1193,11 +1197,11 @@ def record_scalp_target_setups(
             or len({item.family for item in items}) < 2
         ):
             continue
-        direction, horizon_directions = scalp_setup_direction(items, ledger_rows)
+        direction, horizon_directions = scalp_setup_direction(items, ledger_rows, policy=direction_policy)
         if direction not in {"YUKARI", "AŞAĞI"}:
             continue
         aggregate = scalp_setup_forecast_stats(items, ledger_rows)
-        assessment = scalp_setup_assessment(items, ledger_rows)
+        assessment = scalp_setup_assessment(items, ledger_rows, direction_policy=direction_policy)
         source = items[0]
         setup_id = _scalp_setup_id(source, manifest.version)
         path = directory / f"{setup_id}.json"
@@ -1458,6 +1462,7 @@ def record_scalp_bracket_setups(
     ledger: Iterable[dict[str, Any]] = (),
     notification_sent: bool = False,
     horizon_minutes: int = 60,
+    direction_policy: str = CONSENSUS_DIRECTION_POLICY,
 ) -> int:
     """Park exact-direction setups for a realistic first-touch TP/SL test."""
     shown = report.top(top_k)
@@ -1474,7 +1479,7 @@ def record_scalp_bracket_setups(
             or len({item.family for item in items}) < 2
         ):
             continue
-        assessment = scalp_setup_assessment(items, ledger_rows)
+        assessment = scalp_setup_assessment(items, ledger_rows, direction_policy=direction_policy)
         if assessment.direction not in {"YUKARI", "AŞAĞI"}:
             continue
         source = items[0]
@@ -1541,6 +1546,7 @@ def record_scalp_setup_forward_setups(
     top_k: int,
     ledger: Iterable[dict[str, Any]] = (),
     notification_sent: bool = False,
+    direction_policy: str = CONSENSUS_DIRECTION_POLICY,
 ) -> int:
     """Freeze the causal setup direction for 15/30/60m forward evaluation."""
     grouped: dict[str, list[ScalpObservation]] = {}
@@ -1560,7 +1566,7 @@ def record_scalp_setup_forward_setups(
             item.alert_tier == "KURULUM" for item in items
         ):
             continue
-        assessment = scalp_setup_assessment(items, historical)
+        assessment = scalp_setup_assessment(items, historical, direction_policy=direction_policy)
         if assessment.direction not in {"YUKARI", "AŞAĞI"}:
             continue
         source = items[0]
@@ -2047,6 +2053,8 @@ def scalp_forecast_stats(
 def scalp_setup_direction(
     items: Iterable[ScalpObservation],
     rows: Iterable[dict[str, Any]],
+    *,
+    policy: str = CONSENSUS_DIRECTION_POLICY,
 ) -> tuple[str, tuple[str, ...]]:
     """Summarise a setup's empirical direction without inventing a model.
 
@@ -2054,6 +2062,8 @@ def scalp_setup_direction(
     is called directional only when its weighted up probability and weighted
     median net move agree; otherwise it remains explicitly mixed.
     """
+    if policy not in {CONSENSUS_DIRECTION_POLICY, STRATEGY_HORIZON_DIRECTION_POLICY}:
+        raise ValueError("Bilinmeyen scalp yon politikasi")
     item_rows = tuple(rows)
     item_tuple = tuple(items)
     family_stats = [scalp_forecast_stats(item, item_rows) for item in item_tuple]
@@ -2078,6 +2088,22 @@ def scalp_setup_direction(
             horizon_labels.append("AŞAĞI")
         else:
             horizon_labels.append("KARIŞIK")
+    if policy == STRATEGY_HORIZON_DIRECTION_POLICY:
+        # Each possible playbook declares its horizon before its statistics are
+        # inspected. Never choose whichever horizon has the best realised edge.
+        supported: list[str] = []
+        for direction in ("YUKARI", "AŞAĞI"):
+            horizon = STRATEGY_HORIZONS[_strategy_code(item_tuple, direction)]
+            if family_stats and all(
+                horizon in stats and _classify_bt_direction(stats[horizon]) == direction
+                for stats in family_stats
+            ):
+                supported.append(direction)
+        if len(supported) == 1:
+            return supported[0], tuple(horizon_labels)
+        # Opposing playbooks can both qualify at different horizons. Keep that
+        # ambiguity instead of selecting one after comparing their returns.
+        return ("KARIŞIK" if any(family_stats) else "VERI YOK"), tuple(horizon_labels)
     valid = [label for label in horizon_labels if label != "VERI YOK"]
     if not valid:
         return "VERI YOK", tuple(horizon_labels)
@@ -2118,6 +2144,8 @@ def scalp_setup_forecast_stats(
 def scalp_setup_assessment(
     items: Iterable[ScalpObservation],
     rows: Iterable[dict[str, Any]],
+    *,
+    direction_policy: str = CONSENSUS_DIRECTION_POLICY,
 ) -> ScalpSetupAssessment:
     """Turn settled family observations into one comparable setup assessment.
 
@@ -2127,7 +2155,7 @@ def scalp_setup_assessment(
     """
     item_tuple = tuple(items)
     row_tuple = tuple(row for row in rows if isinstance(row, dict))
-    direction, _ = scalp_setup_direction(item_tuple, row_tuple)
+    direction, _ = scalp_setup_direction(item_tuple, row_tuple, policy=direction_policy)
     strategy_code = _strategy_code(item_tuple, direction)
     strategy_label = STRATEGY_LABELS.get(strategy_code, strategy_code)
     if direction not in {"YUKARI", "AŞAĞI"}:

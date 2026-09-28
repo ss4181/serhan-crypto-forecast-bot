@@ -121,6 +121,9 @@ class Settings:
     scalp_top_k: int = field(
         default_factory=lambda: _environment_int("CRYPTO_SCALP_TOP_K", 5, 1, 10)
     )
+    scalp_horizon_shadow_enabled: bool = field(
+        default_factory=lambda: _environment_bool("CRYPTO_SCALP_HORIZON_SHADOW", True)
+    )
     # Telegram only: keep every observation in the shadow ledger, but notify
     # only high-scoring, multi-family setups whose settled BT direction is exact.
     scalp_minimum_alert_score: float = field(

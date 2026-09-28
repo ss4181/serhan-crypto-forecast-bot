@@ -37,6 +37,7 @@ from .data import (
 )
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
+from .horizon_shadow import format_horizon_shadow_status, run_horizon_shadow
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
 from .notification_status import format_notification_status, write_notification_status
 from .openinterest import OpenInterestError, update_open_interest
@@ -585,6 +586,7 @@ def format_runtime_status(
         return "\n\n".join((
             format_regime_status(settings, now=now),
             format_notification_status(settings, now=now), text,
+            format_horizon_shadow_status(settings, now=now),
         ))
     return text
 
@@ -636,9 +638,10 @@ def answer_commands(
         explanation_text=format_explanations,
         symbol_forecast_text=lambda symbol: _coin_query_reply(settings, symbol),
         regime_text=lambda: format_regime_status(settings, now=current),
-        notification_status_text=lambda: format_notification_status(
-            settings, now=current
-        ),
+        notification_status_text=lambda: "\n\n".join((
+            format_notification_status(settings, now=current),
+            format_horizon_shadow_status(settings, now=current),
+        )),
         notifier=notifier,
         now=current,
     )
@@ -1051,6 +1054,22 @@ def serve_forever(
                                     f"Scalp {event['spot_symbol']} dinamik hedef: "
                                     f"{delivery.status}{_detail_suffix(delivery)}"
                                 )
+                    # Run the isolated comparison after live delivery so its
+                    # calculations cannot delay that candle's Telegram alert.
+                    if is_primary() and settings.scalp_horizon_shadow_enabled:
+                        try:
+                            shadow = run_horizon_shadow(
+                                settings, scalp_report, manifest=scalp_manifest,
+                                ledger=load_scalp_ledger(settings.scalp_state_dir), now=scalp_now,
+                            )
+                            counts = shadow.get("lastScan", {})
+                            progress(
+                                "Scalp ufuk shadow: "
+                                f"mevcut {counts.get('baseline', {}).get('eligible', 0)}, "
+                                f"yeni {counts.get('proposed', {}).get('eligible', 0)} uygun; sessiz olcum"
+                            )
+                        except (OSError, RuntimeError, TypeError, ValueError) as error:
+                            progress(f"Scalp ufuk shadow hatasi: {error}")
                     try:
                         write_dashboard_payload(
                             settings,
