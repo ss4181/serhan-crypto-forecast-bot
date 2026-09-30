@@ -129,6 +129,9 @@ class Settings:
     long_scout_enabled: bool = field(
         default_factory=lambda: _environment_bool("CRYPTO_LONG_SCOUT", True)
     )
+    long_scout_alerts_enabled: bool = field(
+        default_factory=lambda: _environment_bool("CRYPTO_LONG_SCOUT_OWNER_ALERTS", False)
+    )
     long_scout_universe_limit: int = field(
         default_factory=lambda: _environment_int("CRYPTO_LONG_SCOUT_UNIVERSE_LIMIT", 80, 10, 200)
     )

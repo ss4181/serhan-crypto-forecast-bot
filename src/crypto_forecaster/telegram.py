@@ -220,6 +220,43 @@ class TelegramNotifier:
             self._owner_id, text, reply_markup=telegram_menu_keyboard(is_owner=True)
         )
 
+    def deliver_owner_once(
+        self, *, signal_id: str, text: str, state_dir: Path
+    ) -> TelegramDelivery:
+        """Private, owner-only delivery, independent of channel/member settings."""
+        if not is_primary():
+            return TelegramDelivery(status="STANDBY", message_id=None)
+        if not _SIGNAL_PATTERN.fullmatch(signal_id):
+            raise ValueError("Gecersiz sinyal kimligi")
+        if self._owner_id is None:
+            raise TelegramError("Sahip kimligi olmadan ozel bildirim gonderilemez")
+        _validate_text(text)
+        return self._deliver_single_once(
+            signal_id=signal_id,
+            text=text,
+            state_dir=state_dir / "owner" / str(self._owner_id),
+            sender=lambda: self.send_owner_alert(text),
+        )
+
+    def owner_delivery_receipt(self, signal_id: str, state_dir: Path) -> dict | None:
+        """Proof of delivery to THIS owner; no subscriber/channel fallback."""
+        if not _SIGNAL_PATTERN.fullmatch(signal_id) or self._owner_id is None:
+            return None
+        path = state_dir / "owner" / str(self._owner_id) / f"{signal_id}.receipt.json"
+        if not path.exists():
+            return None
+        payload = _read_state(path)
+        if (
+            payload.get("schema") != "telegram-receipt-v1"
+            or payload.get("signal_id") != signal_id
+            or type(payload.get("message_id")) is not int
+            or payload["message_id"] <= 0
+            or type(payload.get("delivered_at_ms")) is not int
+            or payload["delivered_at_ms"] <= 0
+        ):
+            raise TelegramError("Sahip teslimat makbuzu dogrulanamadi")
+        return payload
+
     def send_message(
         self, text: str, *, reply_markup: dict[str, object] | None = None
     ) -> int:
@@ -521,6 +558,7 @@ class TelegramNotifier:
                         "schema": "telegram-receipt-v1",
                         "signal_id": signal_id,
                         "message_id": message_id,
+                        "delivered_at_ms": int(time.time() * 1000),
                     },
                     handle,
                 )

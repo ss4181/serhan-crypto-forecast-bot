@@ -57,6 +57,53 @@ class FakeResponse:
 
 
 class TelegramTests(unittest.TestCase):
+    @patch.dict(os.environ, {**CREDENTIALS, "CRYPTO_TELEGRAM_OWNER_ID": "500100"}, clear=False)
+    def test_owner_delivery_ignores_channel_and_standby_never_sends(self):
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(chat_id=500100)
+
+        with tempfile.TemporaryDirectory() as directory:
+            sender = TelegramNotifier(opener=opener)
+            with patch.dict(os.environ, {"CRYPTO_BOT_ROLE": "standby"}):
+                result = sender.deliver_owner_once(
+                    signal_id="d" * 64, text="LONG test", state_dir=Path(directory)
+                )
+                self.assertEqual(result.status, "STANDBY")
+                self.assertFalse(requests)
+            sender.deliver_owner_once(
+                signal_id="d" * 64, text="LONG test", state_dir=Path(directory)
+            )
+            self.assertEqual([p["chat_id"] for p in requests], [500100])
+
+    @patch.dict(os.environ, DIRECT_CREDENTIALS, clear=False)
+    def test_owner_delivery_does_not_broadcast_and_has_timestamped_proof(self):
+        requests = []
+
+        def opener(request, timeout):
+            payload = json.loads(request.data.decode("utf-8"))
+            requests.append(payload)
+            return FakeResponse(chat_id=500100)
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            (state / "members.json").write_text(json.dumps({
+                "schema": "telegram-members-v1", "members": [{"id": 600100}]
+            }))
+            sender = TelegramNotifier(opener=opener, state_dir=state)
+            identifier = "c" * 64
+            first = sender.deliver_owner_once(signal_id=identifier, text="LONG test", state_dir=state)
+            second = sender.deliver_owner_once(signal_id=identifier, text="LONG test", state_dir=state)
+            self.assertEqual(first.status, "SENT")
+            self.assertEqual(second.status, "DEDUPLICATED")
+            self.assertEqual([p["chat_id"] for p in requests], [500100])
+            self.assertGreater(sender.owner_delivery_receipt(identifier, state)["delivered_at_ms"], 0)
+            with patch.dict(os.environ, {"CRYPTO_TELEGRAM_OWNER_ID": "700100"}):
+                changed = TelegramNotifier(opener=opener, state_dir=state)
+                self.assertIsNone(changed.owner_delivery_receipt(identifier, state))
+
     @patch.dict(os.environ, CREDENTIALS, clear=False)
     def test_inline_keyboard_is_sent_with_a_message(self) -> None:
         requests = []

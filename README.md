@@ -283,7 +283,7 @@ yalnız izin verilen piyasa özeti GitHub Pages için okunabilir tutulur.
 
 Telegram **🚀 LONG Radar** düğmesi veya `/longradar` adayları ve takibi gösterir;
 dashboard'daki ayrı bölüm yeni kontrat/teyit filtreleriyle okunur. Varsayılan
-sessiz deney otomatik işlem bildirimi veya model terfisi yapmaz. Tarama ayrı
+sessiz deney model terfisi yapmaz. Tarama ayrı
 işçide çalışır ve mum/Telegram döngüsünü bekletmez. Trade1'in kodu ve evreni
 değiştirilmez. Büyük yükseliş ya da “sonraki SHIB/DOGE” garantisi verilmez.
 
@@ -292,6 +292,22 @@ python run.py long-scout           # Veriyi yenile ve sessiz takibi güncelle
 python run.py long-scout --status  # Ağa çıkmadan mevcut radarı göster
 python research/long_discovery_study.py state/scalp/experiments/long-discovery-v1
 ```
+
+`CRYPTO_LONG_SCOUT_OWNER_ALERTS=true` yalnız primary sunucuda **sahibin özel
+sohbetine** deneysel LONG aday ve hedef dokunuş mesajlarını açar. Kanal/abonelere
+yayın yapmaz; varsayılanı kapalıdır. LA1 birikim adayları sessiz kalır; yerleşik
+boğa ve sağlıklı güncel veride yalnız LB1/LP1, mevcut minimum skor eşiğiyle
+bildirilir. Sinyal ve kaynak saatlik kapanış 15 dakikadan eskiyse ilk bildirim
+gönderilmez; servis başlamadan önceki adaylar geriye dönük yayımlanmaz. Aynı
+coin için stratejiden bağımsız 24 saat bildirim aralığı vardır.
+
+Yüzde hedefleri ilk mesajdaki **saatlik referans fiyatına** göre hesaplanır.
+Yalnız aynı sahibin doğrulanmış ilk Telegram teslimatından sonraki tam 5m
+mumlarıyla %2/%3/%5/%10/%20 dokunuşları izlenir; her hedef bir kez bildirilir.
+Belirsiz/reddedilmiş ilk gönderim hedef mesajı üretmez. Stop sonrası ve aynı
+mumda sırası bilinmeyen dokunuşlar açıkça etiketlenir; gerçekleşmiş işlem kârı
+diye sunulmaz. Bu bildirim ölçümü, paneldeki sonraki 5m açılışından başlayan
+paper giriş hesabından ayrıdır. 1m tetikleyici henüz yoktur; hiçbir emir verilmez.
 
 Son komut geçmiş saatlik pilotu yerel `artifacts/research/` klasörüne yazar;
 bugünün evreni ve saatlik giriş/sonuç verisiyle yapılan keşif çalışmasıdır.

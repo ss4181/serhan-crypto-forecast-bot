@@ -1,8 +1,8 @@
 """Binance-only LONG discovery and prospective paper tracking, isolated from scalp.
 
 Rules are fixed before outcomes: accumulation, volume breakout, trend retest.
-Scores rank evidence, never represent probabilities. No message delivery,
-orders, learned-model promotion, or modifications to another project's universe.
+Scores rank evidence, never represent probabilities. Optional private owner
+alerts are experimental; no orders, model promotion or other-project writes.
 """
 
 from __future__ import annotations
@@ -357,7 +357,9 @@ def paper_outcome(record: dict, bars: pd.DataFrame, cutoff_ms: int) -> dict:
     }
     if future.empty or int(future.iloc[0]["open_time_ms"]) != start:
         return result
-    entry = float(future.iloc[0]["open"])
+    # Private alerts measure targets against their explicitly reported price;
+    # ordinary paper records retain next-open entry. Never rewrite market bars.
+    entry = float(record.get("referenceEntryPrice", future.iloc[0]["open"]))
     highs = (future["high"].to_numpy() / entry - 1) * 100
     lows = (1 - future["low"].to_numpy() / entry) * 100
     stops = np.flatnonzero(lows >= record["stopPct"] - 1e-9)
@@ -456,6 +458,7 @@ def _publish(settings: Settings, state: dict, now_ms: int) -> dict:
         "mode": "shadow",
         "autoPromotion": False,
         "enabled": settings.long_scout_enabled,
+        "ownerAlertsEnabled": settings.long_scout_alerts_enabled,
         "evaluatedAtMs": now_ms,
         "scannedAtMs": state.get("scannedAtMs"),
         "regime": state.get("regime", {}),
@@ -510,6 +513,16 @@ def settle_paper(
             not r["outcome"].get("complete", False)
             and now_ms < r["entryOpenMs"] + 8 * DAY
         )
+        or (
+            r.get("ownerAlert")
+            and (
+                not r["ownerAlert"].get("outcome", {}).get("mature", False)
+                or (
+                    not r["ownerAlert"].get("outcome", {}).get("complete", False)
+                    and now_ms < r["ownerAlert"]["trackingStartMs"] + 8 * DAY
+                )
+            )
+        )
     ]
     for symbol in sorted({r["symbol"] for r in pending}):
         if stop is not None and stop.is_set():
@@ -526,6 +539,17 @@ def settle_paper(
             for record in pending:
                 if record["symbol"] == symbol:
                     record["outcome"] = paper_outcome(record, bars, now_ms)
+                    if record.get("ownerAlert"):
+                        alert = record["ownerAlert"]
+                        alert["outcome"] = paper_outcome(
+                            {
+                                **record,
+                                "entryOpenMs": alert["trackingStartMs"],
+                                "referenceEntryPrice": alert["referencePrice"],
+                            },
+                            bars,
+                            now_ms,
+                        )
         except (OSError, RuntimeError, ValueError) as error:
             state.setdefault("errors", {})[symbol] = type(error).__name__
             for record in pending:
@@ -538,6 +562,14 @@ def settle_paper(
                         "mature": True,
                         "complete": False,
                     }
+                if record["symbol"] == symbol and record.get("ownerAlert"):
+                    alert = record["ownerAlert"]
+                    if now_ms >= alert["trackingStartMs"] + 7 * DAY:
+                        alert["outcome"] = {
+                            **alert.get("outcome", {}),
+                            "mature": True,
+                            "complete": False,
+                        }
 
 
 def run_long_scout(
@@ -763,6 +795,7 @@ def load_long_scout_summary(settings: Settings) -> dict:
         "mode",
         "autoPromotion",
         "enabled",
+        "ownerAlertsEnabled",
         "evaluatedAtMs",
         "scannedAtMs",
         "regime",
@@ -803,6 +836,10 @@ def format_long_scout(settings: Settings, *, now: datetime | None = None) -> str
         "🚀 TRADE3 • LONG Radar",
         f"{label} • {'VERİ ESKİ' if stale else local_text(stamp, with_seconds=False)}",
         f"{summary.get('universeCount', 0)} piyasa • saatlik tarama • 7 gün takip",
+        "Özel deneysel bildirim: "
+        + (
+            "yalnız sahip için açık" if settings.long_scout_alerts_enabled else "kapalı"
+        ),
     ]
     for row in summary.get("watchlist", [])[:5]:
         lines.extend(
@@ -863,6 +900,22 @@ class LongScoutWorker:
         self.last_discovery_hour = -1
         self.last_settle_bar = -1
         self.cancel = Event()
+        self.started_at_ms = int(datetime.now(UTC).timestamp() * 1000)
+
+    def _run(self, *, discover: bool) -> dict:
+        summary = run_long_scout(self.settings, discover=discover, stop=self.cancel)
+        if self.settings.long_scout_alerts_enabled and not self.cancel.is_set():
+            from .long_notifications import deliver_long_notifications
+            from .telegram import TelegramError
+
+            try:
+                for event, status in deliver_long_notifications(
+                    self.settings, started_at_ms=self.started_at_ms
+                ):
+                    self.progress(f"LONG özel bildirim: {event}: {status}")
+            except (TelegramError, OSError, ValueError) as error:
+                self.progress(f"LONG özel bildirim hatası: {type(error).__name__}")
+        return summary
 
     def tick(self, now: datetime) -> None:
         if self.future is not None:
@@ -882,9 +935,7 @@ class LongScoutWorker:
         if bar == self.last_settle_bar:
             return
         discover = hour != self.last_discovery_hour
-        self.future = self.executor.submit(
-            run_long_scout, self.settings, discover=discover, stop=self.cancel
-        )
+        self.future = self.executor.submit(self._run, discover=discover)
         self.last_settle_bar = bar
         if discover:
             self.last_discovery_hour = hour
