@@ -838,7 +838,9 @@ def format_long_scout(settings: Settings, *, now: datetime | None = None) -> str
         f"{summary.get('universeCount', 0)} piyasa • saatlik tarama • 7 gün takip",
         "Özel deneysel bildirim: "
         + (
-            "yalnız sahip için açık" if settings.long_scout_alerts_enabled else "kapalı"
+            "yalnız sahip için açık"
+            if summary.get("ownerAlertsEnabled", settings.long_scout_alerts_enabled)
+            else "kapalı"
         ),
     ]
     for row in summary.get("watchlist", [])[:5]:

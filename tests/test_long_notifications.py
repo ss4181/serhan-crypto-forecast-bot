@@ -23,6 +23,7 @@ from crypto_forecaster.long_scout import (
     VERSION,
     _publish,
     _read,
+    format_long_scout,
     paper_outcome,
     profile,
     root,
@@ -50,6 +51,14 @@ class OwnerSender:
 
 
 class LongNotificationTests(unittest.TestCase):
+    def test_cli_status_reads_daemon_published_alert_flag(self):
+        _publish(self.settings, self.state, NOW)
+        text = format_long_scout(
+            replace(self.settings, long_scout_alerts_enabled=False),
+            now=datetime.fromtimestamp(NOW / 1000, UTC),
+        )
+        self.assertIn("yalnız sahip için açık", text)
+
     def test_settlement_keeps_alert_reference_separate_from_paper_entry(self):
         self.record["ownerAlert"] = {
             "deliveredAtMs": NOW,
