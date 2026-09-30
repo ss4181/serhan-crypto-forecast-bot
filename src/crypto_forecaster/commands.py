@@ -178,6 +178,7 @@ def poll_and_answer(
     symbol_forecast_text: Callable[[str], str] | None = None,
     regime_text: Callable[[], str] | None = None,
     notification_status_text: Callable[[], str] | None = None,
+    long_scout_text: Callable[[], str] | None = None,
     reply_markup: dict[str, object] | None = None,
     notifier: TelegramNotifier | None = None,
     now: datetime | None = None,
@@ -330,6 +331,7 @@ def poll_and_answer(
                     explanation_text=explanation_text or format_explanations,
                     regime_text=regime_text,
                     notification_status_text=notification_status_text,
+                    long_scout_text=long_scout_text,
                 )
             except Exception as error:  # a bad answer must not kill the cycle
                 failed += 1
@@ -421,6 +423,7 @@ def poll_and_answer(
                 symbol_forecast_text=symbol_forecast_text,
                 regime_text=regime_text,
                 notification_status_text=notification_status_text,
+                long_scout_text=long_scout_text,
                 now=current,
             )
         except Exception as error:  # a bad answer must not kill the cycle
@@ -617,6 +620,7 @@ def _answer(
     symbol_forecast_text: Callable[[str], str] | None = None,
     regime_text: Callable[[], str] | None = None,
     notification_status_text: Callable[[], str] | None = None,
+    long_scout_text: Callable[[], str] | None = None,
     now: datetime,
 ) -> str | None:
     match = _COMMAND.match(text.strip())
@@ -639,6 +643,8 @@ def _answer(
         return status_text()
     if command in ("rejim", "regime"):
         return regime_text() if regime_text is not None else status_text()
+    if command in ("longradar", "kesif"):
+        return long_scout_text() if long_scout_text is not None else "🚀 LONG Radar henüz hazırlanıyor."
     if command in ("bildirim", "notifications"):
         return (
             notification_status_text()
@@ -704,6 +710,7 @@ def _answer_callback(
     explanation_text: Callable[[], str],
     regime_text: Callable[[], str] | None = None,
     notification_status_text: Callable[[], str] | None = None,
+    long_scout_text: Callable[[], str] | None = None,
 ) -> str | None:
     if data in ("start", "help"):
         return _help_text(is_owner=sender_id == owner)
@@ -715,6 +722,8 @@ def _answer_callback(
         return "🔎 Sorgulamak istediğin coin sembolünü gönder. Örnek: ALLOUSDT (veya yalnızca ALLO)."
     if data == "regime":
         return regime_text() if regime_text is not None else status_text()
+    if data == "long_scout":
+        return long_scout_text() if long_scout_text is not None else "🚀 LONG Radar henüz hazırlanıyor."
     if data == "notification_status":
         return (
             notification_status_text()
@@ -804,6 +813,7 @@ def _help_text(*, is_owner: bool) -> str:
         "📊 /durum — alti modelin su anki durumu",
         "🔎 /coin <sembol> — coine özel 15dk/1s/4s/1g tahmini (örn. /coin ALLOUSDT); sembolü tek başına da gönderebilirsin",
         "🧭 /rejim — teyitli piyasa rejimi, genişlik ve trend bilgisi",
+        "🚀 /longradar — LONG potansiyeli, yeni listelemeler ve 7 günlük sessiz takip",
         "🔔 /bildirim — son scalp taraması ve bildirim filtresi durumu",
         "📈 /performans [gun] — gonderilen sinyallerin gercek sonucu (varsayilan 30 gun)",
         "🧪 /scalpkarne [gun] — scalp ileri-test sonuclari (varsayilan 30 gun)",

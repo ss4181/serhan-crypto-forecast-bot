@@ -20,6 +20,7 @@ const localDateKey = value => {
 };
 let signals = [];
 let measurements = null;
+let longScout = null;
 const canonicalStatus = status => ({HEDEF: "TARGET", SURE: "TIME_EXIT", DATA_MISSING: "VERİ EKSİK"}[status] || status);
 const statusText = status => ({TARGET: "HEDEF ÖNCE", HEDEF: "HEDEF ÖNCE", TIME_EXIT: "SÜRE SONU", SURE: "SÜRE SONU", DATA_MISSING: "VERİ EKSİK", DIRECTION_HIT: "YÖN DOĞRU", DIRECTION_MISS: "YÖN YANLIŞ"}[status] || status);
 function cell(row, text, className = "") {
@@ -280,6 +281,60 @@ function renderHorizonShadow(summary) {
     tbody.appendChild(row);
   }
 }
+function renderLongScout(summary = longScout) {
+  longScout = summary;
+  const watch = el("long-scout-watch"), tracked = el("long-scout-tracked");
+  watch.replaceChildren(); tracked.replaceChildren();
+  if (!summary || summary.version !== "long-discovery-v1" || summary.mode !== "shadow") {
+    el("long-scout-status").textContent = "LONG keşfinin ilk taraması bekleniyor.";
+    el("long-scout-performance").textContent = "Henüz tamamlanmış sonuç yok.";
+    for (const target of [watch, tracked]) {
+      const row = document.createElement("tr");
+      cell(row, "Keşif/takip kaydı henüz yok.").colSpan = 7;
+      target.appendChild(row);
+    }
+    return;
+  }
+  const stale = num(summary.scannedAtMs) === null || Date.now() - summary.scannedAtMs > 2 * 3600000;
+  const regime = summary.regime?.state === "BULL_CONFIRMED" ? "Yerleşik boğa" : "Boğa teyidi bekleniyor";
+  el("long-scout-status").textContent = `${summary.enabled === false ? "Kapalı" : stale ? "Tarama eski" : regime} · ${number(summary.universeCount)} piyasa · Tarama ${date(summary.scannedAtMs)} · Veri hatası ${number(summary.errorCount)}`;
+  const names = {LA1:"Birikim", LB1:"Hacimli kırılım", LP1:"Trend geri testi"};
+  const filter = el("long-scout-filter").value;
+  const candidates = (Array.isArray(summary.watchlist) ? summary.watchlist : []).filter(x => x && (filter !== "new" || x.newListing) && (filter !== "confirmed" || x.stage === "TEYİT"));
+  for (const x of candidates) {
+    const row = document.createElement("tr");
+    cell(row, `${x.symbol} · ${number(x.contractAgeDays)}g${x.newListing ? " · yeni kontrat" : ""}`);
+    cell(row, `${x.stage} · ${names[x.strategy] || x.strategy}`);
+    cell(row, number(x.score));
+    cell(row, `%${number(x.relativeStrength7dPct)} / %${number(x.relativeStrength24hPct)}`);
+    cell(row, `${number(x.volume4hRatio)}× / ${number(x.compressionRatio)}`);
+    cell(row, `${price(x.referencePrice)}\n${date(x.sourceCloseMs)}`);
+    cell(row, x.reason);
+    watch.appendChild(row);
+  }
+  if (!candidates.length) {
+    const row = document.createElement("tr"); cell(row, "Bu filtrede uygun LONG adayı yok.").colSpan = 7; watch.appendChild(row);
+  }
+  for (const x of Array.isArray(summary.tracked) ? summary.tracked : []) {
+    if (!x || typeof x !== "object") continue;
+    const row = document.createElement("tr"), o = x.outcome || {};
+    const hits = levels => levels.map(k => `%${k}: ${o.targets?.[k]?.hit === true ? "✓" : o.targets?.[k]?.hit === false ? "×" : "—"}`).join(" / ");
+    cell(row, date(x.recordedAtMs)); cell(row, `${x.symbol} · ${names[x.strategy] || x.strategy}`);
+    cell(row, `${price(x.entryPrice)} / %${number(x.stopPct)}`);
+    cell(row, hits([2,3,5])); cell(row, hits([10,20]));
+    cell(row, `%${number(o.mfePct)} / %${number(o.maePct)}`);
+    cell(row, o.mature ? o.complete ? "7 GÜN TAMAMLANDI" : "VERİ EKSİK" : "TAKİPTE");
+    tracked.appendChild(row);
+  }
+  if (!tracked.children.length) {
+    const row = document.createElement("tr"); cell(row, "İlk teyitli LONG kurulumu bekleniyor.").colSpan = 7; tracked.appendChild(row);
+  }
+  const metrics = summary.performance?.targets || {};
+  el("long-scout-performance").textContent = [2,3,5,10,20].map(k => {
+    const x = metrics[k] || {}, ci = Array.isArray(x.wilson95) ? ` · %95 ${pct(x.wilson95[0])}–${pct(x.wilson95[1])}` : "";
+    return `%${k}: ${number(x.hits)}/${number(x.n)} · ${pct(x.rate)}${ci} · stop öncesi ${number(x.firstWins)}/${number(x.firstN)} · ort. net ${number(x.meanNetBps)} bps`;
+  }).join(" | ");
+}
 async function load() {
   try {
     const response = await fetch("scalp-data.json", {cache: "no-store"});
@@ -294,6 +349,7 @@ async function load() {
     setFilterOptions("policy", "Tüm politikalar", [...new Set(signals.map(x => x.policyVersion || "legacy"))].sort());
     measurements = data.measurements || null;
     renderHorizonShadow(data.horizonShadow);
+    renderLongScout(data.longScout);
     const s = data.summary || {};
     el("updated").textContent = `Son yayın: ${date(data.generatedAtUtc)} • Son sinyal: ${date(data.latestSignalAtUtc)}`;
     const stale = !data.generatedAtUtc || !Number.isFinite(Date.parse(data.generatedAtUtc)) || Date.now() - Date.parse(data.generatedAtUtc) > 6 * 3600000;
@@ -325,6 +381,7 @@ async function load() {
     signals = [];
     measurements = null;
     renderHorizonShadow(null);
+    renderLongScout(null);
     renderMeasurements();
     render();
     renderPivot();
@@ -332,6 +389,7 @@ async function load() {
 }
 for (const id of ["search", "family", "minimum-success", "kind", "direction", "regime", "strategy", "policy", "status", "date-from", "date-to"]) el(id).addEventListener(id.startsWith("date-") ? "change" : "input", render);
 el("audience").value = "all";
+el("long-scout-filter").addEventListener("input", () => renderLongScout());
 el("audience").addEventListener("input", () => { renderMeasurements(); render(); });
 el("pivot-window").value = "30";
 el("pivot-audience").value = "notified";

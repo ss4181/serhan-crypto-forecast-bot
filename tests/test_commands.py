@@ -87,6 +87,7 @@ def run(
     symbol_forecast_text=None,
     regime_text=None,
     notification_status_text=None,
+    long_scout_text=None,
 ):
     settings = Settings(
         telegram_state_dir=directory, outcome_state_dir=directory / "outcomes"
@@ -102,6 +103,7 @@ def run(
         symbol_forecast_text=symbol_forecast_text,
         regime_text=regime_text,
         notification_status_text=notification_status_text,
+        long_scout_text=long_scout_text,
         notifier=notifier,
         reply_markup=telegram_menu_keyboard(),
     )
@@ -110,6 +112,18 @@ def run(
 
 @patch.dict(os.environ, {"CRYPTO_TELEGRAM_OWNER_ID": str(OWNER)}, clear=False)
 class CommandTests(unittest.TestCase):
+    def test_long_scout_command_and_button_preserve_private_authorization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            outcome, notifier, _ = run(
+                Path(directory),
+                [update(1, MEMBER, "/longradar"), callback_update(2, MEMBER, "long_scout"),
+                 update(3, STRANGER, "/longradar"), callback_update(4, STRANGER, "long_scout")],
+                members={MEMBER: "Ortak"}, long_scout_text=lambda: "LONG RADAR",
+            )
+        self.assertEqual(outcome.answered, 2)
+        self.assertEqual([text for _, text in notifier.sent], ["LONG RADAR", "LONG RADAR"])
+        self.assertEqual(outcome.refused, 2)
+
     def test_stranger_gets_no_reply_at_all(self) -> None:
         # Replying to unknown senders would let anyone make the bot emit
         # traffic on demand, so an unauthorised command is answered with silence.

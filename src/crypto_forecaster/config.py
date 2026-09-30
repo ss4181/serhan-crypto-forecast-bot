@@ -124,6 +124,32 @@ class Settings:
     scalp_horizon_shadow_enabled: bool = field(
         default_factory=lambda: _environment_bool("CRYPTO_SCALP_HORIZON_SHADOW", True)
     )
+    # Long-duration discovery is an isolated paper tracker, with no automatic
+    # Telegram trade alerts or promotion into the scalp strategy families.
+    long_scout_enabled: bool = field(
+        default_factory=lambda: _environment_bool("CRYPTO_LONG_SCOUT", True)
+    )
+    long_scout_universe_limit: int = field(
+        default_factory=lambda: _environment_int("CRYPTO_LONG_SCOUT_UNIVERSE_LIMIT", 80, 10, 200)
+    )
+    long_scout_history_days: int = field(
+        default_factory=lambda: _environment_int("CRYPTO_LONG_SCOUT_HISTORY_DAYS", 60, 21, 180)
+    )
+    long_scout_minimum_volume_usdt: float = field(
+        default_factory=lambda: _environment_float("CRYPTO_LONG_SCOUT_MIN_VOLUME_USDT", 5_000_000, 100_000, 1e12)
+    )
+    long_scout_maximum_spread_bps: float = field(
+        default_factory=lambda: _environment_float("CRYPTO_LONG_SCOUT_MAX_SPREAD_BPS", 10, 1, 100)
+    )
+    long_scout_maximum_abs_funding_bps: float = field(
+        default_factory=lambda: _environment_float("CRYPTO_LONG_SCOUT_MAX_FUNDING_BPS", 10, 0, 100)
+    )
+    long_scout_minimum_score: float = field(
+        default_factory=lambda: _environment_float("CRYPTO_LONG_SCOUT_MIN_SCORE", 65, 0, 100)
+    )
+    long_scout_maximum_active: int = field(
+        default_factory=lambda: _environment_int("CRYPTO_LONG_SCOUT_MAX_ACTIVE", 50, 1, 200)
+    )
     # Telegram only: keep every observation in the shadow ledger, but notify
     # only high-scoring, multi-family setups whose settled BT direction is exact.
     scalp_minimum_alert_score: float = field(

@@ -88,6 +88,7 @@ class TelegramTests(unittest.TestCase):
                 "explanations",
                 "coin_query",
                 "regime",
+                "long_scout",
                 "status",
                 "notification_status",
                 "performance:30",

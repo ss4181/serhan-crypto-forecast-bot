@@ -55,6 +55,16 @@
   </section>
   <p class="measurement-note muted">Yukarıdaki dokunuşlar ufku henüz dolmamış sinyalleri de içerir; başarı oranı değildir.</p>
   <p class="measurement-note muted" id="quarantine-note" hidden></p>
+  <h2>🚀 LONG keşif radarı · 7 günlük sessiz takip</h2>
+  <p class="measurement-note muted" id="long-scout-status" aria-live="polite">LONG keşfi yükleniyor…</p>
+  <div class="controls">
+    <label>Adaylar <select id="long-scout-filter" aria-label="LONG keşif filtresi"><option value="all">Tümü</option><option value="new">Son 1 yılda listelenen kontratlar</option><option value="confirmed">Teyitli kurulumlar</option></select></label>
+  </div>
+  <div class="table-wrap"><table class="pivot-table"><thead><tr><th>Coin / kontrat yaşı</th><th>Aşama / strateji</th><th>Güç / 100</th><th>BTC'ye göre 7g / 24s</th><th>4s hacim / sıkışma</th><th>Saatlik referans</th><th>Gerekçe</th></tr></thead><tbody id="long-scout-watch"></tbody></table></div>
+  <p class="measurement-note muted">Birikim adayları izlenir; hacimli kırılım ve trend geri testi ayrı kurulumlardır. BTC/ETH yükselen saatlik trendi ve en az %60 piyasa genişliği altı saat teyit edilince LONG takibi açılır. Yeni kontrat yaşı coin/proje yaşı veya güvenilirlik göstergesi değildir. Skor olasılık değildir. Bu bölüm diğer scalp filtrelerinden bağımsızdır.</p>
+  <div class="table-wrap"><table class="pivot-table"><thead><tr><th>Takibe alındı</th><th>Coin / strateji</th><th>Simüle giriş / stop</th><th>%2 / %3 / %5</th><th>%10 / %20</th><th>Yukarı uç / ters hareket</th><th>Durum</th></tr></thead><tbody id="long-scout-tracked"></tbody></table></div>
+  <p class="measurement-note muted" id="long-scout-performance">Henüz tamamlanmış sonuç yok.</p>
+  <p class="measurement-note muted">Giriş, karar verildikten sonraki tam 5 dakika mumunun açılışında simüle edilir; yedi gün izlenir. ✓ hedefe dokundu, — henüz bilinmiyor, × süre içinde dokunmadı. Dokunuş stop sonrasında da olabilir; “stop öncesi” ayrı ölçülür. Net, hedef/stop/süre çıkışı ile komisyon/spread/kayma varsayımını içerir; funding ödemeleri ve gerçek emir dolumu dahil değildir. Başarı oranlarına yedi gününü dolduran ve verisi eksiksiz kayıtlar girer.</p>
   <h2>Ufuk karşılaştırması · sessiz deney</h2>
   <p class="measurement-note muted" id="horizon-shadow-status" aria-live="polite">Karşılaştırma yükleniyor…</p>
   <div class="table-wrap"><table class="pivot-table"><thead><tr><th>Kural</th><th>Aday</th><th>%2 dokunuş</th><th>%3 dokunuş</th><th>%5 dokunuş</th><th>İlk hedef / stop · net</th><th>15 / 30 / 60 dk net pozitif</th></tr></thead><tbody id="horizon-shadow-rows"></tbody></table></div>

@@ -38,6 +38,7 @@ from .data import (
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
 from .horizon_shadow import format_horizon_shadow_status, run_horizon_shadow
+from .long_scout import LongScoutWorker, format_long_scout
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
 from .notification_status import format_notification_status, write_notification_status
 from .openinterest import OpenInterestError, update_open_interest
@@ -638,6 +639,7 @@ def answer_commands(
         explanation_text=format_explanations,
         symbol_forecast_text=lambda symbol: _coin_query_reply(settings, symbol),
         regime_text=lambda: format_regime_status(settings, now=current),
+        long_scout_text=lambda: format_long_scout(settings, now=current),
         notification_status_text=lambda: "\n\n".join((
             format_notification_status(settings, now=current),
             format_horizon_shadow_status(settings, now=current),
@@ -740,6 +742,11 @@ def serve_forever(
     scalp_entries = ()
     kline_stream: BinanceKlineStream | None = None
     next_scalp_scan_ms = 0
+    long_worker = (
+        LongScoutWorker(settings, progress)
+        if is_primary() and settings.scalp_observation_enabled and settings.long_scout_enabled
+        else None
+    )
     if settings.scalp_observation_enabled:
         scalp_manifest = load_trade1_universe()
         scalp_entries = scalp_manifest.selected_entries()
@@ -764,6 +771,8 @@ def serve_forever(
         try:
             now = datetime.now(timezone.utc)
             now_ms = int(now.timestamp() * 1000)
+            if long_worker is not None:
+                long_worker.tick(now)
             # Answer queued Telegram commands before exchange refresh, scalp
             # fan-out, or walk-forward research can occupy this loop.
             if is_primary():
@@ -1144,6 +1153,8 @@ def serve_forever(
                 post_snapshot(snapshot)
             consecutive_failures = 0
         except KeyboardInterrupt:
+            if long_worker is not None:
+                long_worker.stop()
             if kline_stream is not None:
                 kline_stream.stop()
             raise

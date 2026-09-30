@@ -37,6 +37,19 @@ async function main() {
   assert.equal(p.get('rows').children[2].children[3].textContent, '<script>bad</script>');
   assert.match(p.get('target-5').textContent, /1 dokundu/);
   assert.match(p.get('horizon-shadow-status').textContent, /ilk kaydı bekleniyor/);
+  assert.match(p.get('long-scout-status').textContent, /ilk taraması bekleniyor/);
+  const scoutPage = await page({...payload, longScout:{version:'long-discovery-v1', mode:'shadow', scannedAtMs:Date.now(), universeCount:80, errorCount:0, regime:{state:'WAIT'}, watchlist:[
+    {symbol:'<img bad>', newListing:true, contractAgeDays:20, strategy:'LA1', stage:'İZLE', score:60, referencePrice:.01, relativeStrength7dPct:5, relativeStrength24hPct:2, volume4hRatio:2, compressionRatio:.5, reason:'Birikim'},
+    {symbol:'AAAUSDT', newListing:false, strategy:'LB1', stage:'TEYİT', score:70},
+  ], tracked:[{symbol:'AAAUSDT', strategy:'LB1', outcome:{mature:false, complete:true, targets:{2:{hit:true},3:{hit:null}}}}]}});
+  assert.equal(scoutPage.get('long-scout-watch').children.length, 2);
+  assert.match(scoutPage.get('long-scout-watch').children[0].children[0].textContent, /<img bad>/);
+  assert.equal(scoutPage.get('long-scout-tracked').children[0].children[6].textContent, 'TAKİPTE');
+  assert.doesNotMatch(scoutPage.get('long-scout-performance').textContent, /%100|%0/);
+  scoutPage.get('long-scout-filter').value='new'; scoutPage.get('long-scout-filter').listeners.input();
+  assert.equal(scoutPage.get('long-scout-watch').children.length, 1);
+  scoutPage.get('long-scout-filter').value='confirmed'; scoutPage.get('long-scout-filter').listeners.input();
+  assert.match(scoutPage.get('long-scout-watch').children[0].children[0].textContent, /AAAUSDT/);
   const shadowMetric = {rate:null, wins:0, resolved:0, pending:1, missing:0, meanNetBps:null};
   const shadowArm = {candidates:1, targets:{2:shadowMetric,3:shadowMetric,5:shadowMetric}, bracket:shadowMetric, forward:{15:shadowMetric,30:shadowMetric,60:shadowMetric}};
   const shadowPage = await page({...payload, horizonShadow:{version:'strategy-horizon-shadow-v1', mode:'shadow', enabled:true, startedAtMs:Date.now(), evaluatedAtMs:Date.now(), arms:{baseline:{...shadowArm,candidates:0}, proposed:shadowArm, additional:shadowArm}}});

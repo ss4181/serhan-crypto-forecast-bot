@@ -16,6 +16,7 @@ from .dashboard import dashboard_payload_text, write_dashboard_payload
 from .hub import post_snapshot, write_snapshot
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .regime import deliver_regime_change
+from .long_scout import format_long_scout, run_long_scout
 from .research import research_all
 from .scalping import (
     deliver_scalp_bracket_wins,
@@ -137,6 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scalp_card.add_argument("--days", type=int, default=30)
 
+    scout = subparsers.add_parser("long-scout", help="Binance LONG keşif radarını tara ve 7 günlük paper takibi güncelle")
+    scout.add_argument("--status", action="store_true", help="Ağa çıkmadan mevcut LONG radarını göster")
+
     dashboard = subparsers.add_parser(
         "dashboard-export",
         help="GitHub Pages icin kimlik bilgisi icermeyen sinyal verisi uret",
@@ -205,6 +209,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         settings = Settings()
+        if args.command == "long-scout":
+            if not args.status:
+                run_long_scout(settings)
+            print(format_long_scout(settings))
+            return 0
         if args.command == "download":
             symbols = (args.symbol,) if args.symbol else SYMBOLS
             intervals = (args.interval,) if args.interval else INTERVALS

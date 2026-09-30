@@ -462,6 +462,47 @@ class BinanceMarketDataClient:
             raise MarketDataError("Binance anlik futures kotasyonu alinamadi")
         return snapshots
 
+    def fetch_crypto_perpetual_contracts(self) -> dict[str, dict[str, object]]:
+        """Discover trading USDT crypto perpetuals using public exchange metadata.
+
+        TradFi, index, delivery and non-USDT contracts are excluded. Listing
+        age is the exchange's contract age, not the age/quality of a project.
+        """
+        if self.market_name != "futures":
+            raise ValueError("Kripto keşfi futures istemcisi gerektirir")
+        payload = self._request_public_json("/fapi/v1/exchangeInfo")
+        if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), list):
+            raise MarketDataError("Binance sözleşme listesi geçersiz")
+        contracts = {}
+        for item in payload["symbols"]:
+            if not isinstance(item, dict) or (
+                item.get("status") != "TRADING"
+                or item.get("contractType") != "PERPETUAL"
+                or item.get("quoteAsset") != "USDT"
+                or item.get("marginAsset") != "USDT"
+                or item.get("underlyingType") != "COIN"
+            ):
+                continue
+            subtypes = item.get("underlyingSubType", [])
+            if not isinstance(subtypes, list) or any(
+                word in str(tag).upper()
+                for tag in subtypes
+                for word in ("STOCK", "EQUITY", "INDEX", "COMMODITY", "TRADFI")
+            ):
+                continue
+            try:
+                symbol = validate_market_symbol(str(item["symbol"]))
+                if symbol in {"USDCUSDT", "FDUSDUSDT", "BUSDUSDT", "TUSDUSDT", "USDEUSDT", "PAXGUSDT", "XAUTUSDT"}:
+                    continue
+                onboard = _integer(item["onboardDate"], "onboard date")
+            except (KeyError, TypeError, ValueError, MarketDataError):
+                continue
+            if onboard > 0:
+                contracts[symbol] = {"symbol": symbol, "onboardDate": onboard}
+        if not contracts:
+            raise MarketDataError("Binance kripto perpetual evreni boş")
+        return contracts
+
     def _fetch_klines(
         self,
         symbol: str,

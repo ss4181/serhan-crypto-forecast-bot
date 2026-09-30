@@ -246,6 +246,61 @@ Testler:
 python -m unittest discover -s tests -t tests
 ```
 
+## LONG keşif radarı ve büyük hareket takibi
+
+`CRYPTO_LONG_SCOUT=true` varsayılanında, primary scalp servisinin ayrı arka plan
+işçisi Binance USDT kripto perpetual evrenini saatlik tarar. En çok 80 piyasa
+izlenir; bütçenin dörtte biri son yılda listelenen kontratlara ayrılır. Minimum
+24s hacim 5 milyon USDT, spread en fazla 10 bps, mutlak son funding en fazla
+10 bps ve en az 14 günlük kesintisiz tarihçe gerekir. Stabil para, altın,
+TradFi/index ve teslimli sözleşmeler hariçtir. Bu borsa/veri filtreleri projenin
+temel değerini, güvenilirliğini veya küçük piyasa değerini doğrulamaz. Kontrat
+yaşı proje yaşı değildir; bu radar yalnız Binance perpetual kapsamındadır.
+
+Üç LONG araştırma kuralı: **LA1 Birikim** (göreli güç, sıkışma, hacim),
+**LB1 Hacimli kırılım** (önceki 7 günlük zirve üstünde teyitli kapanış) ve
+**LP1 Trend geri testi** (yükselen trendde EMA20 geri alımı). Son 24 saatte
+%15'ten, 7 günde %40'tan çok yükselen geç adaylar elenir. Güç skoru 0–100:
+7g BTC'ye göre güç 20 puan, 24s göreli güç 10, trend 20, hacim 20,
+sıkışma 15 ve kapanış konumu 15. Bu skor olasılık değildir; birikim için
+en az 50, teyitli kurulum için varsayılan en az 65 puan gerekir.
+
+LONG ufkunda **yerleşik boğa** için BTC ve ETH fiyatları yükselen EMA50'nin
+üstünde, EMA50 EMA200'ün üstünde, 7 günlük getiriler pozitif; evrenin en az
+%60'ında 24s getiri pozitiftir. En az %80 taze/kullanılabilir veriyle bu şartlar
+altı ardışık saat kapanışında sürmelidir. Bu saatlik koşul, mevcut scalp 5m
+rejiminden ayrı ölçülür; teyit beklerken adaylar listelenir, yeni paper giriş açılmaz.
+
+Teyitli adaylara öncelik verilerek saatte en çok 5 sessiz kayıt alınır.
+Coin/strateji başına 24 saat tekrar aralığı ve en fazla 50 açık takip vardır.
+Giriş karar sonrası ilk tam 5m mum açılışında simüle edilir; **7 gün** boyunca
+%2/%3/%5/%10/%20 dokunuşu, ATR tabanlı %2–%6 stopa göre ilk hedef sırası,
+ters hareket ve maliyet sonrası kapanış ayrı kaydedilir. Aynı mumda hedef/stop
+sırası bilinmez. Dokunuş oranı yalnız 7 günü tamamlanmış, verisi eksiksiz
+kayıtlardan hesaplanır; funding ödemeleri veya gerçek emir dolumu simüle edilmez.
+Yeni ayar profilleri eski sonuçlarla birleştirilmez. Ham kayıtlar private,
+yalnız izin verilen piyasa özeti GitHub Pages için okunabilir tutulur.
+
+Telegram **🚀 LONG Radar** düğmesi veya `/longradar` adayları ve takibi gösterir;
+dashboard'daki ayrı bölüm yeni kontrat/teyit filtreleriyle okunur. Varsayılan
+sessiz deney otomatik işlem bildirimi veya model terfisi yapmaz. Tarama ayrı
+işçide çalışır ve mum/Telegram döngüsünü bekletmez. Trade1'in kodu ve evreni
+değiştirilmez. Büyük yükseliş ya da “sonraki SHIB/DOGE” garantisi verilmez.
+
+```bash
+python run.py long-scout           # Veriyi yenile ve sessiz takibi güncelle
+python run.py long-scout --status  # Ağa çıkmadan mevcut radarı göster
+python research/long_discovery_study.py state/scalp/experiments/long-discovery-v1
+```
+
+Son komut geçmiş saatlik pilotu yerel `artifacts/research/` klasörüne yazar;
+bugünün evreni ve saatlik giriş/sonuç verisiyle yapılan keşif çalışmasıdır.
+Bağımsız doğrulama yerine geçmez. Gerçek zamanlı deneyin sonuçları daha sonra
+yeni tarihlerden birikir; dönem/coin korelasyonu örnek güven aralığını etkiler.
+
+Veri alanları ve düşük ağırlıklı sayfalama için kaynak:
+[Binance USD-M kamuya açık piyasa API'si](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data).
+
 ## Deneysel 89-coin scalp gözlemi
 
 Trade1'in Temmuz 2026 Ek G araştırmasındaki statik evren bu **trade3** projesine
