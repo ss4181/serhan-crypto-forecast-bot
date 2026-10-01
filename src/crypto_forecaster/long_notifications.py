@@ -101,7 +101,7 @@ def deliver_long_notifications(
             result = sender.deliver_owner_once(
                 signal_id=activation,
                 state_dir=receipts,
-                text="🧪 TRADE3 • LONG bildirimleri açıldı\nYalnız sana özel deneysel bildirim: yerleşik boğada yüksek skorlu kırılım/geri test adayları ve %2/%3/%5/%10/%20 dokunuşları.\nSkor olasılık değildir; emir verilmez. Henüz 1m tetikleyici yok.",
+                text="🧪 TRADE3 • LONG bildirimleri açıldı\nYalnız sana özel deneysel bildirim: yerleşik boğada yüksek skorlu kırılım/geri test adayları ve %2/%3/%5/%10/%20 dokunuşları.\nSkor olasılık değildir; emir verilmez. Canlı 1m bildirimi yok; 1m giriş deneyi ayrı ve sessizdir.",
             )
             events.append(("etkinleştirme", result.status))
         records = sorted(

@@ -112,6 +112,21 @@ def run(
 
 @patch.dict(os.environ, {"CRYPTO_TELEGRAM_OWNER_ID": str(OWNER)}, clear=False)
 class CommandTests(unittest.TestCase):
+    def test_growth_watchlist_command_button_and_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result, notifier, _ = run(Path(directory), [
+                update(1, MEMBER, "/potansiyel"),
+                callback_update(2, MEMBER, "growth_watchlist"),
+                update(3, STRANGER, "/potansiyel"),
+                callback_update(4, STRANGER, "growth_watchlist"),
+                callback_update(5, MEMBER, "growth_watchlist", chat=-1234),
+            ], members={MEMBER: "Ortak"})
+        self.assertEqual(result.answered, 2)
+        self.assertEqual(len(notifier.sent), 2)
+        for _, text in notifier.sent:
+            self.assertIn("ALLOUSDT", text)
+            self.assertIn("alım sinyali DEĞİL", text)
+            self.assertLess(len(text), 4096)
     def test_long_scout_command_and_button_preserve_private_authorization(self):
         with tempfile.TemporaryDirectory() as directory:
             outcome, notifier, _ = run(

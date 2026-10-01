@@ -44,6 +44,10 @@ async function main() {
   ], tracked:[{symbol:'AAAUSDT', strategy:'LB1', outcome:{mature:false, complete:true, targets:{2:{hit:true},3:{hit:null}}}}]}});
   assert.equal(scoutPage.get('long-scout-watch').children.length, 2);
   assert.match(scoutPage.get('long-scout-watch').children[0].children[0].textContent, /<img bad>/);
+  const minutePage = await page({...payload, longScout:{version:'long-discovery-v1', mode:'shadow', scannedAtMs:Date.now(), universeCount:195, screenedCount:518, qualityExcludedCount:323, regime:{state:'WAIT'}}, longMinuteShadow:{version:'long-minute-shadow-v1',mode:'shadow',pairedN:12,oneMinute2PctHits:3,fiveMinute2PctHits:2,missing:1,evaluatedAtMs:Date.now()}});
+  assert.match(minutePage.get('long-scout-status').textContent, /518 ön eleme \/ 195 derin tarama/);
+  assert.match(minutePage.get('long-scout-status').textContent, /12 eşleşmiş sonuç/);
+  assert.match(minutePage.get('long-scout-status').textContent, /canlı 1m bildirimi yok/);
   assert.equal(scoutPage.get('long-scout-tracked').children[0].children[6].textContent, 'TAKİPTE');
   assert.doesNotMatch(scoutPage.get('long-scout-performance').textContent, /%100|%0/);
   scoutPage.get('long-scout-filter').value='new'; scoutPage.get('long-scout-filter').listeners.input();

@@ -136,6 +136,7 @@ class TelegramTests(unittest.TestCase):
                 "coin_query",
                 "regime",
                 "long_scout",
+                "growth_watchlist",
                 "status",
                 "notification_status",
                 "performance:30",

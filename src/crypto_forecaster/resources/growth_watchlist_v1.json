@@ -1,0 +1,17 @@
+{
+  "version": "growth-watchlist-v1",
+  "reviewedAt": "2026-10-02",
+  "mode": "research",
+  "coins": [
+    {"symbol":"DIAUSDT","name":"DIA","theme":"Oracle / gerçek dünya varlık verisi","risk":"Tokena değer aktarımı ve oracle rekabeti","marketCapM":20.1,"fdvM":28.3,"circulatingM":119.676,"maxSupplyM":200,"marketSource":"https://www.coingecko.com/en/coins/dia","projectSource":"https://www.diadata.org/blockchain-oracle-grant/"},
+    {"symbol":"RLCUSDT","name":"iExec","theme":"Gizli hesaplama / veri monetizasyonu","risk":"Ücretli kullanım ve likidite yetersizliği","marketCapM":31.1,"fdvM":31.1,"circulatingM":87,"maxSupplyM":87,"marketSource":"https://www.coingecko.com/en/coins/iexec-rlc","projectSource":"https://iex.ec/"},
+    {"symbol":"COTIUSDT","name":"COTI","theme":"Gizlilik odaklı hesaplama altyapısı","risk":"Benimsenme, rekabet ve yeni arz","marketCapM":40.2,"fdvM":40.2,"circulatingM":2980,"maxSupplyM":4910,"marketSource":"https://www.coingecko.com/en/coins/coti","projectSource":"https://coti.io/files/coti_v2_whitepaper.pdf"},
+    {"symbol":"ALLOUSDT","name":"Allora","theme":"Merkeziyetsiz yapay zekâ tahmin ağı","risk":"Arz kilit açılışları ve ticari talep","marketCapM":69.1,"fdvM":217.6,"circulatingM":250.254,"maxSupplyM":1000,"marketSource":"https://www.coingecko.com/en/coins/allora","projectSource":"https://docs.allora.network/learn/consensus-and-rewards"},
+    {"symbol":"IOUSDT","name":"io.net","theme":"Dağıtık GPU / yapay zekâ hesaplama","risk":"Arz artışı, GPU doluluk ve rekabet","marketCapM":64.8,"fdvM":126.0,"circulatingM":410.252,"maxSupplyM":800,"marketSource":"https://www.coingecko.com/en/coins/io-net","projectSource":"https://io.net/documents/ionet_Tokenomics_Litepaper.pdf"},
+    {"symbol":"AIXBTUSDT","name":"aixbt","theme":"Kripto araştırma / anlatı takibi","risk":"Anlatı sönmesi ve token değer aktarımı","marketCapM":22.6,"fdvM":22.6,"circulatingM":1000,"maxSupplyM":1000,"marketSource":"https://www.coingecko.com/en/coins/aixbt-by-virtuals","projectSource":"https://aixbt.tech/rankings?entity=topics"},
+    {"symbol":"DUSKUSDT","name":"Dusk","theme":"Gizlilik / düzenlenmiş zincir üstü finans","risk":"Benimsenme, mevzuat ve yeni arz","marketCapM":52.7,"fdvM":52.7,"circulatingM":606.884,"maxSupplyM":1000,"marketSource":"https://www.coingecko.com/en/coins/dusk","projectSource":"https://docs.dusk.network/learn/overview/"},
+    {"symbol":"ATHUSDT","name":"Aethir","theme":"Dağıtık GPU bulutu","risk":"Arz kilit açılışları ve gerçek kullanım","marketCapM":118.3,"fdvM":246.8,"circulatingM":20129,"maxSupplyM":42000,"marketSource":"https://www.coingecko.com/en/coins/aethir","projectSource":"https://docs.aethir.com/aethir-introduction"},
+    {"symbol":"ARKMUSDT","name":"Arkham","theme":"Zincir üstü veri / adres analizi","risk":"Token talebi, merkezileşme ve kilit açılışı","marketCapM":93.8,"fdvM":131.6,"circulatingM":713.141,"maxSupplyM":1000,"marketSource":"https://www.coingecko.com/en/coins/arkham","projectSource":"https://arkm.com/"},
+    {"symbol":"AKTUSDT","name":"Akash","theme":"Merkeziyetsiz bulut / GPU kiralama","risk":"Rekabet, talep ve token emisyonları","marketCapM":192.8,"fdvM":192.8,"circulatingM":298.334,"maxSupplyM":388.539,"marketSource":"https://www.coingecko.com/en/coins/akash-network","projectSource":"https://akash.network/docs/getting-started/what-is-akash/"}
+  ]
+}

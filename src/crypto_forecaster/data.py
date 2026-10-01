@@ -51,6 +51,14 @@ CSV_COLUMNS = (
     "trade_count",
     "taker_buy_base",
 )
+MARKET_INTERVAL_MS = {"1m": 60_000, **INTERVAL_MILLISECONDS}
+
+
+def validate_market_interval(interval: str) -> str:
+    """Experimental public data may use 1m without adding it to model training."""
+    if interval not in MARKET_INTERVAL_MS:
+        raise ValueError("Gecersiz halka acik piyasa mum araligi")
+    return interval
 
 
 class MarketDataError(RuntimeError):
@@ -386,7 +394,7 @@ class BinanceMarketDataClient:
         """Fetch a validated public market outside the configured model set."""
         return self._fetch_klines(
             validate_market_symbol(symbol),
-            validate_interval(interval),
+            validate_market_interval(interval),
             start_ms=start_ms,
             end_ms=end_ms,
         )
@@ -513,7 +521,7 @@ class BinanceMarketDataClient:
     ) -> pd.DataFrame:
         if start_ms < 0 or end_ms <= start_ms:
             raise ValueError("Gecersiz kline tarih araligi")
-        step_ms = INTERVAL_MILLISECONDS[interval]
+        step_ms = MARKET_INTERVAL_MS[interval]
         cursor = start_ms
         rows: list[list[object]] = []
         while cursor < end_ms:
@@ -699,7 +707,7 @@ def update_market_cache(
     model cache.
     """
     symbol = validate_market_symbol(symbol)
-    interval = validate_interval(interval)
+    interval = validate_market_interval(interval)
     if client.market_name != "futures":
         raise ValueError("Scalp piyasa onbellegi futures istemcisi gerektirir")
     if days < 1:
@@ -735,7 +743,7 @@ def update_market_cache(
         drop=True
     )
     before = len(combined)
-    combined = _trim_to_contiguous_tail(combined, INTERVAL_MILLISECONDS[interval])
+    combined = _trim_to_contiguous_tail(combined, MARKET_INTERVAL_MS[interval])
     dropped = before - len(combined)
     if dropped and warn is not None:
         warn(

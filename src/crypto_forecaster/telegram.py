@@ -28,6 +28,7 @@ PRIVATE_COMMANDS = (
     ("coin", "Coin sembolu icin 15dk/1s/4s/1g tahmin sor"),
     ("rejim", "Guncel piyasa rejimini goster"),
     ("longradar", "LONG kesif adaylarini ve sessiz takibi goster"),
+    ("potansiyel", "Tarihli buyume arastirma listesini goster"),
     ("bildirim", "Scalp bildirim durumunu goster"),
     ("performans", "Sinyal performansini goster"),
     ("scalpkarne", "Scalp ileri-test karnesini goster"),
@@ -66,6 +67,7 @@ def telegram_menu_keyboard(*, is_owner: bool = False) -> dict[str, object]:
             {"text": "🌐 Canlı Panel", "url": DASHBOARD_URL},
             {"text": "🚀 LONG Radar", "callback_data": "long_scout"},
         ],
+        [{"text": "🔭 Büyüme Listesi", "callback_data": "growth_watchlist"}],
     ]
     if is_owner:
         rows.append(

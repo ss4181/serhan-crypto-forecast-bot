@@ -12,6 +12,7 @@ from .config import Settings
 from .horizon_shadow import load_horizon_shadow_summary
 from .long_scout import load_long_scout_summary
 from .measurement import deadline_ms, measurement_summary
+from .minute_shadow import load_minute_shadow_summary
 from .outcomes import load_ledger, pending_dir
 from .persistence import atomic_write_text
 from .scalping import (
@@ -439,6 +440,7 @@ def build_dashboard_payload(
         "measurements": measurements,
         "horizonShadow": load_horizon_shadow_summary(settings),
         "longScout": load_long_scout_summary(settings),
+        "longMinuteShadow": load_minute_shadow_summary(settings),
         "displayedCount": min(len(signals), limit),
         "historyLimitReached": not history_complete,
         "summary": {

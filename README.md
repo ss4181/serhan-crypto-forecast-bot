@@ -249,8 +249,10 @@ python -m unittest discover -s tests -t tests
 ## LONG keşif radarı ve büyük hareket takibi
 
 `CRYPTO_LONG_SCOUT=true` varsayılanında, primary scalp servisinin ayrı arka plan
-işçisi Binance USDT kripto perpetual evrenini saatlik tarar. En çok 80 piyasa
-izlenir; bütçenin dörtte biri son yılda listelenen kontratlara ayrılır. Minimum
+işçisi Binance USDT kripto perpetual evrenini saatlik tarar. Varsayılan
+`CRYPTO_LONG_SCOUT_UNIVERSE_LIMIT=0` tüm kripto kontratlarını ön elemeye alır,
+kalite filtresini geçenlerin tamamı derin taranır; yapay 80 piyasa sınırı yoktur.
+Pozitif limit verilirse bütçenin dörtte biri son yılda listelenen kontratlara ayrılır. Minimum
 24s hacim 5 milyon USDT, spread en fazla 10 bps, mutlak son funding en fazla
 10 bps ve en az 14 günlük kesintisiz tarihçe gerekir. Stabil para, altın,
 TradFi/index ve teslimli sözleşmeler hariçtir. Bu borsa/veri filtreleri projenin
@@ -307,7 +309,29 @@ mumlarıyla %2/%3/%5/%10/%20 dokunuşları izlenir; her hedef bir kez bildirilir
 Belirsiz/reddedilmiş ilk gönderim hedef mesajı üretmez. Stop sonrası ve aynı
 mumda sırası bilinmeyen dokunuşlar açıkça etiketlenir; gerçekleşmiş işlem kârı
 diye sunulmaz. Bu bildirim ölçümü, paneldeki sonraki 5m açılışından başlayan
-paper giriş hesabından ayrıdır. 1m tetikleyici henüz yoktur; hiçbir emir verilmez.
+paper giriş hesabından ayrıdır. Hiçbir emir verilmez.
+
+`CRYPTO_LONG_SCOUT_MINUTE_SHADOW=true` ayrı **sessiz 1m giriş deneyi** açar.
+Yalnız güncel/sağlıklı yerleşik boğada saatlik yüksek skorlu ilk 10 aday için
+kapalı 1m REST mumları okunur; EMA9/EMA21 trendi, 30dk zirve kırılımı ve 3dk
+hacim artışı aranır. Mevcut 5m WebSocket hattını veya model ufuklarını değiştirmez;
+1m WebSocket ya da canlı 1m işlem bildirimi değildir. Tek arka plan işçisi ve
+20 aktif kayıt sınırı vardır. Karar **kaydedildikten sonraki** tam 1m ve 5m
+açılışları aynı karar için karşılaştırılır: bir saatlik %2/%3/%5 dokunuş,
+ilk hedef/stop, maliyet sonrası net ve Wilson %95 aralığı. Yalnız iki girişi de
+tamamlanmış/verisi eksiksiz eşleşmeler paydaya girer; eksik veri kayıp sayılmaz.
+Ayar profilleri ayrı tutulur. Komisyon/kayma varsayımı ve saatlik spread kullanılır;
+gerçek dolum değildir. Örnek birikmeden otomatik canlı terfi yapılmaz.
+`/longradar` ve dashboard eşleşme sayısını ve %2 karşılaştırmasını gösterir.
+
+**🔭 Büyüme Listesi** düğmesi veya `/potansiyel`, 2026-10-02 tarihli 10 coinlik
+kaynaklı temel araştırma listesini gösterir. Bu sabit liste canlı fiyat listesi,
+"100x tahmini", kalibre edilmiş olasılık veya alım talimatı değildir. Kaynaklar,
+yaklaşık piyasa değeri, toplam arz temelli FDV ve maksimum arz
+`resources/growth_watchlist_v1.json` içinde tutulur. 100x fiyat matematiği sabit
+dolaşımdaki arz varsayımıyla verilir; yeni arz gerekli değeri artırır. Liste kalite
+ve boğa filtrelerini aşmaz; sırf listede olduğu için bildirim çıkmaz. Tüm
+sermayenin kaybı mümkündür. Özel sohbet yetkilendirmesi korunur.
 
 Son komut geçmiş saatlik pilotu yerel `artifacts/research/` klasörüne yazar;
 bugünün evreni ve saatlik giriş/sonuç verisiyle yapılan keşif çalışmasıdır.

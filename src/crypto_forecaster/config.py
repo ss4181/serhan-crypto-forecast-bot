@@ -133,7 +133,10 @@ class Settings:
         default_factory=lambda: _environment_bool("CRYPTO_LONG_SCOUT_OWNER_ALERTS", False)
     )
     long_scout_universe_limit: int = field(
-        default_factory=lambda: _environment_int("CRYPTO_LONG_SCOUT_UNIVERSE_LIMIT", 80, 10, 200)
+        default_factory=lambda: _environment_int("CRYPTO_LONG_SCOUT_UNIVERSE_LIMIT", 0, 0, 2000)
+    )
+    long_scout_minute_shadow_enabled: bool = field(
+        default_factory=lambda: _environment_bool("CRYPTO_LONG_SCOUT_MINUTE_SHADOW", True)
     )
     long_scout_history_days: int = field(
         default_factory=lambda: _environment_int("CRYPTO_LONG_SCOUT_HISTORY_DAYS", 60, 21, 180)

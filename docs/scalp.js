@@ -281,6 +281,7 @@ function renderHorizonShadow(summary) {
     tbody.appendChild(row);
   }
 }
+let longMinuteShadow = null;
 function renderLongScout(summary = longScout) {
   longScout = summary;
   const watch = el("long-scout-watch"), tracked = el("long-scout-tracked");
@@ -297,7 +298,9 @@ function renderLongScout(summary = longScout) {
   }
   const stale = num(summary.scannedAtMs) === null || Date.now() - summary.scannedAtMs > 2 * 3600000;
   const regime = summary.regime?.state === "BULL_CONFIRMED" ? "Yerleşik boğa" : "Boğa teyidi bekleniyor";
-  el("long-scout-status").textContent = `${summary.enabled === false ? "Kapalı" : stale ? "Tarama eski" : regime} · ${number(summary.universeCount)} piyasa · Tarama ${date(summary.scannedAtMs)} · Veri hatası ${number(summary.errorCount)}`;
+  const minute = longMinuteShadow?.version === "long-minute-shadow-v1" && longMinuteShadow.mode === "shadow"
+    ? ` · 1m SESSİZ deney: ${number(longMinuteShadow.pairedN)} eşleşmiş sonuç; %2 dokunuş 1m ${number(longMinuteShadow.oneMinute2PctHits)} / 5m ${number(longMinuteShadow.fiveMinute2PctHits)}; eksik ${number(longMinuteShadow.missing)}; ölçüm ${date(longMinuteShadow.evaluatedAtMs)} (canlı 1m bildirimi yok)` : "";
+  el("long-scout-status").textContent = `${summary.enabled === false ? "Kapalı" : stale ? "Tarama eski" : regime} · ${number(summary.screenedCount)} ön eleme / ${number(summary.universeCount)} derin tarama · Kalite filtresinde ${number(summary.qualityExcludedCount)} elendi · Tarama ${date(summary.scannedAtMs)} · Veri hatası ${number(summary.errorCount)}${minute}`;
   const names = {LA1:"Birikim", LB1:"Hacimli kırılım", LP1:"Trend geri testi"};
   const filter = el("long-scout-filter").value;
   const candidates = (Array.isArray(summary.watchlist) ? summary.watchlist : []).filter(x => x && (filter !== "new" || x.newListing) && (filter !== "confirmed" || x.stage === "TEYİT"));
@@ -349,6 +352,7 @@ async function load() {
     setFilterOptions("policy", "Tüm politikalar", [...new Set(signals.map(x => x.policyVersion || "legacy"))].sort());
     measurements = data.measurements || null;
     renderHorizonShadow(data.horizonShadow);
+    longMinuteShadow = data.longMinuteShadow || null;
     renderLongScout(data.longScout);
     const s = data.summary || {};
     el("updated").textContent = `Son yayın: ${date(data.generatedAtUtc)} • Son sinyal: ${date(data.latestSignalAtUtc)}`;
@@ -381,6 +385,7 @@ async function load() {
     signals = [];
     measurements = null;
     renderHorizonShadow(null);
+    longMinuteShadow = null;
     renderLongScout(null);
     renderMeasurements();
     render();

@@ -13,6 +13,7 @@ import os
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -102,20 +103,23 @@ def select_universe(
     settings: Settings,
     now_ms: int,
 ) -> list[str]:
-    """Reserve 1/4 of the budget for recent exchange listings, after liquidity gates."""
+    """Screen every contract; zero cap scans all markets passing quality gates."""
     eligible = []
     for symbol, contract in contracts.items():
         snapshot = snapshots.get(symbol)
         age = (now_ms - contract["onboardDate"]) / DAY
         if snapshot is None or age < 14:
             continue
-        volume, funding = snapshot.quote_volume_24h_usdt, snapshot.funding_rate_bps
+        volume = _finite(snapshot.quote_volume_24h_usdt)
+        funding = _finite(snapshot.funding_rate_bps)
+        spread = _finite(snapshot.spread_bps)
         if (
             volume is None
             or volume < settings.long_scout_minimum_volume_usdt
             or funding is None
             or abs(funding) > settings.long_scout_maximum_abs_funding_bps
-            or snapshot.spread_bps > settings.long_scout_maximum_spread_bps
+            or spread is None
+            or not 0 <= spread <= settings.long_scout_maximum_spread_bps
         ):
             continue
         eligible.append((symbol, age, volume))
@@ -125,6 +129,8 @@ def select_universe(
         key=lambda row: (row[1], -row[2], row[0]),
     )
     cap = settings.long_scout_universe_limit
+    if cap == 0:
+        return [row[0] for row in liquid]
     chosen = [row[0] for row in recent[: cap // 4]]
     chosen.extend(row[0] for row in liquid if row[0] not in chosen)
     return chosen[:cap]
@@ -463,6 +469,8 @@ def _publish(settings: Settings, state: dict, now_ms: int) -> dict:
         "scannedAtMs": state.get("scannedAtMs"),
         "regime": state.get("regime", {}),
         "universeCount": state.get("universeCount", 0),
+        "screenedCount": state.get("screenedCount", 0),
+        "qualityExcludedCount": state.get("qualityExcludedCount", 0),
         "freshCount": state.get("freshCount", 0),
         "errorCount": len(state.get("errors", {})),
         "recordLimitReached": state.get("recordLimitReached", False),
@@ -685,6 +693,7 @@ def _run_long_scout_unlocked(
             return {}
     if "BTCUSDT" in frames:
         tables = {s: features(frame, frames["BTCUSDT"]) for s, frame in frames.items()}
+    frames.clear()  # Expanded universe: don't retain both raw and derived frames.
     history = bull_history(tables)
     expected = now_ms // HOUR * HOUR - 1
     fresh = sum(
@@ -729,6 +738,16 @@ def _run_long_scout_unlocked(
         watchlist=watchlist,
         scannedAtMs=now_ms,
         universeCount=len(selected),
+        screenedCount=len(contracts),
+        qualityExcludedCount=len(contracts)
+        - len(
+            select_universe(
+                contracts,
+                snapshots,
+                replace(settings, long_scout_universe_limit=0),
+                now_ms,
+            )
+        ),
         freshCount=fresh,
     )
     recorded_ms = int(datetime.now(UTC).timestamp() * 1000) if now is None else now_ms
@@ -800,6 +819,8 @@ def load_long_scout_summary(settings: Settings) -> dict:
         "scannedAtMs",
         "regime",
         "universeCount",
+        "screenedCount",
+        "qualityExcludedCount",
         "freshCount",
         "errorCount",
         "recordLimitReached",
@@ -836,6 +857,7 @@ def format_long_scout(settings: Settings, *, now: datetime | None = None) -> str
         "🚀 TRADE3 • LONG Radar",
         f"{label} • {'VERİ ESKİ' if stale else local_text(stamp, with_seconds=False)}",
         f"{summary.get('universeCount', 0)} piyasa • saatlik tarama • 7 gün takip",
+        f"Ön tarama {summary.get('screenedCount', summary.get('universeCount', 0))} • kalite nedeniyle elenen {summary.get('qualityExcludedCount', 0)}",
         "Özel deneysel bildirim: "
         + (
             "yalnız sahip için açık"
@@ -858,6 +880,11 @@ def format_long_scout(settings: Settings, *, now: datetime | None = None) -> str
         )
     if not summary.get("watchlist"):
         lines.append("\nŞu anda sabit kuralları karşılayan aday yok.")
+    minute = _read(root(settings) / "minute-shadow" / "public-summary.json")
+    if settings.long_scout_minute_shadow_enabled:
+        lines.append(
+            f"1m giriş deneyi: sessiz • {minute.get('pairedN', 0)} tamamlanmış 1m/5m karşılaştırması (canlı 1m bildirimi yok)"
+        )
     performance = summary.get("performance", {})
     for record in summary.get("tracked", [])[:3]:
         outcome = record.get("outcome", {})
@@ -901,11 +928,16 @@ class LongScoutWorker:
         self.future: Future | None = None
         self.last_discovery_hour = -1
         self.last_settle_bar = -1
+        self.last_minute = -1
         self.cancel = Event()
         self.started_at_ms = int(datetime.now(UTC).timestamp() * 1000)
 
-    def _run(self, *, discover: bool) -> dict:
-        summary = run_long_scout(self.settings, discover=discover, stop=self.cancel)
+    def _run(self, *, discover: bool, settle: bool = True) -> dict:
+        summary = (
+            run_long_scout(self.settings, discover=discover, stop=self.cancel)
+            if settle
+            else load_long_scout_summary(self.settings)
+        )
         if self.settings.long_scout_alerts_enabled and not self.cancel.is_set():
             from .long_notifications import deliver_long_notifications
             from .telegram import TelegramError
@@ -917,6 +949,13 @@ class LongScoutWorker:
                     self.progress(f"LONG özel bildirim: {event}: {status}")
             except (TelegramError, OSError, ValueError) as error:
                 self.progress(f"LONG özel bildirim hatası: {type(error).__name__}")
+        if self.settings.long_scout_minute_shadow_enabled and not self.cancel.is_set():
+            from .minute_shadow import run_minute_shadow
+
+            try:
+                run_minute_shadow(self.settings, summary, stop=self.cancel)
+            except (OSError, RuntimeError, ValueError) as error:
+                self.progress(f"LONG 1m sessiz deney hatası: {type(error).__name__}")
         return summary
 
     def tick(self, now: datetime) -> None:
@@ -933,11 +972,16 @@ class LongScoutWorker:
                 self.last_discovery_hour = -1  # Retry on the next five-minute boundary.
             self.future = None
         stamp = int(now.timestamp() * 1000)
-        bar, hour = stamp // STEP, stamp // HOUR
-        if bar == self.last_settle_bar:
+        bar, hour, minute = stamp // STEP, stamp // HOUR, stamp // 60_000
+        settle = bar != self.last_settle_bar
+        if not settle and (
+            not self.settings.long_scout_minute_shadow_enabled
+            or minute == self.last_minute
+        ):
             return
         discover = hour != self.last_discovery_hour
-        self.future = self.executor.submit(self._run, discover=discover)
+        self.future = self.executor.submit(self._run, discover=discover, settle=settle)
+        self.last_minute = minute
         self.last_settle_bar = bar
         if discover:
             self.last_discovery_hour = hour

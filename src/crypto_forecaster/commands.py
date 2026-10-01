@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .growth_watchlist import format_growth_watchlist
 from .telegram import (
     OWNER_ID_ENV,
     TelegramError,
@@ -645,6 +646,8 @@ def _answer(
         return regime_text() if regime_text is not None else status_text()
     if command in ("longradar", "kesif"):
         return long_scout_text() if long_scout_text is not None else "🚀 LONG Radar henüz hazırlanıyor."
+    if command == "potansiyel":
+        return format_growth_watchlist()
     if command in ("bildirim", "notifications"):
         return (
             notification_status_text()
@@ -724,6 +727,8 @@ def _answer_callback(
         return regime_text() if regime_text is not None else status_text()
     if data == "long_scout":
         return long_scout_text() if long_scout_text is not None else "🚀 LONG Radar henüz hazırlanıyor."
+    if data == "growth_watchlist":
+        return format_growth_watchlist()
     if data == "notification_status":
         return (
             notification_status_text()
@@ -814,6 +819,7 @@ def _help_text(*, is_owner: bool) -> str:
         "🔎 /coin <sembol> — coine özel 15dk/1s/4s/1g tahmini (örn. /coin ALLOUSDT); sembolü tek başına da gönderebilirsin",
         "🧭 /rejim — teyitli piyasa rejimi, genişlik ve trend bilgisi",
         "🚀 /longradar — LONG potansiyeli, yeni listelemeler ve 7 günlük sessiz takip",
+        "🔭 /potansiyel — kaynaklı, tarihli büyüme araştırma listesi (alım sinyali değil)",
         "🔔 /bildirim — son scalp taraması ve bildirim filtresi durumu",
         "📈 /performans [gun] — gonderilen sinyallerin gercek sonucu (varsayilan 30 gun)",
         "🧪 /scalpkarne [gun] — scalp ileri-test sonuclari (varsayilan 30 gun)",

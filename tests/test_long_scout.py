@@ -53,6 +53,32 @@ def bars(count=500, step=HOUR):
 
 
 class LongScoutTests(unittest.TestCase):
+    def test_zero_limit_expands_beyond_eighty_without_bypassing_quality(self):
+        contracts = {f"C{i}USDT": {"onboardDate": 900 * DAY} for i in range(120)}
+        snapshots = {s: FuturesMarketSnapshot(s, 100, 100.01, 1,
+            funding_rate_bps=1, quote_volume_24h_usdt=20_000_000) for s in contracts}
+        snapshots["C0USDT"] = replace(snapshots["C0USDT"], spread_bps=100)
+        snapshots["C1USDT"] = replace(snapshots["C1USDT"], quote_volume_24h_usdt=1)
+        snapshots["C2USDT"] = replace(snapshots["C2USDT"], funding_rate_bps=20)
+        snapshots["C3USDT"] = replace(snapshots["C3USDT"], spread_bps=float("nan"))
+        snapshots["C4USDT"] = replace(snapshots["C4USDT"], quote_volume_24h_usdt=float("inf"))
+        selected = select_universe(contracts, snapshots, Settings(long_scout_universe_limit=0), 1000 * DAY)
+        self.assertEqual(len(selected), 115)
+        self.assertFalse({"C0USDT", "C1USDT", "C2USDT", "C3USDT", "C4USDT"}.intersection(selected))
+
+    def test_minute_worker_ticks_do_not_repeat_five_minute_settlement(self):
+        with patch("crypto_forecaster.long_scout.ThreadPoolExecutor") as executor:
+            worker = LongScoutWorker(Settings(long_scout_minute_shadow_enabled=True), lambda _: None)
+            executor.return_value.submit.return_value.done.return_value = True
+            executor.return_value.submit.return_value.result.return_value = {}
+            worker.tick(datetime.fromtimestamp(DAY / 1000, UTC))
+            worker.tick(datetime.fromtimestamp((DAY + 10_000) / 1000, UTC))
+            self.assertEqual(executor.return_value.submit.call_count, 1)
+            worker.tick(datetime.fromtimestamp((DAY + 60_000) / 1000, UTC))
+            self.assertEqual(executor.return_value.submit.call_args.kwargs, {"discover": False, "settle": False})
+            worker.tick(datetime.fromtimestamp((DAY + STEP) / 1000, UTC))
+            self.assertEqual(executor.return_value.submit.call_args.kwargs, {"discover": False, "settle": True})
+            worker.stop()
     def test_manual_refresh_cannot_overlap_service_and_lock_releases(self):
         with tempfile.TemporaryDirectory() as directory:
             settings = replace(Settings(), scalp_state_dir=Path(directory))

@@ -16,6 +16,21 @@ from crypto_forecaster.dashboard import (
 
 
 class DashboardTests(unittest.TestCase):
+    def test_minute_experiment_exports_aggregates_without_private_raw_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            experiment = base / "experiments/long-discovery-v1/minute-shadow"
+            experiment.mkdir(parents=True)
+            (experiment / "public-summary.json").write_text(json.dumps({
+                "version": "long-minute-shadow-v1", "mode": "shadow", "alerts": False,
+                "pairedN": 3, "oneMinute2PctHits": 2, "fiveMinute2PctHits": 1,
+                "privateOwnerId": "DO_NOT_PUBLISH", "tracked": [{"token": "SECRET"}],
+            }))
+            settings = Settings(scalp_state_dir=base, outcome_state_dir=base / "outcomes")
+            payload = build_dashboard_payload(settings)
+        self.assertEqual(payload["longMinuteShadow"]["pairedN"], 3)
+        self.assertNotIn("DO_NOT_PUBLISH", json.dumps(payload))
+        self.assertNotIn("SECRET", json.dumps(payload))
     def test_directional_forward_rows_have_unique_ids_and_clear_outcomes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
