@@ -20,6 +20,7 @@ from .scalping import (
     load_pending_scalp_brackets,
     load_pending_scalp_setup_forward,
     load_pending_scalp_targets,
+    current_bracket_rows,
     load_scalp_bracket_ledger,
     load_scalp_setup_forward_ledger,
     load_scalp_target_ledger,
@@ -241,7 +242,7 @@ def build_dashboard_payload(
         )
     bracket_rows = load_scalp_bracket_ledger(settings.scalp_state_dir, limit=history_limit)
     source_counts.append(len(bracket_rows))
-    for row in bracket_rows:
+    for row in current_bracket_rows(bracket_rows):
         signals.append(
             {
                 "kind": "scalp-bracket",

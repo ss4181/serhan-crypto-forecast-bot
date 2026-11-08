@@ -53,8 +53,10 @@ from crypto_forecaster.scalping import (
     settle_scalp_setup_forward,
     _assign_alert_tiers,
     _closed_market_context,
+    _dynamic_bracket_bps,
     _rank_market_contexts,
     _relative_strength_observations,
+    STRATEGY_HORIZON_DIRECTION_POLICY,
 )
 from crypto_forecaster.telegram import TelegramDelivery
 from crypto_forecaster.universe import UniverseEntry, load_trade1_universe
@@ -1362,6 +1364,167 @@ class ForwardLedgerTests(unittest.TestCase):
         self.assertEqual(card["bracketDataMissingCount"], 1)
         self.assertIn("Veri eksik: 3 gozlem, 1 TP/SL", format_scalp_scorecard(card))
 
+    def test_short_direction_requires_positive_short_net_after_cost(self) -> None:
+        items = [observation(family="F1"), observation(family="F2")]
+        losing_short_rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -5.0,
+                "net_bps": -17.0,
+                "round_trip_cost_bps": 12.0,
+            }
+            for family in ("F1", "F2")
+            for horizon in (15, 30, 60)
+            for _ in range(12)
+        ]
+        self.assertEqual(
+            scalp_setup_direction(items, losing_short_rows)[0],
+            "KARIŞIK",
+        )
+        self.assertEqual(
+            scalp_setup_direction(
+                items,
+                losing_short_rows,
+                policy=STRATEGY_HORIZON_DIRECTION_POLICY,
+            )[0],
+            "KARIŞIK",
+        )
+
+        winning_short_rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -25.0,
+                "net_bps": -37.0,
+                "round_trip_cost_bps": 12.0,
+            }
+            for family in ("F1", "F2")
+            for horizon in (15, 30, 60)
+            for _ in range(12)
+        ]
+        self.assertEqual(
+            scalp_setup_direction(items, winning_short_rows)[0],
+            "AŞAĞI",
+        )
+
+    def test_short_direction_is_blocked_for_b2_b4_and_strong_buyer_flow(self) -> None:
+        deep_negative_rows = [
+            {
+                "family": family,
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": horizon,
+                "gross_bps": -33.0,
+                "net_bps": -45.0,
+                "round_trip_cost_bps": 12.0,
+            }
+            for family in ("F1", "F3", "B2", "B4")
+            for horizon in (15, 30, 60)
+            for _ in range(15)
+        ]
+        buyer_flow_items = [
+            replace(observation(family="F1"), taker_buy_ratio_1h=0.585),
+            replace(observation(family="F3"), taker_buy_ratio_1h=0.585),
+        ]
+        self.assertNotEqual(
+            scalp_setup_direction(
+                buyer_flow_items,
+                deep_negative_rows,
+                policy=STRATEGY_HORIZON_DIRECTION_POLICY,
+            )[0],
+            "AŞAĞI",
+        )
+        intrinsic_long_items = [observation(family="B4"), observation(family="F1")]
+        self.assertNotEqual(
+            scalp_setup_direction(
+                intrinsic_long_items,
+                deep_negative_rows,
+                policy=STRATEGY_HORIZON_DIRECTION_POLICY,
+            )[0],
+            "AŞAĞI",
+        )
+
+    def test_standalone_b2_and_b4_promote_to_setup_tier(self) -> None:
+        transition_regime = BullRegime("TRANSITION", 0.55, 0.52, 0.5, True, 89)
+        b4_only = [replace(observation(family="B4", score=1.35), execution_eligible=True)]
+        promoted = _assign_alert_tiers(b4_only, transition_regime)
+        self.assertEqual(promoted[0].alert_tier, "KURULUM")
+
+        b4_rows = [
+            {
+                "family": "B4",
+                "perpetual_symbol": "BTCUSDT",
+                "regime_state": "UNKNOWN",
+                "horizon_minutes": 60,
+                "gross_bps": 40.0,
+                "net_bps": 28.0,
+                "round_trip_cost_bps": 12.0,
+            }
+            for _ in range(12)
+        ]
+        direction, horizon_labels = scalp_setup_direction(
+            promoted,
+            b4_rows,
+            policy=STRATEGY_HORIZON_DIRECTION_POLICY,
+        )
+        self.assertEqual(direction, "YUKARI")
+        self.assertEqual(horizon_labels[2], "YUKARI")
+
+    def test_b4_bull_squeeze_release_triggers_in_transition_regime(self) -> None:
+        frame = rising_frame(620, gain=0.00018)
+        # Compress volatility on the prior 20 bars so Bollinger sits inside Keltner,
+        # then expand upward with strong volume and buyer flow on the latest closed bar.
+        base_idx = len(frame) - 1
+        anchor = float(frame.loc[base_idx - 20, "close"])
+        for idx in range(base_idx - 20, base_idx):
+            drift = anchor * (1.0 + 0.00005 * ((idx % 3) - 1))
+            frame.loc[idx, "open"] = drift * 0.9998
+            frame.loc[idx, "close"] = drift
+            frame.loc[idx, "high"] = drift * 1.0015
+            frame.loc[idx, "low"] = drift * 0.9985
+            frame.loc[idx, "volume"] = 100.0
+            frame.loc[idx, "quote_volume"] = 100.0 * drift
+            frame.loc[idx, "taker_buy_base"] = 58.0
+        release_close = anchor * 1.012
+        frame.loc[base_idx, "open"] = anchor * 1.0005
+        frame.loc[base_idx, "close"] = release_close
+        frame.loc[base_idx, "high"] = release_close * 1.001
+        frame.loc[base_idx, "low"] = anchor * 0.9995
+        frame.loc[base_idx, "volume"] = 420.0
+        frame.loc[base_idx, "quote_volume"] = 420.0 * release_close
+        frame.loc[base_idx, "taker_buy_base"] = 420.0 * 0.68
+
+        transition_regime = BullRegime("TRANSITION", 0.55, 0.52, 0.5, True, 89)
+        observations = scan_scalp_frame(
+            entry(),
+            frame,
+            universe_version="2026-07-ek-g",
+            regime=transition_regime,
+            snapshot=snapshot(spread_bps=2.0),
+            settings=Settings(),
+        )
+        families = {obs.family for obs in observations}
+        self.assertIn("B4", families)
+        b4_obs = [obs for obs in observations if obs.family == "B4"]
+        self.assertEqual(b4_obs[0].alert_tier, "KURULUM")
+
+    def test_dynamic_bracket_bps_uses_wider_one_point_five_to_one_targets(self) -> None:
+        low_vol = [replace(observation(family="F1"), estimated_cost_bps=12.0, volatility_bps=10.0)]
+        self.assertEqual(_dynamic_bracket_bps(low_vol), (180.0, 120.0))
+        mid_vol = [replace(observation(family="F1"), estimated_cost_bps=12.0, volatility_bps=25.0)]
+        target_bps, stop_bps = _dynamic_bracket_bps(mid_vol)
+        self.assertAlmostEqual(target_bps, 225.0)
+        self.assertAlmostEqual(stop_bps, 150.0)
+        self.assertAlmostEqual(target_bps / stop_bps, 1.5)
+        high_vol = [replace(observation(family="F1"), estimated_cost_bps=12.0, volatility_bps=50.0)]
+        self.assertEqual(_dynamic_bracket_bps(high_vol), (300.0, 200.0))
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -133,6 +133,25 @@ class NotificationStatusTests(unittest.TestCase):
         self.assertIn("SOLUSDT • YUKARI", text)
         self.assertIn("Telegram teslimatı tamamlandı", text)
 
+    def test_status_shows_effective_regime_thresholds_when_base_is_stricter(self):
+        self.write({"direction_unclear": 3})
+        settings = replace(
+            self.settings, scalp_minimum_alert_score=5.0,
+            scalp_minimum_quality_percentile=.95,
+            scalp_minimum_direction_probability=.70,
+            scalp_minimum_expected_net_bps=250,
+            scalp_minimum_calibration_samples=120,
+        )
+        text = format_notification_status(settings, now=NOW)
+        for prefix in ("Geçiş kapısı:", "Kapalı rejim:"):
+            line = next(line for line in text.splitlines() if line.startswith(prefix))
+            self.assertIn("skor ≥5", line)
+            self.assertIn("kalite ≥%95", line)
+            self.assertIn("yön ≥%70", line)
+            self.assertIn("net ≥250 bps", line)
+            self.assertIn("n ≥120", line)
+        self.assertIn("karışık veya yalnızca ağırlıklı yönler gönderilmez", text)
+
     def test_old_snapshot_does_not_claim_current_service_health(self):
         self.write()
         self.assertIn("KAYIT ESKİ", format_notification_status(self.settings, now=NOW + timedelta(minutes=16)))

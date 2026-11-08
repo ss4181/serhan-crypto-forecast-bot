@@ -16,6 +16,7 @@ from .dashboard import dashboard_payload_text, write_dashboard_payload
 from .hub import post_snapshot, write_snapshot
 from .outcomes import format_scorecard, load_ledger, scorecard, settle_pending
 from .regime import deliver_regime_change
+from .long_2pct import format_long_2pct_status
 from .long_scout import format_long_scout, run_long_scout
 from .research import research_all
 from .scalping import (
@@ -138,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scalp_card.add_argument("--days", type=int, default=30)
 
+    subparsers.add_parser("long-2pct", help="Deneysel LONG %%2 karnesini göster")
     scout = subparsers.add_parser("long-scout", help="Binance LONG keşif radarını tara ve 7 günlük paper takibi güncelle")
     scout.add_argument("--status", action="store_true", help="Ağa çıkmadan mevcut LONG radarını göster")
 
@@ -209,6 +211,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         settings = Settings()
+        if args.command == "long-2pct":
+            print(format_long_2pct_status(settings))
+            return 0
         if args.command == "long-scout":
             if not args.status:
                 run_long_scout(settings)
@@ -641,6 +646,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
         top_k=len(report.observations) or settings.scalp_top_k,
         ledger=load_scalp_ledger(settings.scalp_state_dir),
         milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+        direction_policy=settings.scalp_direction_policy,
     )
     bracket_tracked = record_scalp_bracket_setups(
         settings.scalp_state_dir,
@@ -649,6 +655,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
         top_k=len(report.observations) or settings.scalp_top_k,
         ledger=load_scalp_ledger(settings.scalp_state_dir),
         horizon_minutes=settings.scalp_bracket_horizon_minutes,
+        direction_policy=settings.scalp_direction_policy,
     )
     settled_targets = settle_scalp_target_outcomes(
         settings.scalp_state_dir, settings.scalp_data_dir
@@ -678,6 +685,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
                 top_k=settings.scalp_top_k,
                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                 bracket_ledger=load_scalp_bracket_ledger(settings.scalp_state_dir),
+                settings=settings,
             )
         )
     if not send:
@@ -724,6 +732,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
         maximum_abs_funding_bps=settings.scalp_maximum_abs_funding_bps,
         maximum_bar_volatility_bps=settings.scalp_maximum_bar_volatility_bps,
         live_families=settings.scalp_live_families,
+        direction_policy=settings.scalp_direction_policy,
     )
     delivery = deliver_scalp_observations(
         settings, notification_report, manifest=manifest
@@ -740,6 +749,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                 notification_sent=True,
                 milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+                direction_policy=settings.scalp_direction_policy,
             )
             record_scalp_bracket_setups(
                 settings.scalp_state_dir,
@@ -749,6 +759,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                 notification_sent=True,
                 horizon_minutes=settings.scalp_bracket_horizon_minutes,
+                direction_policy=settings.scalp_direction_policy,
             )
             if tracked:
                 print(f"Scalp hedef izleme: {tracked} yeni kurulum")

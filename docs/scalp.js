@@ -270,7 +270,7 @@ function renderHorizonShadow(summary) {
     const ci = Array.isArray(x.wilson95) ? `\n%95 ${pct(x.wilson95[0])}–${pct(x.wilson95[1])}` : "";
     return `${pct(x.rate)} · ${number(x.wins)}/${number(x.resolved)}${ci}\nBekleyen ${number(x.pending)} · Eksik ${number(x.missing)}${withNet ? `\nOrt. net ${number(x.meanNetBps)} bps` : ""}`;
   };
-  for (const [key, label] of [["baseline", "Mevcut kural"], ["proposed", "Sabit strateji ufku"], ["additional", "Yalnız yeni kuralın ekledikleri"]]) {
+  for (const [key, label] of [["baseline", "Uzlaşı kuralı"], ["proposed", "Sabit strateji ufku"], ["additional", "Yalnız yeni kuralın ekledikleri"]]) {
     const arm = (summary.arms || {})[key] || {};
     const row = document.createElement("tr");
     cell(row, label);

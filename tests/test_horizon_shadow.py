@@ -186,7 +186,7 @@ class ShadowLifecycleTests(unittest.TestCase):
         self.assertEqual(second["arms"]["proposed"]["candidates"], 1)
         self.assertEqual(json.loads(pending[0].read_text(encoding="utf-8")), payload)
         self.assertIn(
-            "Yeni 1",
+            "Sabit ufuk (canlı) 1",
             format_horizon_shadow_status(self.settings, now=moment(CLOSE + 20_000)),
         )
 
