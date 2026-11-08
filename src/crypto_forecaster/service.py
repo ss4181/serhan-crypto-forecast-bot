@@ -38,6 +38,7 @@ from .data import (
 from .features import FEATURE_LABELS_TR, FEATURE_NAMES, latest_feature_vector
 from .hub import hub_configured, post_snapshot, write_snapshot
 from .horizon_shadow import format_horizon_shadow_status, run_horizon_shadow
+from .long_2pct import format_long_2pct_status, run_long_2pct_experiment
 from .long_scout import LongScoutWorker, format_long_scout
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
 from .notification_status import format_notification_status, write_notification_status
@@ -643,6 +644,11 @@ def answer_commands(
         notification_status_text=lambda: "\n\n".join((
             format_notification_status(settings, now=current),
             format_horizon_shadow_status(settings, now=current),
+            *(
+                [format_long_2pct_status(settings, now=current)]
+                if settings.long_2pct_experiment_enabled
+                else []
+            ),
         )),
         notifier=notifier,
         now=current,
@@ -664,6 +670,8 @@ def _coin_query_reply(settings: Settings, symbol: str) -> str:
 def _scalp_status_candidates(
     report: ScalpScanReport,
     ledger: list[dict[str, object]] | tuple[dict[str, object], ...] = (),
+    *,
+    direction_policy: str = "consensus",
 ) -> tuple[dict[str, object], ...]:
     grouped: dict[str, list] = {}
     for item in report.observations:
@@ -673,7 +681,9 @@ def _scalp_status_candidates(
     # The status writer receives only already-filtered candidates, so this is
     # intentionally a compact view and never a second notification gate.
     for items in grouped.values():
-        assessment = scalp_setup_assessment(items, ledger)
+        assessment = scalp_setup_assessment(
+            items, ledger, direction_policy=direction_policy
+        )
         item = max(items, key=lambda value: value.score)
         if assessment.direction not in {"YUKARI", "AŞAĞI"}:
             continue
@@ -889,6 +899,7 @@ def serve_forever(
                         manifest=scalp_manifest,
                         top_k=settings.scalp_top_k,
                         ledger=load_scalp_ledger(settings.scalp_state_dir),
+                        direction_policy=settings.scalp_direction_policy,
                     )
                     record_scalp_target_setups(
                         settings.scalp_state_dir,
@@ -897,6 +908,7 @@ def serve_forever(
                         top_k=len(scalp_report.observations) or settings.scalp_top_k,
                         ledger=load_scalp_ledger(settings.scalp_state_dir),
                         milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+                        direction_policy=settings.scalp_direction_policy,
                     )
                     record_scalp_bracket_setups(
                         settings.scalp_state_dir,
@@ -905,6 +917,7 @@ def serve_forever(
                         top_k=len(scalp_report.observations) or settings.scalp_top_k,
                         ledger=load_scalp_ledger(settings.scalp_state_dir),
                         horizon_minutes=settings.scalp_bracket_horizon_minutes,
+                        direction_policy=settings.scalp_direction_policy,
                     )
                     scalp_setup_symbols = {
                         item.perpetual_symbol
@@ -946,6 +959,7 @@ def serve_forever(
                             maximum_bar_volatility_bps=settings.scalp_maximum_bar_volatility_bps,
                             live_families=settings.scalp_live_families,
                             diagnostics=notification_counts,
+                            direction_policy=settings.scalp_direction_policy,
                         )
                         scalp_notification_report, safety_reason = apply_scalp_notification_safety_gates(
                             scalp_notification_report, settings,
@@ -955,7 +969,9 @@ def serve_forever(
                         if safety_reason:
                             notification_counts[safety_reason] = notification_counts.get(safety_reason, 0) + 1
                         status_candidates = _scalp_status_candidates(
-                            scalp_notification_report, scalp_ledger
+                            scalp_notification_report,
+                            scalp_ledger,
+                            direction_policy=settings.scalp_direction_policy,
                         )
                         reason_text = ", ".join(
                             f"{key}={value}" for key, value in notification_counts.items()
@@ -1016,6 +1032,7 @@ def serve_forever(
                                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                                 notification_sent=True,
                                 milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+                                direction_policy=settings.scalp_direction_policy,
                             )
                             record_scalp_bracket_setups(
                                 settings.scalp_state_dir,
@@ -1025,6 +1042,7 @@ def serve_forever(
                                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                                 notification_sent=True,
                                 horizon_minutes=settings.scalp_bracket_horizon_minutes,
+                                direction_policy=settings.scalp_direction_policy,
                             )
                             record_scalp_setup_forward_setups(
                                 settings.scalp_state_dir,
@@ -1033,6 +1051,7 @@ def serve_forever(
                                 top_k=settings.scalp_top_k,
                                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                                 notification_sent=True,
+                                direction_policy=settings.scalp_direction_policy,
                             )
                             if tracked:
                                 progress(f"Scalp hedef izleme: {tracked} yeni kurulum")
@@ -1079,6 +1098,14 @@ def serve_forever(
                             )
                         except (OSError, RuntimeError, TypeError, ValueError) as error:
                             progress(f"Scalp ufuk shadow hatasi: {error}")
+                    if is_primary() and settings.long_2pct_experiment_enabled:
+                        try:
+                            for event in run_long_2pct_experiment(
+                                settings, scalp_report, now=scalp_now
+                            ):
+                                progress(f"LONG %2 deney: {event}")
+                        except (OSError, RuntimeError, TypeError, ValueError) as error:
+                            progress(f"LONG %2 deney hatasi: {error}")
                     try:
                         write_dashboard_payload(
                             settings,

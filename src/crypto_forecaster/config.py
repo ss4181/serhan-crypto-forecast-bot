@@ -132,6 +132,13 @@ class Settings:
     long_scout_alerts_enabled: bool = field(
         default_factory=lambda: _environment_bool("CRYPTO_LONG_SCOUT_OWNER_ALERTS", False)
     )
+    # Owner-only forward test; frozen in the 2026-11-08 research protocol.
+    long_2pct_experiment_enabled: bool = field(
+        default_factory=lambda: _environment_bool("CRYPTO_LONG_2PCT_EXPERIMENT", False)
+    )
+    long_2pct_daily_limit: int = field(
+        default_factory=lambda: _environment_int("CRYPTO_LONG_2PCT_DAILY_LIMIT", 5, 1, 5)
+    )
     long_scout_universe_limit: int = field(
         default_factory=lambda: _environment_int("CRYPTO_LONG_SCOUT_UNIVERSE_LIMIT", 0, 0, 2000)
     )
@@ -211,7 +218,7 @@ class Settings:
     )
     scalp_transition_minimum_expected_net_bps: float = field(
         default_factory=lambda: _environment_float(
-            "CRYPTO_SCALP_TRANSITION_MIN_EXPECTED_NET_BPS", 150.0, -100.0, 1_000.0
+            "CRYPTO_SCALP_TRANSITION_MIN_EXPECTED_NET_BPS", 20.0, -100.0, 1_000.0
         )
     )
     scalp_transition_minimum_calibration_samples: int = field(
@@ -252,14 +259,21 @@ class Settings:
     # New detector families remain shadow-only until explicitly allow-listed.
     scalp_live_families: tuple[str, ...] = field(
         default_factory=lambda: _environment_csv(
-            "CRYPTO_SCALP_LIVE_FAMILIES", ("F1", "F2", "F3", "B1", "B2", "B3")
+            "CRYPTO_SCALP_LIVE_FAMILIES", ("F1", "F2", "F3", "B1", "B2", "B3", "B4")
+        )
+    )
+    scalp_direction_policy: str = field(
+        default_factory=lambda: _environment_choice(
+            "CRYPTO_SCALP_DIRECTION_POLICY",
+            "strategy_horizon",
+            ("consensus", "strategy_horizon"),
         )
     )
     # A volatility-aware first-touch bracket measures actual scalp quality.
     # The old +/-2% and +/-3% levels remain separate 24-hour milestones.
     scalp_bracket_horizon_minutes: int = field(
         default_factory=lambda: _environment_int(
-            "CRYPTO_SCALP_BRACKET_HORIZON_MINUTES", 60, 15, 240
+            "CRYPTO_SCALP_BRACKET_HORIZON_MINUTES", 240, 15, 720
         )
     )
     scalp_milestone_horizon_hours: int = field(
@@ -457,6 +471,16 @@ def _environment_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     if any(re.fullmatch(r"[A-Z][0-9]{1,2}", value) is None for value in values):
         raise ValueError(f"{name} icindeki aile adi gecersiz")
     return values
+
+
+def _environment_choice(
+    name: str, default: str, allowed: tuple[str, ...]
+) -> str:
+    raw = os.environ.get(name)
+    value = default if raw is None or not raw.strip() else raw.strip().lower()
+    if value not in allowed:
+        raise ValueError(f"{name} yalnizca {', '.join(allowed)} olabilir")
+    return value
 
 
 def _environment_int(name: str, default: int, minimum: int, maximum: int) -> int:

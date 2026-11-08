@@ -1,0 +1,303 @@
+//@version=6
+// Research-only baseline. No Trade3/Trade1 runtime integration.
+// Commission and slippage are strategy properties (editable in Strategy Settings),
+// not Pine inputs: TradingView requires compile-time values in strategy().
+strategy(
+     title = "AMD + Locked Accumulation POC | Baseline",
+     shorttitle = "AMD POC baseline",
+     overlay = true,
+     pyramiding = 0,
+     initial_capital = 10000,
+     currency = currency.USD,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 1,
+     commission_type = strategy.commission.percent,
+     commission_value = 0.05,
+     slippage = 2,
+     process_orders_on_close = false,
+     calc_on_every_tick = false,
+     use_bar_magnifier = true,
+     max_boxes_count = 100,
+     max_labels_count = 200
+)
+
+// ── Inputs ───────────────────────────────────────────────────────────────────
+int minAccumBars = input.int(20, "Accumulation Min Bars", minval = 5, maxval = 200)
+int maxAccumBars = input.int(60, "Accumulation Max Bars", minval = 5, maxval = 300)
+int atrLength = input.int(14, "ATR Length", minval = 2, maxval = 100)
+float maxRangeAtr = input.float(2.0, "Maximum Range / ATR Multiplier", minval = 0.1, step = 0.1)
+int profileRows = input.int(40, "Volume Profile Rows", minval = 10, maxval = 100)
+int minSweepTicks = input.int(2, "Minimum Sweep Distance (ticks)", minval = 0, maxval = 1000)
+bool requireCloseBackInside = input.bool(true, "Require Close Back Inside Range")
+int maxSetupBars = input.int(12, "Maximum Setup Validity Bars", minval = 1, maxval = 500)
+float slBuffer = input.float(2.0, "SL Buffer (ticks)", minval = 0.0, step = 0.5)
+float rewardRisk = input.float(2.0, "Risk / Reward", minval = 0.25, maxval = 10.0, step = 0.25)
+string sizingMode = input.string("Risk %", "Position Sizing", options = ["Risk %", "Fixed qty"])
+float riskPercent = input.float(1.0, "Risk Per Trade (%)", minval = 0.01, maxval = 100.0, step = 0.1)
+float fixedQty = input.float(1.0, "Fixed Position Size", minval = 0.000001, step = 0.1)
+string directionMode = input.string("Both", "Long / Short / Both", options = ["Both", "Long only", "Short only"])
+int backtestStart = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Backtest Start (UTC)")
+int backtestEnd = input.time(timestamp("31 Dec 2099 23:59 +0000"), "Backtest End (UTC)")
+bool debugMode = input.bool(false, "Debug Mode")
+
+// Commission/slippage defaults above are 0.05% per fill and 2 ticks. Change
+// them in Strategy Settings → Properties to match the venue/account being tested.
+
+// ── State machine ────────────────────────────────────────────────────────────
+int SEARCH = 0
+int WAIT_SWEEP = 1
+int WAIT_REENTRY = 2
+int WAIT_POC = 3
+int IN_POSITION = 4
+
+var int state = SEARCH
+var int setupDirection = 0        // +1 long, -1 short
+var int sweepBar = na
+var int reentryBar = na
+var float rangeHigh = na
+var float rangeLow = na
+var float lockedPoc = na
+var float manipulationExtreme = na
+var float lockedStop = na
+var float lockedTarget = na
+var box accumulationBox = na
+
+float atr = ta.atr(atrLength)
+bool inDateWindow = time >= backtestStart and time <= backtestEnd
+float minSweepDistance = minSweepTicks * syminfo.mintick
+float stopBuffer = slBuffer * syminfo.mintick
+
+// Allocate each candle's volume uniformly over its high-low interval, then
+// sum the overlap in each locked range row. This is an OHLCV approximation,
+// not TradingView's internal trade-level volume-profile calculation.
+f_calculatePoc(int barsCount, float profileLow, float profileHigh, int rowsCount) =>
+    float result = na
+    float binSize = (profileHigh - profileLow) / rowsCount
+    if barsCount > 0 and rowsCount > 0 and binSize > 0
+        array<float> rowVolumes = array.new_float(rowsCount, 0.0)
+        for offset = 0 to barsCount - 1
+            float candleLow = low[offset]
+            float candleHigh = high[offset]
+            float candleVolume = nz(volume[offset], 0.0)
+            if candleHigh <= candleLow
+                int rowIndex = int(math.floor((close[offset] - profileLow) / binSize))
+                rowIndex := math.max(0, math.min(rowsCount - 1, rowIndex))
+                array.set(rowVolumes, rowIndex, array.get(rowVolumes, rowIndex) + candleVolume)
+            else
+                int firstRow = int(math.floor((candleLow - profileLow) / binSize))
+                int lastRow = int(math.floor((candleHigh - profileLow) / binSize))
+                firstRow := math.max(0, math.min(rowsCount - 1, firstRow))
+                lastRow := math.max(0, math.min(rowsCount - 1, lastRow))
+                for rowIndex = firstRow to lastRow
+                    float rowLow = profileLow + rowIndex * binSize
+                    float rowHigh = rowLow + binSize
+                    float overlap = math.max(0.0, math.min(candleHigh, rowHigh) - math.max(candleLow, rowLow))
+                    if overlap > 0
+                        float allocatedVolume = candleVolume * overlap / (candleHigh - candleLow)
+                        array.set(rowVolumes, rowIndex, array.get(rowVolumes, rowIndex) + allocatedVolume)
+        float bestVolume = -1.0
+        int bestRow = 0
+        for rowIndex = 0 to rowsCount - 1
+            float rowVolume = array.get(rowVolumes, rowIndex)
+            if rowVolume > bestVolume
+                bestVolume := rowVolume
+                bestRow := rowIndex
+        if bestVolume > 0
+            result := profileLow + (bestRow + 0.5) * binSize
+    result
+
+// ── Per-bar event flags ──────────────────────────────────────────────────────
+bool accumulationFound = false
+bool downsideSweep = false
+bool upsideSweep = false
+bool rangeReentry = false
+bool pocReclaim = false
+bool pocLoss = false
+bool longEntry = false
+bool shortEntry = false
+bool setupExpired = false
+
+if barstate.isconfirmed
+    // End-date liquidation is a market order on the next available tick.
+    if time > backtestEnd and strategy.position_size != 0
+        strategy.close_all(comment = "Backtest end")
+
+    // Ignore and discard unfinished setups outside the requested test window.
+    if not inDateWindow and state != IN_POSITION
+        state := SEARCH
+        setupDirection := 0
+        sweepBar := na
+        reentryBar := na
+        rangeHigh := na
+        rangeLow := na
+        lockedPoc := na
+        manipulationExtreme := na
+
+    // Retire a setup after a simulated position has fully closed.
+    if state == IN_POSITION and strategy.position_size == 0
+        state := SEARCH
+        setupDirection := 0
+        sweepBar := na
+        reentryBar := na
+        rangeHigh := na
+        rangeLow := na
+        lockedPoc := na
+        manipulationExtreme := na
+        lockedStop := na
+        lockedTarget := na
+
+    // Find the shortest qualifying recent window, deterministically. It uses
+    // only bars ending at this confirmed bar; first match is frozen in place.
+    if inDateWindow and state == SEARCH and strategy.position_size == 0 and not na(atr) and minAccumBars <= maxAccumBars
+        int selectedLength = na
+        float selectedHigh = na
+        float selectedLow = na
+        float selectedPoc = na
+        for candidateLength = minAccumBars to maxAccumBars
+            if na(selectedLength) and bar_index >= candidateLength - 1
+                float candidateHigh = ta.highest(high, candidateLength)
+                float candidateLow = ta.lowest(low, candidateLength)
+                float candidateWidth = candidateHigh - candidateLow
+                if candidateWidth > 0 and candidateWidth <= atr * maxRangeAtr
+                    float candidatePoc = f_calculatePoc(candidateLength, candidateLow, candidateHigh, profileRows)
+                    if not na(candidatePoc)
+                        selectedLength := candidateLength
+                        selectedHigh := candidateHigh
+                        selectedLow := candidateLow
+                        selectedPoc := candidatePoc
+        if not na(selectedLength)
+            rangeHigh := selectedHigh
+            rangeLow := selectedLow
+            lockedPoc := selectedPoc
+            setupDirection := 0
+            manipulationExtreme := na
+            sweepBar := na
+            reentryBar := na
+            state := WAIT_SWEEP
+            accumulationFound := true
+            if not na(accumulationBox)
+                box.delete(accumulationBox)
+            accumulationBox := box.new(
+                 left = bar_index - selectedLength + 1,
+                 top = rangeHigh,
+                 right = bar_index,
+                 bottom = rangeLow,
+                 border_color = color.new(color.blue, 15),
+                 bgcolor = color.new(color.blue, 91)
+            )
+
+    // Extend the locked accumulation box only while the setup is waiting.
+    if not na(accumulationBox) and (state == WAIT_SWEEP or state == WAIT_REENTRY or state == WAIT_POC)
+        box.set_right(accumulationBox, bar_index)
+
+    // Only accept one-sided sweeps. A candle breaching both boundaries is
+    // ambiguous on OHLC data, so it is deliberately ignored.
+    if inDateWindow and state == WAIT_SWEEP
+        bool sweptDown = low < rangeLow - minSweepDistance
+        bool sweptUp = high > rangeHigh + minSweepDistance
+        if sweptDown and not sweptUp
+            setupDirection := 1
+            manipulationExtreme := low
+            sweepBar := bar_index
+            downsideSweep := true
+            if requireCloseBackInside and close > rangeLow
+                state := WAIT_POC
+                rangeReentry := true
+                reentryBar := bar_index
+            else
+                state := WAIT_REENTRY
+        else if sweptUp and not sweptDown
+            setupDirection := -1
+            manipulationExtreme := high
+            sweepBar := bar_index
+            upsideSweep := true
+            if requireCloseBackInside and close < rangeHigh
+                state := WAIT_POC
+                rangeReentry := true
+                reentryBar := bar_index
+            else
+                state := WAIT_REENTRY
+
+    // Keep recording the manipulation extreme until (and including) the
+    // first confirmed close back inside the range. It is frozen afterwards.
+    if inDateWindow and state == WAIT_REENTRY
+        if setupDirection == 1
+            manipulationExtreme := math.min(manipulationExtreme, low)
+            if close > rangeLow
+                state := WAIT_POC
+                rangeReentry := true
+                reentryBar := bar_index
+        else if setupDirection == -1
+            manipulationExtreme := math.max(manipulationExtreme, high)
+            if close < rangeHigh
+                state := WAIT_POC
+                rangeReentry := true
+                reentryBar := bar_index
+
+    if inDateWindow and state == WAIT_POC
+        if not na(sweepBar) and bar_index - sweepBar > maxSetupBars
+            setupExpired := true
+            state := SEARCH
+            setupDirection := 0
+            sweepBar := na
+            reentryBar := na
+            rangeHigh := na
+            rangeLow := na
+            lockedPoc := na
+            manipulationExtreme := na
+        else
+            // Confirmation is intentionally on a later bar than re-entry.
+            bool afterReentry = not na(reentryBar) and bar_index > reentryBar
+            bool reclaim = afterReentry and setupDirection == 1 and close > lockedPoc and close[1] <= lockedPoc
+            bool losePoc = afterReentry and setupDirection == -1 and close < lockedPoc and close[1] >= lockedPoc
+            pocReclaim := reclaim
+            pocLoss := losePoc
+
+            bool allowLong = directionMode != "Short only"
+            bool allowShort = directionMode != "Long only"
+            float proposedStop = setupDirection == 1 ? manipulationExtreme - stopBuffer : manipulationExtreme + stopBuffer
+            float stopDistance = math.abs(close - proposedStop)
+            bool validRisk = not na(proposedStop) and stopDistance > syminfo.mintick and not na(syminfo.pointvalue) and syminfo.pointvalue > 0
+            float riskQuantity = validRisk ? strategy.equity * riskPercent / 100.0 / (stopDistance * syminfo.pointvalue) : na
+            float orderQuantity = sizingMode == "Risk %" ? riskQuantity : fixedQty
+
+            if reclaim and allowLong and validRisk and orderQuantity > 0
+                lockedStop := proposedStop
+                lockedTarget := close + stopDistance * rewardRisk
+                strategy.entry("Long", strategy.long, qty = orderQuantity, comment = "POC reclaim")
+                strategy.exit("Long SL/TP", from_entry = "Long", stop = lockedStop, limit = lockedTarget)
+                longEntry := true
+                state := IN_POSITION
+            else if losePoc and allowShort and validRisk and orderQuantity > 0
+                lockedStop := proposedStop
+                lockedTarget := close - stopDistance * rewardRisk
+                strategy.entry("Short", strategy.short, qty = orderQuantity, comment = "POC loss")
+                strategy.exit("Short SL/TP", from_entry = "Short", stop = lockedStop, limit = lockedTarget)
+                shortEntry := true
+                state := IN_POSITION
+
+// ── Chart output ─────────────────────────────────────────────────────────────
+bool showSetup = state != SEARCH
+plot(showSetup ? rangeHigh : na, "Accumulation High", color = color.new(color.blue, 0), style = plot.style_linebr, linewidth = 1)
+plot(showSetup ? rangeLow : na, "Accumulation Low", color = color.new(color.blue, 0), style = plot.style_linebr, linewidth = 1)
+plot(showSetup ? lockedPoc : na, "Locked POC (approx.)", color = color.new(color.orange, 0), style = plot.style_linebr, linewidth = 2)
+plot(state == IN_POSITION ? lockedStop : na, "Locked Stop", color = color.new(color.red, 0), style = plot.style_linebr, linewidth = 2)
+plot(state == IN_POSITION ? lockedTarget : na, "Locked Target", color = color.new(color.green, 0), style = plot.style_linebr, linewidth = 2)
+
+plotshape(downsideSweep, title = "Downside Liquidity Sweep", style = shape.triangleup, location = location.belowbar, color = color.aqua, size = size.tiny, text = "Sweep")
+plotshape(upsideSweep, title = "Upside Liquidity Sweep", style = shape.triangledown, location = location.abovebar, color = color.fuchsia, size = size.tiny, text = "Sweep")
+plotshape(longEntry, title = "Long Entry", style = shape.labelup, location = location.belowbar, color = color.green, textcolor = color.white, text = "LONG")
+plotshape(shortEntry, title = "Short Entry", style = shape.labeldown, location = location.abovebar, color = color.red, textcolor = color.white, text = "SHORT")
+
+plotshape(debugMode and accumulationFound, title = "Debug: accumulation", style = shape.circle, location = location.top, color = color.blue, size = size.tiny, text = "ACCUM")
+plotshape(debugMode and downsideSweep, title = "Debug: downside sweep", style = shape.circle, location = location.bottom, color = color.aqua, size = size.tiny, text = "DOWN SWEEP")
+plotshape(debugMode and upsideSweep, title = "Debug: upside sweep", style = shape.circle, location = location.top, color = color.fuchsia, size = size.tiny, text = "UP SWEEP")
+plotshape(debugMode and rangeReentry, title = "Debug: range re-entry", style = shape.diamond, location = location.bottom, color = color.yellow, size = size.tiny, text = "REENTRY")
+plotshape(debugMode and pocReclaim, title = "Debug: POC reclaim", style = shape.diamond, location = location.belowbar, color = color.green, size = size.tiny, text = "POC +")
+plotshape(debugMode and pocLoss, title = "Debug: POC loss", style = shape.diamond, location = location.abovebar, color = color.red, size = size.tiny, text = "POC -")
+plotshape(debugMode and longEntry, title = "Debug: long entry", style = shape.labelup, location = location.belowbar, color = color.green, textcolor = color.white, text = "LONG ENTRY")
+plotshape(debugMode and shortEntry, title = "Debug: short entry", style = shape.labeldown, location = location.abovebar, color = color.red, textcolor = color.white, text = "SHORT ENTRY")
+plotshape(debugMode and setupExpired, title = "Debug: setup expired", style = shape.xcross, location = location.top, color = color.gray, size = size.tiny, text = "EXPIRED")
+
+// Use TradingView's Strategy Tester for trade count, win rate, net profit,
+// profit factor, average trade, drawdown, and direction-specific trade lists.

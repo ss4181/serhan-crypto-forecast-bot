@@ -61,6 +61,8 @@ SCALP_SETTLEMENT_GRACE_DAYS = 2
 SCALP_BACKTEST_HORIZONS = (15, 30, 60)
 CONSENSUS_DIRECTION_POLICY = "consensus"
 STRATEGY_HORIZON_DIRECTION_POLICY = "strategy_horizon"
+STANDALONE_SETUP_FAMILIES = frozenset({"B2", "B4"})
+INTRINSIC_LONG_FAMILIES = frozenset({"B2", "B4"})
 FAMILY_LABELS = {
     "F1": "hacim momentumu",
     "F2": "kaskad tepki",
@@ -68,6 +70,7 @@ FAMILY_LABELS = {
     "B1": "boga 24s kirilimi",
     "B2": "boga geri-cekilme donusu",
     "B3": "goreli guc gecisi",
+    "B4": "volatilite sikisma kirilimi",
 }
 FAMILY_EVIDENCE = {
     "F1": "30-coin tarihsel testte maliyet sonrasi kapiyi gecemedi",
@@ -76,6 +79,7 @@ FAMILY_EVIDENCE = {
     "B1": "yalniz boga rejiminde ileri test edilen yeni hipotez",
     "B2": "yalniz boga rejiminde ileri test edilen yeni hipotez",
     "B3": "yalniz boga rejiminde ileri test edilen yeni hipotez",
+    "B4": "sikisma sonrasi alici akisli yukari kirilim hipotezi",
 }
 STRATEGY_LABELS = {
     "BULL_CONTINUATION_LONG": "Boğa devamı LONG",
@@ -336,7 +340,7 @@ def scan_scalp_frame(
             )
         )
 
-    if regime is not None and regime.state == "BULL":
+    if regime is not None and regime.state in {"BULL", "TRANSITION"}:
         high_24h_now = float(high_24h.iloc[latest])
         b1_condition = (close.gt(high_24h) & volume_z.ge(1.0)).fillna(False)
         if _edge_is_new(b1_condition, latest) and math.isfinite(high_24h_now):
@@ -390,6 +394,70 @@ def scan_scalp_frame(
                     details=(
                         f"geri donus {recovery_bps:+.1f} bps",
                         "48s trend ustunde",
+                    ),
+                    regime=regime,
+                    snapshot=snapshot,
+                    settings=settings,
+                    historical_cost_bps=historical_cost_bps,
+                    context=context,
+                )
+            )
+
+        low = frame["low"].astype("float64")
+        prev_close = close.shift(1)
+        true_range = pd.concat(
+            (
+                high - low,
+                (high - prev_close).abs(),
+                (low - prev_close).abs(),
+            ),
+            axis=1,
+        ).max(axis=1)
+        atr14 = true_range.rolling(14, min_periods=14).mean()
+        bb_mid = close.rolling(20, min_periods=20).mean()
+        bb_std = close.rolling(20, min_periods=20).std(ddof=0)
+        bb_upper = bb_mid + 2.0 * bb_std
+        bb_lower = bb_mid - 2.0 * bb_std
+        kc_mid = close.ewm(span=20, min_periods=20, adjust=False).mean()
+        kc_upper = kc_mid + 1.5 * atr14
+        kc_lower = kc_mid - 1.5 * atr14
+        squeeze_on = (bb_upper < kc_upper) & (bb_lower > kc_lower)
+        recent_squeeze = squeeze_on.shift(1).rolling(6, min_periods=1).max().gt(0.0)
+        b4_condition = (
+            recent_squeeze
+            & close.gt(bb_upper)
+            & (close.gt(kc_upper) | ~squeeze_on)
+            & close.gt(open_)
+            & close.gt(ema_48h)
+            & volume_z.ge(1.0)
+        ).fillna(False)
+        buyer_flow_ok = (
+            context.taker_buy_ratio_1h is not None
+            and math.isfinite(float(context.taker_buy_ratio_1h))
+            and float(context.taker_buy_ratio_1h) >= 0.54
+        )
+        bb_upper_now = float(bb_upper.iloc[latest])
+        if (
+            _edge_is_new(b4_condition, latest)
+            and buyer_flow_ok
+            and math.isfinite(bb_upper_now)
+            and bb_upper_now > 0.0
+        ):
+            release_bps = math.log(price / bb_upper_now) * 10_000.0
+            observations.append(
+                _observation(
+                    entry,
+                    universe_version,
+                    family="B4",
+                    score=1.2
+                    + min(max(release_bps, 0.0) / 25.0, 1.0)
+                    + max(z_now, 0.0) / 3.0,
+                    price=price,
+                    bar_open_ms=bar_open_ms,
+                    bar_close_ms=bar_close_ms,
+                    details=(
+                        f"sikisma kirilimi {release_bps:+.1f} bps",
+                        f"alici akisi %{float(context.taker_buy_ratio_1h) * 100:.0f}",
                     ),
                     regime=regime,
                     snapshot=snapshot,
@@ -619,6 +687,11 @@ def _recent_scalp_rows(
     )[: max(int(limit), 0)]
 
 
+def _has_setup_confirmation(items: Iterable[ScalpObservation]) -> bool:
+    families = {item.family for item in items}
+    return len(families) >= 2 or bool(families & STANDALONE_SETUP_FAMILIES)
+
+
 def _recent_directional_rate(
     rows: Iterable[dict[str, Any]],
     *,
@@ -635,8 +708,16 @@ def _recent_directional_rate(
             continue
         if not math.isfinite(net):
             continue
+        directional_net = sign * net
+        if direction == "AŞAĞI" and "gross_bps" in row:
+            try:
+                gross = float(row["gross_bps"])
+                if math.isfinite(gross):
+                    directional_net = _short_net_bps(gross, net)
+            except (TypeError, ValueError):
+                pass
         total += 1
-        wins += sign * net > 0.0
+        wins += directional_net > 0.0
     return wins, total
 
 
@@ -726,6 +807,11 @@ def format_scalp_observation_digest(
         raise ValueError("Scalp gozlem raporu icin kurulum yok")
     rows = tuple(ledger)
     active_settings = settings or Settings()
+    direction_policy = (
+        settings.scalp_direction_policy
+        if settings is not None
+        else CONSENSUS_DIRECTION_POLICY
+    )
     bracket_rows = tuple(bracket_ledger)
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in shown:
@@ -733,7 +819,9 @@ def format_scalp_observation_digest(
     lines = [f"🧪 TRADE3 • BINANCE USD-M PERP • {local_text(report.evaluated_at_ms, with_seconds=False)}"]
     for items in grouped.values():
         item = items[0]
-        assessment = scalp_setup_assessment(items, rows)
+        assessment = scalp_setup_assessment(
+            items, rows, direction_policy=direction_policy
+        )
         stats = scalp_setup_forecast_stats(items, rows)
         horizon = assessment.horizon_minutes or 60
         forecast = stats.get(horizon)
@@ -953,7 +1041,7 @@ def filter_scalp_notification_report(
                     count("volatility")
             continue
         if (
-            len({item.family for item in items}) < 2
+            not _has_setup_confirmation(items)
             or not any(item.alert_tier == "KURULUM" for item in items)
         ):
             count("no_setup")
@@ -1050,7 +1138,9 @@ def apply_scalp_notification_safety_gates(
     cooldown_ms = settings.scalp_same_direction_cooldown_minutes * 60_000
     ledger_rows = tuple(ledger)
     for symbol, items in grouped.items():
-        direction, _ = scalp_setup_direction(items, ledger_rows)
+        direction, _ = scalp_setup_direction(
+            items, ledger_rows, policy=settings.scalp_direction_policy
+        )
         previous = recent.get(symbol, {}) if isinstance(recent, dict) else {}
         previous_ms = _safe_int(previous.get("sent_at_ms")) if isinstance(previous, dict) else 0
         previous_score = _finite_value(previous.get("score")) if isinstance(previous, dict) else None
@@ -1091,7 +1181,9 @@ def record_successful_scalp_delivery(
         grouped.setdefault(item.perpetual_symbol, []).append(item)
     ledger_rows = tuple(ledger)
     for symbol, items in grouped.items():
-        direction, _ = scalp_setup_direction(items, ledger_rows)
+        direction, _ = scalp_setup_direction(
+            items, ledger_rows, policy=settings.scalp_direction_policy
+        )
         symbols[symbol] = {
             "direction": direction,
             "score": max(item.score for item in items),
@@ -1139,6 +1231,7 @@ def deliver_scalp_observations(
         maximum_abs_funding_bps=settings.scalp_maximum_abs_funding_bps,
         maximum_bar_volatility_bps=settings.scalp_maximum_bar_volatility_bps,
         live_families=settings.scalp_live_families,
+        direction_policy=settings.scalp_direction_policy,
     )
     shown = filtered_report.top(settings.scalp_top_k) if filtered_report.observations else ()
     if not shown:
@@ -1194,7 +1287,7 @@ def record_scalp_target_setups(
     for items in grouped.values():
         if (
             not any(item.alert_tier == "KURULUM" for item in items)
-            or len({item.family for item in items}) < 2
+            or not _has_setup_confirmation(items)
         ):
             continue
         direction, horizon_directions = scalp_setup_direction(items, ledger_rows, policy=direction_policy)
@@ -1476,7 +1569,7 @@ def record_scalp_bracket_setups(
     for items in grouped.values():
         if (
             not any(item.alert_tier == "KURULUM" for item in items)
-            or len({item.family for item in items}) < 2
+            or not _has_setup_confirmation(items)
         ):
             continue
         assessment = scalp_setup_assessment(items, ledger_rows, direction_policy=direction_policy)
@@ -1562,7 +1655,7 @@ def record_scalp_setup_forward_setups(
     directory.mkdir(parents=True, exist_ok=True)
     added = 0
     for items in grouped.values():
-        if len({item.family for item in items}) < 2 or not any(
+        if not _has_setup_confirmation(items) or not any(
             item.alert_tier == "KURULUM" for item in items
         ):
             continue
@@ -1999,8 +2092,9 @@ def scalp_forecast_stats(
 
     The ledger contains only settled observations, so this is a forward-test
     estimate rather than a model prediction.  Prefer the same symbol and
-    regime when at least ten observations exist; otherwise use the broader
-    family/regime sample and expose the sample count in the alert.
+    regime when at least ten observations exist for the requested horizon;
+    otherwise use the broader family/regime sample and expose the sample count
+    in the alert. Different horizons of one event are not independent samples.
 
     Each value is ``(count, probability_up, median_gross_bps, median_net_bps)``.
     Missing or malformed rows are ignored rather than taking down Telegram.
@@ -2015,15 +2109,17 @@ def scalp_forecast_stats(
     if not all_rows:
         return {}
 
-    candidates = _scalp_candidate_rows(item, all_rows)
-
     result: dict[int, tuple[int, float, float, float]] = {}
     for horizon in SCALP_BACKTEST_HORIZONS:
-        selected = [
+        horizon_rows = [
             row
-            for row in candidates
+            for row in all_rows
             if int(row.get("horizon_minutes", 0)) == horizon
         ]
+        # Match the per-horizon cohort selection in scalp_setup_assessment.
+        # Pooling horizons here could admit a four-event coin sample as twelve
+        # rows, while the downstream quality gate used a different population.
+        selected = _scalp_candidate_rows(item, horizon_rows)
         if not selected:
             continue
         gross = [float(row["gross_bps"]) for row in selected]
@@ -2050,6 +2146,42 @@ def scalp_forecast_stats(
     return result
 
 
+def _short_net_bps(gross_bps: float, long_net_bps: float) -> float:
+    implied_cost = max(float(gross_bps) - float(long_net_bps), 0.0)
+    return -float(gross_bps) - implied_cost
+
+
+def _allows_short_direction(items: Iterable[ScalpObservation]) -> bool:
+    item_tuple = tuple(items)
+    families = {item.family for item in item_tuple}
+    if families & INTRINSIC_LONG_FAMILIES:
+        return False
+    if "F2" not in families and any(
+        item.taker_buy_ratio_1h is not None
+        and math.isfinite(float(item.taker_buy_ratio_1h))
+        and float(item.taker_buy_ratio_1h) >= 0.55
+        for item in item_tuple
+    ):
+        return False
+    return True
+
+
+def _family_permits_direction(
+    stats: tuple[int, float, float, float], direction: str
+) -> bool:
+    label = _classify_bt_direction(stats)
+    if label == direction:
+        return True
+    if label != "KARIŞIK":
+        return False
+    probability_up = float(stats[1])
+    median_gross = float(stats[2])
+    median_net = float(stats[3])
+    if direction == "YUKARI":
+        return probability_up >= 0.50 and median_net >= 0.0
+    return probability_up <= 0.50 and _short_net_bps(median_gross, median_net) >= 0.0
+
+
 def scalp_setup_direction(
     items: Iterable[ScalpObservation],
     rows: Iterable[dict[str, Any]],
@@ -2066,6 +2198,7 @@ def scalp_setup_direction(
         raise ValueError("Bilinmeyen scalp yon politikasi")
     item_rows = tuple(rows)
     item_tuple = tuple(items)
+    allow_short = _allows_short_direction(item_tuple)
     family_stats = [scalp_forecast_stats(item, item_rows) for item in item_tuple]
     horizon_labels: list[str] = []
     family_disagreement = False
@@ -2081,10 +2214,11 @@ def scalp_setup_direction(
             horizon_labels.append("VERI YOK")
             continue
         weighted_up = sum(int(stats[0]) * float(stats[1]) for stats in selected) / total
+        weighted_gross = sum(int(stats[0]) * float(stats[2]) for stats in selected) / total
         weighted_net = sum(int(stats[0]) * float(stats[3]) for stats in selected) / total
         if weighted_up >= 0.55 and weighted_net > 0.0:
             horizon_labels.append("YUKARI")
-        elif weighted_up <= 0.45 and weighted_net < 0.0:
+        elif weighted_up <= 0.45 and _short_net_bps(weighted_gross, weighted_net) > 0.0:
             horizon_labels.append("AŞAĞI")
         else:
             horizon_labels.append("KARIŞIK")
@@ -2093,10 +2227,21 @@ def scalp_setup_direction(
         # inspected. Never choose whichever horizon has the best realised edge.
         supported: list[str] = []
         for direction in ("YUKARI", "AŞAĞI"):
+            if direction == "AŞAĞI" and not allow_short:
+                continue
             horizon = STRATEGY_HORIZONS[_strategy_code(item_tuple, direction)]
-            if family_stats and all(
-                horizon in stats and _classify_bt_direction(stats[horizon]) == direction
-                for stats in family_stats
+            horizon_index = SCALP_BACKTEST_HORIZONS.index(horizon)
+            if (
+                family_stats
+                and horizon_labels[horizon_index] == direction
+                and all(
+                    horizon in stats and _family_permits_direction(stats[horizon], direction)
+                    for stats in family_stats
+                )
+                and any(
+                    _classify_bt_direction(stats[horizon]) == direction
+                    for stats in family_stats
+                )
             ):
                 supported.append(direction)
         if len(supported) == 1:
@@ -2108,11 +2253,15 @@ def scalp_setup_direction(
     if not valid:
         return "VERI YOK", tuple(horizon_labels)
     if all(label == valid[0] for label in valid):
+        if valid[0] == "AŞAĞI" and not allow_short:
+            return "KARIŞIK", tuple(horizon_labels)
         overall = f"{valid[0]} AĞIRLIKLI" if family_disagreement else valid[0]
         return overall, tuple(horizon_labels)
     up = valid.count("YUKARI")
     down = valid.count("AŞAĞI")
     if down > up and down >= 2:
+        if not allow_short:
+            return "KARIŞIK", tuple(horizon_labels)
         return "AŞAĞI AĞIRLIKLI", tuple(horizon_labels)
     if up > down and up >= 2:
         return "YUKARI AĞIRLIKLI", tuple(horizon_labels)
@@ -2338,10 +2487,11 @@ def _assessment_confidence(sample_count: int, independent_days: int) -> str:
 
 def _classify_bt_direction(stats: tuple[int, float, float, float]) -> str:
     probability_up = float(stats[1])
+    median_gross = float(stats[2])
     median_net = float(stats[3])
     if probability_up >= 0.55 and median_net > 0.0:
         return "YUKARI"
-    if probability_up <= 0.45 and median_net < 0.0:
+    if probability_up <= 0.45 and _short_net_bps(median_gross, median_net) > 0.0:
         return "AŞAĞI"
     return "KARIŞIK"
 
@@ -2416,11 +2566,10 @@ def _dynamic_bracket_bps(
     ]
     volatility = float(median(ranges)) if ranges else 25.0
     cost = max((float(item.estimated_cost_bps) for item in item_tuple), default=12.0)
-    # Four cost units keeps the target from being swallowed by execution;
-    # range multiples make the bracket expand for volatile contracts.  Caps
-    # prevent one abnormal candle from creating a non-scalp target.
-    target_bps = min(max(2.0 * volatility, 4.0 * cost, 30.0), 150.0)
-    stop_bps = min(max(1.25 * volatility, 2.5 * cost, 25.0), 100.0)
+    # Multi-bar volatility and cost floors prevent 5m noise stop-outs while
+    # maintaining a 1.5:1 reward-to-risk ratio (+1.8%..-1.2% up to +3%..-2%).
+    target_bps = min(max(9.0 * volatility, 6.0 * cost, 180.0), 300.0)
+    stop_bps = min(max(6.0 * volatility, 4.0 * cost, 120.0), 200.0)
     return float(target_bps), float(stop_bps)
 
 
@@ -2889,7 +3038,10 @@ def _assign_alert_tiers(
         if (
             (regime.state in {"BULL", "TRANSITION"} or (regime.state == "OFF" and off_enabled))
             and item.execution_eligible
-            and len(families_by_symbol[item.perpetual_symbol]) >= 2
+            and (
+                len(families_by_symbol[item.perpetual_symbol]) >= 2
+                or bool(families_by_symbol[item.perpetual_symbol] & STANDALONE_SETUP_FAMILIES)
+            )
         )
         else item
         for item in items
@@ -2994,7 +3146,7 @@ def _relative_strength_observations(
     historical_cost_bps: float,
     contexts: dict[str, _ScalpMarketContext] | None = None,
 ) -> list[ScalpObservation]:
-    if regime.state != "BULL":
+    if regime.state not in {"BULL", "TRANSITION"}:
         return []
     current_returns: dict[str, float] = {}
     prior_returns: dict[str, float] = {}
@@ -3087,6 +3239,13 @@ def _observation(
             and context.volatility_bps is not None
             and context.volatility_bps <= settings.scalp_maximum_bar_volatility_bps
         )
+    alert_tier = (
+        "KURULUM"
+        if execution_eligible
+        and family in STANDALONE_SETUP_FAMILIES
+        and active_regime.state in {"BULL", "TRANSITION"}
+        else "RADAR"
+    )
     return ScalpObservation(
         universe_version=universe_version,
         spot_symbol=entry.spot_symbol,
@@ -3105,6 +3264,7 @@ def _observation(
         funding_rate_bps=(snapshot.funding_rate_bps if snapshot is not None else None),
         estimated_cost_bps=estimated_cost_bps,
         execution_eligible=execution_eligible,
+        alert_tier=alert_tier,
         return_24h_pct=(context.return_24h_pct if context is not None else None),
         rank_24h=(context.rank_24h if context is not None else None),
         universe_size=(context.universe_size if context is not None else None),

@@ -170,6 +170,8 @@ def format_notification_status(settings: Settings, *, now: datetime | None = Non
             f"{coverage} • Radar {radar} • Kurulum {setups}",
             f"Bu taramada: {counts['eligible']}/{checked} coin/mum bildirime uygun",
             "İlk elenme nedeni: " + ("; ".join(rejected) if rejected else "yok"),
+            *(["Yön kapısı: karışık veya yalnızca ağırlıklı yönler gönderilmez."]
+              if counts["direction_unclear"] else []),
             "Son taramada: " + delivery,
             "Güncel uygun adaylar: " + ("yok" if not candidate_lines else "") ,
             *candidate_lines,
@@ -178,16 +180,17 @@ def format_notification_status(settings: Settings, *, now: datetime | None = Non
             f"net-pozitif oran ≥%{settings.scalp_minimum_direction_probability * 100:g}, "
             f"net beklenti ≥{settings.scalp_minimum_expected_net_bps:g} bps."),
             (f"Geçiş kapısı: {'açık' if settings.scalp_transition_alerts_enabled else 'kapalı'}; "
-             f"skor ≥{settings.scalp_transition_minimum_alert_score:g}, "
-             f"kalite ≥%{settings.scalp_transition_minimum_quality_percentile * 100:g}, "
-             f"yön ≥%{settings.scalp_transition_minimum_direction_probability * 100:g}, "
-             f"net ≥{settings.scalp_transition_minimum_expected_net_bps:g} bps, "
-             f"n ≥{settings.scalp_transition_minimum_calibration_samples}."),
+             f"skor ≥{max(settings.scalp_minimum_alert_score, settings.scalp_transition_minimum_alert_score):g}, "
+             f"kalite ≥%{max(settings.scalp_minimum_quality_percentile, settings.scalp_transition_minimum_quality_percentile) * 100:g}, "
+             f"yön ≥%{max(settings.scalp_minimum_direction_probability, settings.scalp_transition_minimum_direction_probability) * 100:g}, "
+             f"net ≥{max(settings.scalp_minimum_expected_net_bps, settings.scalp_transition_minimum_expected_net_bps):g} bps, "
+             f"n ≥{max(settings.scalp_minimum_calibration_samples, settings.scalp_transition_minimum_calibration_samples)}."),
             (f"Kapalı rejim: {'açık' if settings.scalp_off_alerts_enabled else 'sessiz'}; "
-             f"skor ≥{settings.scalp_off_minimum_alert_score:g}, "
-             f"yön ≥%{settings.scalp_off_minimum_direction_probability * 100:g}, "
-             f"net ≥{settings.scalp_off_minimum_expected_net_bps:g} bps, "
-             f"n ≥{settings.scalp_off_minimum_calibration_samples}."),
+             f"skor ≥{max(settings.scalp_minimum_alert_score, settings.scalp_off_minimum_alert_score):g}, "
+             f"kalite ≥%{max(settings.scalp_minimum_quality_percentile, settings.scalp_off_minimum_quality_percentile) * 100:g}, "
+             f"yön ≥%{max(settings.scalp_minimum_direction_probability, settings.scalp_off_minimum_direction_probability) * 100:g}, "
+             f"net ≥{max(settings.scalp_minimum_expected_net_bps, settings.scalp_off_minimum_expected_net_bps):g} bps, "
+             f"n ≥{max(settings.scalp_minimum_calibration_samples, settings.scalp_off_minimum_calibration_samples)}."),
             (f"Piyasa kapısı: spread ≤{settings.scalp_maximum_spread_bps:g} bps, "
              f"hacim ≥${settings.scalp_minimum_quote_volume_24h_usdt / 1_000_000:g}M/24s, "
              f"|funding| ≤{settings.scalp_maximum_abs_funding_bps:g} bps, "
