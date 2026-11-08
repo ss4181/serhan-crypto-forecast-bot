@@ -379,6 +379,10 @@ def load_horizon_shadow_summary(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _arm_label(name: str, policy: str, settings: Settings) -> str:
+    return f"{name} (canlı)" if settings.scalp_direction_policy == policy else name
+
+
 def format_horizon_shadow_status(
     settings: Settings, *, now: datetime | None = None
 ) -> str:
@@ -399,6 +403,8 @@ def format_horizon_shadow_status(
     )
     return (
         f"🧪 Ufuk karşılaştırması · {status}\n"
-        f"Mevcut {counts['baseline']} · Yeni {counts['proposed']} · Ek {counts['additional']} aday\n"
-        "Yeni kural bildirim göndermez; sonuçlar panodaki karşılaştırmada."
+        f"{_arm_label('Uzlaşı', CONSENSUS_DIRECTION_POLICY, settings)} {counts['baseline']} · "
+        f"{_arm_label('Sabit ufuk', STRATEGY_HORIZON_DIRECTION_POLICY, settings)} {counts['proposed']} · "
+        f"Yalnız sabit ufuk {counts['additional']} aday\n"
+        "Bu karşılaştırma bildirim göndermez; sonuçlar panoda."
     )

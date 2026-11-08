@@ -59,6 +59,10 @@ SCALP_POLICY_VERSION = "trade3-scalp-regime-gates-v2"
 SCALP_TARGET_TOUCH_PERCENTS = (2.0, 3.0, 5.0)
 SCALP_SETTLEMENT_GRACE_DAYS = 2
 SCALP_BACKTEST_HORIZONS = (15, 30, 60)
+# Bumped whenever bracket distances change, so results never pool across versions.
+SCALP_BRACKET_POLICY_VERSION = "dynamic-bracket-v2"
+# An alert occupies a concurrency slot for this long, however long its bracket runs.
+SCALP_CONCURRENCY_WINDOW_MINUTES = 60
 CONSENSUS_DIRECTION_POLICY = "consensus"
 STRATEGY_HORIZON_DIRECTION_POLICY = "strategy_horizon"
 STANDALONE_SETUP_FAMILIES = frozenset({"B2", "B4"})
@@ -778,7 +782,7 @@ def _recent_scalp_success(
             family_rates[item.family] = _recent_directional_rate(
                 candidate_rows, direction=assessment.direction
             )
-    bracket_tuple = tuple(row for row in bracket_ledger if isinstance(row, dict))
+    bracket_tuple = tuple(current_bracket_rows(bracket_ledger))
     strategy_rate = _recent_bracket_rate(
         bracket_tuple,
         strategy_label=assessment.strategy_label,
@@ -838,7 +842,7 @@ def format_scalp_observation_digest(
             lines.append("📊 Yön olasılığı: veri yok")
         if assessment.expected_net_bps is not None:
             lines.append(
-                f"Net beklenti: %{assessment.expected_net_bps / 100:+.2f} • "
+                f"Net beklenti ({horizon} dk): %{assessment.expected_net_bps / 100:+.2f} • "
                 f"Güven: {assessment.confidence} (n={assessment.sample_count})"
             )
         families = "+".join(i.family for i in items)
@@ -852,7 +856,8 @@ def format_scalp_observation_digest(
             else "kapalı"
         )
         lines.append(
-            f"🛡 Simülasyon hedef/stop: +{target_bps:.0f}/−{stop_bps:.0f} bps "
+            f"🛡 Simülasyon hedef/stop ({active_settings.scalp_bracket_horizon_minutes} dk): "
+            f"+{target_bps:.0f}/−{stop_bps:.0f} bps "
             f"(1:{risk_ratio:.2f}) • maliyet ~{cost_bps:.0f} bps • "
             f"açık ≤{active_settings.scalp_maximum_concurrent_research_alerts} • "
             f"günlük sim {daily_limit} • kill {'AÇIK' if active_settings.scalp_alert_kill_switch else 'kapalı'}"
@@ -880,7 +885,10 @@ def format_scalp_observation_digest(
                 for p in SCALP_TARGET_TOUCH_PERCENTS
             )
             lines.append(f"🎯 {levels}")
-    lines.append("\nAraştırma • Dokunuşlar sinyal yönünde izlenir. Detay: menü / karne.")
+    lines.append(
+        "\nYüzde ve net beklenti ufuk sonu kapanışı içindir; hedef/stop başarı olasılığı değildir."
+    )
+    lines.append("Araştırma • Dokunuşlar sinyal yönünde izlenir. Detay: menü / karne.")
     message = "\n".join(lines)
     if len(message) > 4096:
         raise ValueError("Scalp Telegram mesaji 4096 karakteri asti")
@@ -1003,7 +1011,10 @@ def filter_scalp_notification_report(
         grouped.setdefault(item.perpetual_symbol, []).append(item)
     eligible_symbols: set[str] = set()
     for symbol, items in grouped.items():
-        if any(item.family not in allowed_families for item in items):
+        # A shadow family is neither evidence nor a veto: judge the coin on its
+        # allow-listed detectors alone.
+        items = [item for item in items if item.family in allowed_families]
+        if not items:
             count("shadow_only_family")
             continue
         if (
@@ -1088,7 +1099,8 @@ def filter_scalp_notification_report(
     return replace(
         report,
         observations=tuple(
-            item for item in report.observations if item.perpetual_symbol in eligible_symbols
+            item for item in report.observations
+            if item.perpetual_symbol in eligible_symbols and item.family in allowed_families
         ),
     )
 
@@ -1110,7 +1122,8 @@ def apply_scalp_notification_safety_gates(
         row for row in load_pending_scalp_brackets(settings.scalp_state_dir)
         if row.get("notification_sent") is True
         and _safe_int(row.get("bar_close_time_ms"))
-        + _safe_int(row.get("horizon_minutes")) * 60_000 > current
+        + min(_safe_int(row.get("horizon_minutes")), SCALP_CONCURRENCY_WINDOW_MINUTES) * 60_000
+        > current
     ]
     if len(pending) >= settings.scalp_maximum_concurrent_research_alerts:
         return replace(report, observations=()), "max_concurrent_research_alerts"
@@ -1595,6 +1608,7 @@ def record_scalp_bracket_setups(
             "detected_at_ms": int(report.evaluated_at_ms),
             "policy_version": SCALP_POLICY_VERSION,
             "horizon_minutes": max(int(horizon_minutes), 5),
+            "bracket_policy": f"{SCALP_BRACKET_POLICY_VERSION}-{max(int(horizon_minutes), 5)}m",
             "target_bps": target_bps,
             "stop_bps": stop_bps,
             "round_trip_cost_bps": max(
@@ -2736,7 +2750,7 @@ def scalp_scorecard(
     ]
     missing_count = sum(row.get("resolution") == "DATA_MISSING" for row in all_recent)
     keys = sorted({(str(row["family"]), int(row["horizon_minutes"])) for row in recent})
-    bracket_rows = list(bracket_rows)
+    bracket_rows = current_bracket_rows(bracket_rows)
     recent_brackets = [
         row
         for row in bracket_rows
@@ -3852,6 +3866,16 @@ def _aggregate_scalp(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def current_bracket_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the newest bracket policy's rows; a ledger with no versions is returned whole."""
+    items = [row for row in rows if isinstance(row, dict)]
+    versioned = [row for row in items if row.get("bracket_policy")]
+    if not versioned:
+        return items
+    latest = max(versioned, key=lambda row: _row_time_ms(row, "bar_close_time_ms"))
+    return [row for row in items if row.get("bracket_policy") == latest["bracket_policy"]]
+
+
 def _aggregate_brackets(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {
@@ -3892,6 +3916,7 @@ __all__ = [
     "format_scalp_target_touch",
     "load_pending_scalp_targets",
     "load_pending_scalp_brackets",
+    "current_bracket_rows",
     "load_scalp_bracket_ledger",
     "load_scalp_ledger",
     "load_scalp_target_ledger",

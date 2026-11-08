@@ -641,15 +641,7 @@ def answer_commands(
         symbol_forecast_text=lambda symbol: _coin_query_reply(settings, symbol),
         regime_text=lambda: format_regime_status(settings, now=current),
         long_scout_text=lambda: format_long_scout(settings, now=current),
-        notification_status_text=lambda: "\n\n".join((
-            format_notification_status(settings, now=current),
-            format_horizon_shadow_status(settings, now=current),
-            *(
-                [format_long_2pct_status(settings, now=current)]
-                if settings.long_2pct_experiment_enabled
-                else []
-            ),
-        )),
+        notification_status_text=lambda: _notification_status_text(settings, current),
         notifier=notifier,
         now=current,
     )
@@ -665,6 +657,33 @@ def _coin_query_reply(settings: Settings, symbol: str) -> str:
             f"⚠️ {symbol} tahmini şu an oluşturulamadı ({type(error).__name__}). "
             "Biraz sonra tekrar deneyin."
         )
+
+
+def _notification_status_text(settings: Settings, now: datetime) -> str:
+    parts = [
+        format_notification_status(settings, now=now),
+        format_horizon_shadow_status(settings, now=now),
+    ]
+    if settings.long_2pct_experiment_enabled:
+        parts.append(format_long_2pct_status(settings, now=now))
+    return "\n\n".join(parts)
+
+
+def _run_long_2pct_step(
+    settings: Settings,
+    report: ScalpScanReport,
+    *,
+    now: datetime,
+    progress: Callable[[str], None],
+) -> None:
+    """Run the experiment on the unfiltered scan; its failures never stop the bot."""
+    if not is_primary() or not settings.long_2pct_experiment_enabled:
+        return
+    try:
+        for event in run_long_2pct_experiment(settings, report, now=now):
+            progress(f"LONG %2 deney: {event}")
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        progress(f"LONG %2 deney hatasi: {error}")
 
 
 def _scalp_status_candidates(
@@ -1098,14 +1117,7 @@ def serve_forever(
                             )
                         except (OSError, RuntimeError, TypeError, ValueError) as error:
                             progress(f"Scalp ufuk shadow hatasi: {error}")
-                    if is_primary() and settings.long_2pct_experiment_enabled:
-                        try:
-                            for event in run_long_2pct_experiment(
-                                settings, scalp_report, now=scalp_now
-                            ):
-                                progress(f"LONG %2 deney: {event}")
-                        except (OSError, RuntimeError, TypeError, ValueError) as error:
-                            progress(f"LONG %2 deney hatasi: {error}")
+                    _run_long_2pct_step(settings, scalp_report, now=scalp_now, progress=progress)
                     try:
                         write_dashboard_payload(
                             settings,

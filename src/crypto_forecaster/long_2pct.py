@@ -7,7 +7,6 @@ filters, ledgers and subscriber alerts behave exactly as before.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -18,6 +17,7 @@ import pandas as pd
 
 from .config import Settings, local_text
 from .data import MarketDataError, load_cache
+from .long_scout import _read
 from .model import block_bootstrap_interval
 from .persistence import atomic_write_json
 from .scalping import (
@@ -50,6 +50,8 @@ TIME_EXIT = "TIME_EXIT"
 DATA_MISSING = "DATA_MISSING"
 OPEN = "OPEN"
 DELIVERED = {"SENT", "DEDUPLICATED"}
+# Nothing reached Telegram in these cases. UNCERTAIN may have, so it is never resent.
+RETRYABLE = {None, "ERROR", "REDDEDILDI"}
 
 
 def _state_path(settings: Settings) -> Path:
@@ -58,11 +60,10 @@ def _state_path(settings: Settings) -> Path:
 
 def _load_state(settings: Settings, *, started_at_ms: int | None = None) -> dict[str, Any]:
     path = _state_path(settings)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    if not path.exists():
         return {"version": VERSION, "startedAtMs": started_at_ms, "records": []}
-    if not isinstance(payload, dict) or payload.get("version") != VERSION:
+    payload = _read(path)
+    if payload.get("version") != VERSION:
         raise ValueError("LONG %2 deney durumu dogrulanamadi")
     return payload
 
@@ -76,7 +77,7 @@ def select_candidates(
     """Return the protocol's picks for the newest bar, best detector score first."""
     if report.regime is None or report.regime.state != "BULL" or not report.observations:
         return []
-    newest = max(item.bar_close_time_ms for item in report.observations)
+    newest = report.newest_close_time_ms
     grouped: dict[str, list[ScalpObservation]] = {}
     for item in report.observations:
         if item.bar_close_time_ms == newest and item.family in TESTED_FAMILIES:
@@ -285,7 +286,7 @@ def run_long_2pct_experiment(
     receipts.mkdir(parents=True, exist_ok=True, mode=0o700)
     for record in records:
         close_day = record["bar_close_time_ms"] // DAY_MS
-        if record["delivery"] is None and now_ms - record["recorded_at_ms"] <= MAX_SIGNAL_AGE_MS:
+        if record["delivery"] in RETRYABLE and now_ms - record["recorded_at_ms"] <= MAX_SIGNAL_AGE_MS:
             position = sum(
                 1
                 for row in records
@@ -302,7 +303,8 @@ def run_long_2pct_experiment(
         if (
             record["delivery"] in DELIVERED
             and record["status"] in {WIN, LOSS, TIME_EXIT}
-            and record["result_delivery"] is None
+            and record["result_delivery"] in RETRYABLE
+            and now_ms - record["outcome"]["exit_time_ms"] <= DAY_MS
         ):
             identifier = sha256(f"{record['id']}|result".encode()).hexdigest()
             record["result_delivery"] = _deliver(
@@ -321,6 +323,12 @@ def format_long_2pct_status(settings: Settings, *, now: datetime | None = None) 
     rate = summary["win_rate"]
     mean = summary["mean_net_bps"]
     interval = summary["net_ci_bps"]
+    unsent = sum(
+        row["delivery"] in DELIVERED
+        and row["status"] in {WIN, LOSS, TIME_EXIT}
+        and row["result_delivery"] not in DELIVERED
+        for row in state["records"]
+    )
     return "\n".join(
         (
             f"🧪 Deneysel LONG %2 • {'açık' if settings.long_2pct_experiment_enabled else 'kapalı'}",
@@ -338,5 +346,6 @@ def format_long_2pct_status(settings: Settings, *, now: datetime | None = None) 
             "%95 günlük blok aralığı @20: "
             + (f"{interval[0]:+.1f} / {interval[1]:+.1f} bps" if interval else "henüz yok"),
             f"Sinyal günü: {summary['signal_days']} • Karar: {verdict(summary, started, now_ms)}",
+            *([f"Teslim edilemeyen sonuç mesajı: {unsent}"] if unsent else []),
         )
     )

@@ -646,6 +646,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
         top_k=len(report.observations) or settings.scalp_top_k,
         ledger=load_scalp_ledger(settings.scalp_state_dir),
         milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+        direction_policy=settings.scalp_direction_policy,
     )
     bracket_tracked = record_scalp_bracket_setups(
         settings.scalp_state_dir,
@@ -654,6 +655,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
         top_k=len(report.observations) or settings.scalp_top_k,
         ledger=load_scalp_ledger(settings.scalp_state_dir),
         horizon_minutes=settings.scalp_bracket_horizon_minutes,
+        direction_policy=settings.scalp_direction_policy,
     )
     settled_targets = settle_scalp_target_outcomes(
         settings.scalp_state_dir, settings.scalp_data_dir
@@ -683,6 +685,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
                 top_k=settings.scalp_top_k,
                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                 bracket_ledger=load_scalp_bracket_ledger(settings.scalp_state_dir),
+                settings=settings,
             )
         )
     if not send:
@@ -729,6 +732,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
         maximum_abs_funding_bps=settings.scalp_maximum_abs_funding_bps,
         maximum_bar_volatility_bps=settings.scalp_maximum_bar_volatility_bps,
         live_families=settings.scalp_live_families,
+        direction_policy=settings.scalp_direction_policy,
     )
     delivery = deliver_scalp_observations(
         settings, notification_report, manifest=manifest
@@ -745,6 +749,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                 notification_sent=True,
                 milestone_horizon_hours=settings.scalp_milestone_horizon_hours,
+                direction_policy=settings.scalp_direction_policy,
             )
             record_scalp_bracket_setups(
                 settings.scalp_state_dir,
@@ -754,6 +759,7 @@ def _run_scalp_once(settings: Settings, *, refresh: bool, send: bool):  # type: 
                 ledger=load_scalp_ledger(settings.scalp_state_dir),
                 notification_sent=True,
                 horizon_minutes=settings.scalp_bracket_horizon_minutes,
+                direction_policy=settings.scalp_direction_policy,
             )
             if tracked:
                 print(f"Scalp hedef izleme: {tracked} yeni kurulum")
