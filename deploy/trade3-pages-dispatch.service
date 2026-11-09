@@ -10,6 +10,9 @@ User=root
 Group=root
 WorkingDirectory=/opt/crypto-forecaster
 EnvironmentFile=/etc/trade3-github-dispatch.env
+# Readable proof of the last publish; holds a timestamp only, never the token.
+Environment=TRADE3_PAGES_HEARTBEAT_PATH=/var/lib/trade3-pages/publish.json
+StateDirectory=trade3-pages
 ExecStart=/opt/crypto-forecaster/.venv/bin/python -m crypto_forecaster.pages_dispatch
 
 # The fine-grained token is available only to this one-shot service.

@@ -370,6 +370,13 @@ class Settings:
             "CRYPTO_SCALP_DAILY_RESEARCH_LOSS_LIMIT_BPS", 0.0, 0.0, 100_000.0
         )
     )
+    scalp_pages_heartbeat_path: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get(
+                "CRYPTO_SCALP_PAGES_HEARTBEAT_PATH", "/var/lib/trade3-pages/publish.json"
+            )
+        )
+    )
     scalp_public_dashboard_url: str = field(
         default_factory=lambda: os.environ.get(
             "CRYPTO_SCALP_PUBLIC_DASHBOARD_URL",
