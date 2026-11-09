@@ -15,6 +15,9 @@ ALERT_REPEAT_MS = 6 * 60 * 60 * 1000
 # Pages is published every 15 minutes. Allow several missed/delayed runs, then
 # alert promptly rather than letting old data pass as current for hours.
 PUBLIC_DASHBOARD_MAX_AGE_MS = 60 * 60 * 1000
+# With a confirmed recent publish, an old copy can only be CDN lag, which needs
+# no action unless it lasts long enough for viewers to be misled.
+CDN_LAG_ALERT_MS = 6 * 60 * 60 * 1000
 
 
 def scalp_health_incidents(
@@ -78,8 +81,9 @@ def scalp_health_incidents(
         problems["dashboard"] = "Yerel scalp dashboard çıktısı bulunamadı."
     if dashboard_url:
         try:
-            # GitHub Pages is CDN-backed. Bypass intermediary/browser caches so
-            # this monitor measures the deployed artifact, not a cached response.
+            # GitHub Pages' CDN ignores this query and these headers (measured
+            # 2026-11-08), so the body can be an older copy than the deployed
+            # site. An old body alone therefore does not prove a failed publish.
             request = Request(
                 _cache_busted_url(dashboard_url, evaluated_at_ms),
                 headers={
@@ -104,7 +108,11 @@ def scalp_health_incidents(
                 generated = datetime.fromisoformat(str(published["generatedAtUtc"]))
                 published_age = evaluated_at_ms - int(generated.timestamp() * 1000)
                 if published_age < -60_000 or published_age > PUBLIC_DASHBOARD_MAX_AGE_MS:
-                    problems["public_dashboard"] = f"GitHub Pages dashboard verisi eski ({max(0, published_age) // 60_000} dk)."
+                    stale_problem = _stale_dashboard_problem(
+                        settings, published_age, evaluated_at_ms
+                    )
+                    if stale_problem:
+                        problems["public_dashboard"] = stale_problem
             page_url = dashboard_url.rsplit("/", 1)[0] + "/scalp.html"
             page_request = Request(
                 _cache_busted_url(page_url, evaluated_at_ms),
@@ -131,6 +139,34 @@ def scalp_health_incidents(
     # times are written separately, so Telegram errors cannot eat the alarm.
     atomic_write_json(path, {"version": 1, "incidents": state})
     return due
+
+
+def _last_publish_ms(settings: Settings) -> int | None:
+    """Read when GitHub last finished a publish, as recorded by the dispatch timer."""
+    try:
+        payload = json.loads(
+            settings.scalp_pages_heartbeat_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    value = payload.get("published_at_ms") if isinstance(payload, dict) else None
+    return value if type(value) is int else None
+
+
+def _stale_dashboard_problem(
+    settings: Settings, published_age_ms: int, evaluated_at_ms: int
+) -> str | None:
+    minutes = max(0, published_age_ms) // 60_000
+    last_publish = _last_publish_ms(settings)
+    publisher_healthy = (
+        last_publish is not None
+        and -60_000 <= evaluated_at_ms - last_publish <= PUBLIC_DASHBOARD_MAX_AGE_MS
+    )
+    if not publisher_healthy or published_age_ms < 0:
+        return f"GitHub Pages dashboard verisi eski ({minutes} dk)."
+    if published_age_ms <= CDN_LAG_ALERT_MS:
+        return None
+    return f"GitHub yayını sağlam ama CDN {minutes} dakikalık eski kopya veriyor."
 
 
 def _cache_busted_url(url: str, nonce: int) -> str:
