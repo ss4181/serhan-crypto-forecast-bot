@@ -21,6 +21,8 @@ class OpsMonitorTests(unittest.TestCase):
                 scalp_state_dir=root / "state",
                 report_dir=root / "reports",
                 scalp_data_dir=root / "data" / "scalp",
+                # Never read the server's real publish record during tests.
+                scalp_pages_heartbeat_path=root / "no-publish.json",
             )
             settings.report_dir.mkdir()
             settings.scalp_data_dir.mkdir(parents=True)
@@ -84,6 +86,8 @@ class OpsMonitorTests(unittest.TestCase):
                 scalp_state_dir=root / "state",
                 report_dir=root / "reports",
                 scalp_data_dir=root / "data" / "scalp",
+                # Never read the server's real publish record during tests.
+                scalp_pages_heartbeat_path=root / "no-publish.json",
             )
             settings.report_dir.mkdir()
             settings.scalp_data_dir.mkdir(parents=True)
@@ -128,6 +132,8 @@ class OpsMonitorTests(unittest.TestCase):
                 scalp_state_dir=root / "state",
                 report_dir=root / "reports",
                 scalp_data_dir=root / "data" / "scalp",
+                # Never read the server's real publish record during tests.
+                scalp_pages_heartbeat_path=root / "no-publish.json",
             )
             settings.report_dir.mkdir()
             (settings.report_dir / "scalp-data.json").write_text("{}", encoding="utf-8")
@@ -154,7 +160,7 @@ class OpsMonitorTests(unittest.TestCase):
     def test_binance_telegram_and_disk_incidents_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            settings = Settings(scalp_state_dir=root / "state", report_dir=root / "reports", scalp_data_dir=root / "data" / "scalp")
+            settings = Settings(scalp_state_dir=root / "state", report_dir=root / "reports", scalp_data_dir=root / "data" / "scalp", scalp_pages_heartbeat_path=root / "no-publish.json")
             settings.scalp_state_dir.mkdir()
             settings.report_dir.mkdir()
             (settings.report_dir / "scalp-data.json").write_text("{}", encoding="utf-8")
