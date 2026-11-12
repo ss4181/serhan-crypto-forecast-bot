@@ -18,6 +18,10 @@ PUBLIC_DASHBOARD_MAX_AGE_MS = 60 * 60 * 1000
 # With a confirmed recent publish, an old copy can only be CDN lag, which needs
 # no action unless it lasts long enough for viewers to be misled.
 CDN_LAG_ALERT_MS = 6 * 60 * 60 * 1000
+# A single failed fetch is usually a network blip; page only when reads keep
+# failing across consecutive scans (about 15 minutes at one scan per bar).
+PUBLIC_DASHBOARD_READ_FAILURES = 3
+PUBLIC_DASHBOARD_TIMEOUT_SECONDS = 10.0
 
 
 def scalp_health_incidents(
@@ -92,7 +96,7 @@ def scalp_health_incidents(
                     "Pragma": "no-cache",
                 },
             )
-            with urlopen(request, timeout=3.0) as response:
+            with urlopen(request, timeout=PUBLIC_DASHBOARD_TIMEOUT_SECONDS) as response:
                 published = json.loads(response.read(8 * 1024 * 1024).decode("utf-8"))
             if not isinstance(published, dict):
                 raise ValueError("dashboard payload is not an object")
@@ -122,12 +126,22 @@ def scalp_health_incidents(
                     "Pragma": "no-cache",
                 },
             )
-            with urlopen(page_request, timeout=3.0) as response:
+            with urlopen(page_request, timeout=PUBLIC_DASHBOARD_TIMEOUT_SECONDS) as response:
                 page_html = response.read(512 * 1024).decode("utf-8")
             if not page_html.strip():
                 problems["public_dashboard"] = "GitHub Pages pano sayfası boş yayınlandı."
-        except (OSError, ValueError, KeyError, TypeError, UnicodeError):
-            problems["public_dashboard"] = "GitHub Pages pano sayfası/verisi okunamadı; yayın/Actions durumunu kontrol edin."
+            read_failures = 0
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError) as error:
+            read_failures = _previous_read_failures(state) + 1
+            if read_failures >= PUBLIC_DASHBOARD_READ_FAILURES:
+                problems["public_dashboard"] = (
+                    f"GitHub Pages pano sayfası/verisi {read_failures} kontroldür okunamıyor "
+                    f"({type(error).__name__}); yayın/Actions durumunu kontrol edin."
+                )
+        row = state.get("public_dashboard")
+        row = dict(row) if isinstance(row, dict) else {}
+        row["read_failures"] = read_failures
+        state["public_dashboard"] = row
 
     due: list[dict[str, str]] = []
     for code, message in problems.items():
@@ -139,6 +153,24 @@ def scalp_health_incidents(
     # times are written separately, so Telegram errors cannot eat the alarm.
     atomic_write_json(path, {"version": 1, "incidents": state})
     return due
+
+
+def _previous_read_failures(state: dict[str, Any]) -> int:
+    row = state.get("public_dashboard")
+    value = row.get("read_failures") if isinstance(row, dict) else None
+    return value if type(value) is int and value >= 0 else 0
+
+
+def last_dashboard_read_failures(settings: Settings) -> int:
+    """Consecutive failed reads of the public dashboard, for logging."""
+    try:
+        payload = json.loads(
+            (settings.scalp_state_dir / "ops-alerts.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return 0
+    state = payload.get("incidents", {}) if isinstance(payload, dict) else {}
+    return _previous_read_failures(state) if isinstance(state, dict) else 0
 
 
 def _last_publish_ms(settings: Settings) -> int | None:

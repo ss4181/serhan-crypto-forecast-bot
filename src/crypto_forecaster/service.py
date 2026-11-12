@@ -43,7 +43,11 @@ from .long_scout import LongScoutWorker, format_long_scout
 from .model import BacktestMetrics, ModelBundle, load_bundle, select_scenario
 from .notification_status import format_notification_status, write_notification_status
 from .openinterest import OpenInterestError, update_open_interest
-from .ops_monitor import mark_health_alert_sent, scalp_health_incidents
+from .ops_monitor import (
+    last_dashboard_read_failures,
+    mark_health_alert_sent,
+    scalp_health_incidents,
+)
 from .outcomes import (
     format_scorecard,
     load_ledger,
@@ -1143,6 +1147,9 @@ def serve_forever(
                                 delivery_status=scalp_delivery_status,
                                 dashboard_url=settings.scalp_public_dashboard_url,
                             )
+                            read_failures = last_dashboard_read_failures(settings)
+                            if read_failures:
+                                progress(f"Pano okuma hatası: {read_failures} ardışık kontrol")
                             if incidents:
                                 notifier = TelegramNotifier(state_dir=settings.telegram_state_dir)
                                 for incident in incidents:
