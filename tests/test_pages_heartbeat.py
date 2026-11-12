@@ -151,8 +151,10 @@ class PublishHeartbeatTests(unittest.TestCase):
         self.assertIn(
             "TRADE3_PAGES_HEARTBEAT_PATH=/var/lib/trade3-pages/publish.json", unit
         )
+        with patch.dict("os.environ", {}, clear=True):
+            default = Settings().scalp_pages_heartbeat_path
         self.assertEqual(
-            str(Settings().scalp_pages_heartbeat_path.as_posix()),
+            str(default.as_posix()),
             "/var/lib/trade3-pages/publish.json",
         )
 
