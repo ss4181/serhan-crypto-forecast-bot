@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 25
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment_retry.outputs.page_url || steps.deployment.outputs.page_url }}
     env:
       CRYPTO_TELEGRAM_BOT_TOKEN: ${{ secrets.CRYPTO_TELEGRAM_BOT_TOKEN }}
       CRYPTO_TELEGRAM_CHAT_ID: ${{ secrets.CRYPTO_TELEGRAM_CHAT_ID }}
@@ -181,6 +181,21 @@ jobs:
         with:
           path: docs
 
+      # GitHub's artifact API can briefly report a just-uploaded artifact as
+      # missing ("No artifacts named github-pages were found"). That failed
+      # roughly 3% of publishes even though the upload had finalized. Nothing
+      # is created by that failure, so wait and try once more; the run still
+      # fails if the second attempt fails too.
       - name: Publish GitHub Pages dashboard
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before retrying the publish
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+
+      - name: Retry GitHub Pages dashboard publish
+        id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
